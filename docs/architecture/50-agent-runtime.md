@@ -32,11 +32,15 @@ Application code depends on `AgentModelClient`, not direct SDK calls.
 Implemented clients:
 
 - `MockModelClient`: deterministic tests and local runtime development.
-- `OpenAIModelClient`: explicit placeholder that fails clearly until real
-  OpenAI API wiring is implemented.
+- `OpenAIModelClient`: OpenAI Responses API adapter for structured output,
+  function/tool-call proposals, and repair calls.
 
 This keeps real network calls out of tests and keeps OpenAI API details behind a
 small adapter.
+
+OpenAI API credentials are secret config. Use `AGENT_OPENAI_API_KEY` in ignored
+secret env files. `AGENT_OPENAI_BASE_URL` is non-secret configuration and
+defaults to `https://api.openai.com/v1`.
 
 ## Tool Contracts
 
@@ -58,9 +62,15 @@ before any API call.
 
 The runtime includes the app capability registry in the model prompt so the
 model knows what Goals and Fluffynomics are for and which actions are available.
-The runtime records accepted/rejected tool calls but does not yet execute
-external side effects. Accepted tool calls store a result that explicitly says
-no side effect was executed.
+Accepted local tool calls now execute through deterministic host code:
+
+- `create_task` creates a tenant/user-scoped task.
+- `propose_outbound_message` queues an outbound message rather than sending it.
+- `record_observation` records the accepted observation in the tool-call result.
+
+`integration_action` resolves through the registered app capability allowlist
+and then through the scoped integration gateway. It fails closed unless settings
+and a user-scoped integration token provider are supplied by host code.
 
 ## Repair Flow
 

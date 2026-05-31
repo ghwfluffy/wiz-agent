@@ -34,6 +34,8 @@ Phase 1 tests cover:
 - structured tool-call validation and repair.
 - failed repair rejection.
 - mock model agent runs.
+- OpenAI Responses API adapter request/response parsing.
+- deterministic local tool execution.
 - run/tool-call audit traceability.
 - sender classification and untrusted-message handling.
 - untrusted sender rate limiting.

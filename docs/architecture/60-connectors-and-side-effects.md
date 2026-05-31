@@ -60,6 +60,9 @@ The current implementation queues outbound records; it does not contact SMTP,
 SMS, or MMS providers. SMS/MMS sends must stay outbox-mediated even when provider
 delivery is implemented.
 
+The current `propose_outbound_message` tool only writes an outbound queue
+record. SMTP/SMS/MMS delivery is still a later connector step.
+
 ## MMS Images
 
 MMS image handling must:
@@ -100,3 +103,11 @@ The registry is also a maintenance contract. When a future request adds or
 changes an omnisite app, app API, or major user-facing capability, update the
 registry and tests in the same change so the agent's context and allowlist stay
 accurate.
+
+Current execution status:
+
+- local persistence tools execute after schema validation;
+- cross-app tools resolve through the action allowlist;
+- cross-app API calls require a host-supplied user-scoped token provider;
+- missing integration tokens or missing token provider configuration fail closed
+  without calling the target app.

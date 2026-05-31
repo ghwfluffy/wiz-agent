@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockModelClient, OpenAIModelClient } from "../src/agent/modelClient.js";
 import { chooseModelTier, modelTierConfigFromSettings, resolveModelId } from "../src/agent/modelTiers.js";
 import { buildAgentPrompt, modelToolDescriptors } from "../src/agent/promptContext.js";
@@ -174,7 +174,7 @@ describe("app capability registry", () => {
 });
 
 describe("agent task execution", () => {
-  it("records accepted tool calls without executing side effects", async () => {
+  it("executes accepted local task tool calls through deterministic host code", async () => {
     const { context, store } = await testContext();
 
     const result = await runAgentTask({
@@ -203,9 +203,17 @@ describe("agent task execution", () => {
     });
 
     const audit = await store.listAudit(context, true);
+    const tasks = await store.listTasks(context);
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        title: "Proposed task",
+        prompt: "Do useful work."
+      })
+    ]);
     expect(audit).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action: "agent_run.create" }),
+        expect.objectContaining({ action: "task.create" }),
         expect.objectContaining({ action: "tool_call.accepted" }),
         expect.objectContaining({ action: "agent_run.completed" })
       ])
@@ -289,7 +297,7 @@ describe("agent task execution", () => {
     );
   });
 
-  it("isolates real OpenAI calls behind a dedicated adapter", async () => {
+  it("fails clearly when OpenAI is selected without an API key", async () => {
     const client = new OpenAIModelClient();
 
     await expect(client.runWithTools({
@@ -297,6 +305,50 @@ describe("agent task execution", () => {
       tier: "fast",
       prompt: "hello",
       tools: []
-    })).rejects.toThrow("OpenAIModelClient is not wired yet");
+    })).rejects.toThrow("OpenAI API key is not configured");
+  });
+
+  it("parses OpenAI Responses API function calls into internal tool proposals", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        output: [
+          {
+            type: "function_call",
+            name: "create_task",
+            arguments: JSON.stringify({
+              title: "From OpenAI",
+              prompt: "Do the thing."
+            })
+          }
+        ]
+      })
+    });
+    const client = new OpenAIModelClient({
+      apiKey: "test-key",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    await expect(client.runWithTools({
+      model: "gpt-test",
+      tier: "fast",
+      prompt: "Make a task",
+      tools: modelToolDescriptors()
+    })).resolves.toEqual({
+      toolName: "create_task",
+      arguments: {
+        title: "From OpenAI",
+        prompt: "Do the thing."
+      }
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/responses",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          authorization: "Bearer test-key"
+        })
+      })
+    );
   });
 });

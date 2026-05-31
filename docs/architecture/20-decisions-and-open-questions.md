@@ -23,8 +23,8 @@
 - Agent runtime uses an internal `AgentModelClient` adapter.
 - Real OpenAI calls are isolated behind `OpenAIModelClient`; tests use
   `MockModelClient`.
-- Phase 4 accepts or rejects tool calls after schema validation but does not
-  execute external side effects.
+- OpenAI calls use the Responses API through the `OpenAIModelClient` adapter.
+- Validated local persistence tools execute through deterministic host code.
 - Sender classification gates inbound mail before any agent/tool path.
 - Unknown senders are `untrusted` and can only queue owner review; they cannot
   trigger tool calls.

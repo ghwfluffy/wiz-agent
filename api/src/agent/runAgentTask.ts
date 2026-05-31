@@ -6,7 +6,10 @@ import {
   type AgentTaskComplexity
 } from "./modelTiers.js";
 import { buildAgentPrompt, modelToolDescriptors } from "./promptContext.js";
+import type { Settings } from "../config/settings.js";
 import type { AgentStore, RequestContext } from "../domain/types.js";
+import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
+import { executeToolCall } from "../tools/toolExecutor.js";
 import { parseToolProposal, validateOrRepairToolCall } from "../tools/validator.js";
 
 export type AgentTaskRequest = {
@@ -28,6 +31,9 @@ export async function runAgentTask(options: {
   store: AgentStore;
   modelClient: AgentModelClient;
   request: AgentTaskRequest;
+  settings?: Settings;
+  integrationTokenProvider?: IntegrationTokenProvider;
+  fetchImpl?: typeof fetch;
 }): Promise<AgentTaskResult> {
   const aiConfig = await options.store.getAiConfig();
   const tier = chooseModelTier(options.request.complexity ?? {});
@@ -84,6 +90,16 @@ export async function runAgentTask(options: {
       };
     }
 
+    const execution = await executeToolCall({
+      context: options.context,
+      store: options.store,
+      toolName: validated.toolName,
+      args: validated.arguments,
+      settings: options.settings,
+      integrationTokenProvider: options.integrationTokenProvider,
+      fetchImpl: options.fetchImpl
+    });
+
     await options.store.recordToolCall(options.context, {
       runId: run.id,
       toolName: validated.toolName,
@@ -91,7 +107,9 @@ export async function runAgentTask(options: {
       arguments: validated.arguments,
       result: {
         accepted: true,
-        side_effect_executed: false
+        side_effect_executed: execution.executed && execution.sideEffect !== "none",
+        side_effect: execution.sideEffect,
+        execution: execution.result
       }
     });
     await options.store.finishAgentRun(options.context, run.id, "completed");

@@ -55,7 +55,9 @@ Run targeted checks while iterating:
 ```
 
 Agent runtime tests use `MockModelClient`; validation does not call the OpenAI
-API. Real OpenAI wiring must remain behind `AgentModelClient`.
+API. Real OpenAI wiring must remain behind `AgentModelClient`. To run real
+model calls locally, set `AGENT_OPENAI_API_KEY` in your ignored local env file.
+`AGENT_OPENAI_BASE_URL` defaults to `https://api.openai.com/v1`.
 
 Connector and integration tests also avoid live networks. They use deterministic
 sender classification, mock fetch implementations, and outbox records instead of
