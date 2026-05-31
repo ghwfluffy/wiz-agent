@@ -59,6 +59,17 @@ API. Real OpenAI wiring must remain behind `AgentModelClient`. To run real
 model calls locally, set `AGENT_OPENAI_API_KEY` in your ignored local env file.
 `AGENT_OPENAI_BASE_URL` defaults to `https://api.openai.com/v1`.
 
+Live connector config can be seeded from ignored files with:
+
+```bash
+cd api
+AGENT_SEED_USER_EMAIL=person@example.test npm run seed:live-config -- --secret-dir ../secrets --dry-run
+```
+
+The dry run reports which settings are present without printing secret values.
+The non-dry-run path requires an existing local agent user created by standalone
+or OAuth sign-in.
+
 Connector and integration tests also avoid live networks. They use deterministic
 sender classification, mock fetch implementations, and outbox records instead of
 real IMAP, SMTP, SMS, MMS, or cross-app API calls.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readFileSync } from "node:fs";
 
 const EnvBooleanSchema = z.preprocess((value) => {
   if (typeof value === "string") {
@@ -72,6 +73,9 @@ export function normalizeBasePath(value: string): string {
 }
 
 export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
+  const openAiKeyFromFile = env.AGENT_OPENAI_API_KEY_FILE
+    ? readFileSync(env.AGENT_OPENAI_API_KEY_FILE, "utf8").trim()
+    : undefined;
   const settings = SettingsSchema.parse({
     appEnv: env.APP_ENV,
     appVersion: env.APP_VERSION,
@@ -100,7 +104,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     agentOpenaiModelSmart: env.AGENT_OPENAI_MODEL_SMART,
     agentOpenaiModelOrchestrator: env.AGENT_OPENAI_MODEL_ORCHESTRATOR,
     agentOpenaiModelRepair: env.AGENT_OPENAI_MODEL_REPAIR,
-    agentOpenaiApiKey: env.AGENT_OPENAI_API_KEY ?? env.OPENAI_API_KEY,
+    agentOpenaiApiKey: env.AGENT_OPENAI_API_KEY ?? env.OPENAI_API_KEY ?? openAiKeyFromFile,
     agentOpenaiBaseUrl: env.AGENT_OPENAI_BASE_URL,
     agentRepairAttemptLimit: env.AGENT_REPAIR_ATTEMPT_LIMIT,
     agentMaxToolCalls: env.AGENT_MAX_TOOL_CALLS,

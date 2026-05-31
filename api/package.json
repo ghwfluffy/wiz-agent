@@ -8,6 +8,7 @@
     "dev": "tsx watch src/main.ts",
     "lint": "tsc --noEmit",
     "migrate": "tsx src/db/migrate.ts",
+    "seed:live-config": "tsx src/ops/seedLiveConfig.ts",
     "start": "node dist/main.js",
     "test": "vitest run",
     "worker": "tsx watch src/worker.ts",
