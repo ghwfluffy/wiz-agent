@@ -50,6 +50,11 @@ Current tool contracts:
 - `propose_outbound_message`
 - `record_observation`
 
+Cross-app API access is intentionally outside direct model control. The model
+may request an integration action, but deterministic host code must enforce
+sender trust, tenant/user scope, allowed app/action, and token availability
+before any API call.
+
 The Phase 4 runtime records accepted/rejected tool calls but does not execute
 external side effects. Accepted tool calls store a result that explicitly says no
 side effect was executed.
@@ -102,3 +107,6 @@ The host owns:
 - audit logging.
 
 The model must not receive secrets or raw credential references.
+
+Untrusted inbound messages and newsletters must be treated as data, not
+instructions. Only owner-classified inbound messages can drive agent actions.

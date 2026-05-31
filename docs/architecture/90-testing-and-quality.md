@@ -35,6 +35,12 @@ Phase 1 tests cover:
 - failed repair rejection.
 - mock model agent runs.
 - run/tool-call audit traceability.
+- sender classification and untrusted-message handling.
+- untrusted sender rate limiting.
+- due task claiming.
+- safe URL rejection.
+- MMS image sanitization policy.
+- cross-app integration token enforcement.
 - frontend base-path helpers.
 - sign-in button behavior.
 

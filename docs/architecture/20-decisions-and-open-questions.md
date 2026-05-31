@@ -25,6 +25,11 @@
   `MockModelClient`.
 - Phase 4 accepts or rejects tool calls after schema validation but does not
   execute external side effects.
+- Sender classification gates inbound mail before any agent/tool path.
+- Unknown senders are `untrusted` and can only queue owner review; they cannot
+  trigger tool calls.
+- Cross-app API access goes through a deterministic gateway with user-scoped
+  tokens that are never exposed to the model.
 
 ## Open Questions
 
@@ -35,3 +40,7 @@
   mode?
 - What exact approval policy should allow automatic SMS, MMS, or email sends?
 - What maximum image dimensions and byte limits should MMS use?
+- How should durable tenant-wide spam/rate limits be stored for live IMAP
+  polling?
+- What token exchange should mint per-user integration tokens for Goals,
+  Fluffynomics, and future apps?

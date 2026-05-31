@@ -37,6 +37,45 @@ export type TaskUpdate = Partial<TaskInput> & {
   status?: string;
 };
 
+export type SenderStatus = "owner" | "newsletter" | "trusted" | "blocked" | "untrusted";
+
+export type SenderClassification = "owner" | "newsletter" | "untrusted" | "blocked";
+
+export type InboundMessageInput = {
+  providerMessageId: string;
+  fromAddr: string;
+  toAddr: string;
+  subject?: string | null;
+  bodyText: string;
+  receivedAt?: string | null;
+  source?: string;
+};
+
+export type OutboundMessageInput = {
+  channel: "email" | "sms" | "mms";
+  status: "pending" | "requires_approval" | "approved" | "sending" | "sent" | "failed" | "cancelled";
+  toAddr: string;
+  subject?: string | null;
+  bodyText: string;
+  approvalId?: string | null;
+  conversationId?: string | null;
+};
+
+export type OutboundMessageRecord = OutboundMessageInput & {
+  id: string;
+  tenantId: string;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type InboundHandlingResult = {
+  classification: SenderClassification;
+  action: "routed_to_agent" | "queued_owner_review" | "accepted_newsletter" | "blocked" | "rate_limited";
+  messageId?: string;
+  outboundMessageId?: string;
+};
+
 export type AuditRecord = {
   id: string;
   tenantId: string | null;
@@ -96,6 +135,7 @@ export type AgentStore = {
   listTasks(context: RequestContext): Promise<TaskRecord[]>;
   getTask(context: RequestContext, taskId: string): Promise<TaskRecord | undefined>;
   updateTask(context: RequestContext, taskId: string, update: TaskUpdate): Promise<TaskRecord | undefined>;
+  claimDueTasks(context: RequestContext, limit: number, now?: Date): Promise<TaskRecord[]>;
   listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]>;
   getAiConfig(): Promise<AiConfig>;
   updateAiConfig(context: RequestContext, config: AiConfig): Promise<AiConfig>;
@@ -121,4 +161,12 @@ export type AgentStore = {
       validationError?: string | null;
     }
   ): Promise<ToolCallRecord>;
+  getSenderStatus(context: RequestContext, address: string): Promise<SenderStatus | undefined>;
+  setSenderStatus(context: RequestContext, address: string, status: SenderStatus): Promise<void>;
+  recordInboundMessage(
+    context: RequestContext,
+    input: InboundMessageInput,
+    classification: SenderClassification
+  ): Promise<{ id: string; duplicate: boolean }>;
+  queueOutboundMessage(context: RequestContext, input: OutboundMessageInput): Promise<OutboundMessageRecord>;
 };

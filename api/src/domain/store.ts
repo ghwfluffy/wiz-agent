@@ -13,7 +13,11 @@ import type {
   AgentRunRecord,
   AiConfig,
   AuditRecord,
+  InboundMessageInput,
+  OutboundMessageRecord,
   RequestContext,
+  SenderClassification,
+  SenderStatus,
   TaskInput,
   TaskRecord,
   TaskUpdate,
@@ -63,6 +67,23 @@ function auditFromRow(row: Record<string, unknown>): AuditRecord {
     details: (row.details_json as Record<string, unknown> | null) ?? {},
     requestId: row.request_id ? String(row.request_id) : null,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
+  };
+}
+
+function outboundFromRow(row: Record<string, unknown>): OutboundMessageRecord {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    userId: String(row.user_id),
+    conversationId: row.conversation_id ? String(row.conversation_id) : null,
+    approvalId: row.approval_id ? String(row.approval_id) : null,
+    channel: row.channel as OutboundMessageRecord["channel"],
+    status: row.status as OutboundMessageRecord["status"],
+    toAddr: String(row.to_addr),
+    subject: row.subject ? String(row.subject) : null,
+    bodyText: String(row.body_text),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
   };
 }
 
@@ -315,6 +336,46 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return result.rows[0] ? taskFromRow(result.rows[0]) : undefined;
     },
 
+    async claimDueTasks(context: RequestContext, limit: number, now = new Date()): Promise<TaskRecord[]> {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const selected = await client.query(
+          `SELECT id FROM tasks
+           WHERE tenant_id = $1
+             AND user_id = $2
+             AND status = 'pending'
+             AND (due_at IS NULL OR due_at <= $3)
+           ORDER BY due_at NULLS FIRST, created_at ASC
+           LIMIT $4
+           FOR UPDATE SKIP LOCKED`,
+          [context.tenantId, context.userId, now.toISOString(), limit]
+        );
+        const ids = selected.rows.map((row) => row.id as string);
+        if (ids.length === 0) {
+          await client.query("COMMIT");
+          return [];
+        }
+        const updated = await client.query(
+          `UPDATE tasks
+           SET status = 'claimed', updated_at = now()
+           WHERE id = ANY($1::text[])
+           RETURNING *`,
+          [ids]
+        );
+        await client.query("COMMIT");
+        for (const id of ids) {
+          await recordAudit(pool, context, "task.claim", "task", id);
+        }
+        return updated.rows.map(taskFromRow);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
     async listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]> {
       const result = await pool.query(
         includeAllUsers
@@ -407,6 +468,86 @@ export function createPostgresStore(pool: Pool): AgentStore {
         validation_error: input.validationError ?? null
       });
       return toolCallFromRow(result.rows[0]);
+    },
+
+    async getSenderStatus(context, address) {
+      const result = await pool.query(
+        `SELECT status FROM senders
+         WHERE tenant_id = $1 AND user_id = $2 AND lower(address) = lower($3)`,
+        [context.tenantId, context.userId, address]
+      );
+      return result.rows[0]?.status as SenderStatus | undefined;
+    },
+
+    async setSenderStatus(context, address, status) {
+      await pool.query(
+        `INSERT INTO senders (id, tenant_id, user_id, address, status)
+         VALUES ($1, $2, $3, lower($4), $5)
+         ON CONFLICT (tenant_id, user_id, address) DO UPDATE
+           SET status = EXCLUDED.status, updated_at = now()`,
+        [randomUUID(), context.tenantId, context.userId, address, status]
+      );
+      await recordAudit(pool, context, "sender.status.set", "sender", address, { status });
+    },
+
+    async recordInboundMessage(context, input: InboundMessageInput, classification: SenderClassification) {
+      const existing = await pool.query(
+        `SELECT id FROM messages
+         WHERE tenant_id = $1 AND user_id = $2 AND provider_message_id = $3`,
+        [context.tenantId, context.userId, input.providerMessageId]
+      );
+      if (existing.rows[0]) {
+        return { id: existing.rows[0].id as string, duplicate: true };
+      }
+      const id = randomUUID();
+      await pool.query(
+        `INSERT INTO messages
+          (id, tenant_id, user_id, direction, source, provider_message_id, from_addr, to_addr, subject, body_text,
+           auth_status, received_at)
+         VALUES ($1, $2, $3, 'inbound', $4, $5, lower($6), lower($7), $8, $9, $10, $11)`,
+        [
+          id,
+          context.tenantId,
+          context.userId,
+          input.source ?? "imap",
+          input.providerMessageId,
+          input.fromAddr,
+          input.toAddr,
+          input.subject ?? null,
+          input.bodyText,
+          classification,
+          input.receivedAt ?? new Date().toISOString()
+        ]
+      );
+      await recordAudit(pool, context, "message.inbound.record", "message", id, { classification });
+      return { id, duplicate: false };
+    },
+
+    async queueOutboundMessage(context, input) {
+      const result = await pool.query(
+        `INSERT INTO outbound_messages
+          (id, tenant_id, user_id, conversation_id, approval_id, channel, status, to_addr, subject, body_text)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, lower($8), $9, $10)
+         RETURNING *`,
+        [
+          randomUUID(),
+          context.tenantId,
+          context.userId,
+          input.conversationId ?? null,
+          input.approvalId ?? null,
+          input.channel,
+          input.status,
+          input.toAddr,
+          input.subject ?? null,
+          input.bodyText
+        ]
+      );
+      const record = outboundFromRow(result.rows[0]);
+      await recordAudit(pool, context, "outbound.queue", "outbound_message", record.id, {
+        channel: record.channel,
+        status: record.status
+      });
+      return record;
     }
   };
 }
@@ -416,6 +557,9 @@ export function createMemoryStore(): AgentStore {
   const tasks = new Map<string, TaskRecord>();
   const runs = new Map<string, AgentRunRecord>();
   const toolCalls = new Map<string, ToolCallRecord>();
+  const senderStatuses = new Map<string, SenderStatus>();
+  const inboundProviderIds = new Map<string, string>();
+  const outboundMessages = new Map<string, OutboundMessageRecord>();
   const audit: AuditRecord[] = [];
   let aiConfig = DEFAULT_AI_CONFIG;
 
@@ -533,6 +677,22 @@ export function createMemoryStore(): AgentStore {
       pushAudit(context, "task.update", "task", taskId);
       return updated;
     },
+    async claimDueTasks(context: RequestContext, limit: number, now = new Date()): Promise<TaskRecord[]> {
+      const claimed: TaskRecord[] = [];
+      for (const task of tasks.values()) {
+        if (claimed.length >= limit) {
+          break;
+        }
+        const isDue = task.dueAt === null || Date.parse(task.dueAt) <= now.getTime();
+        if (task.tenantId === context.tenantId && task.userId === context.userId && task.status === "pending" && isDue) {
+          const updated = { ...task, status: "claimed", updatedAt: nowIso() };
+          tasks.set(task.id, updated);
+          claimed.push(updated);
+          pushAudit(context, "task.claim", "task", task.id);
+        }
+      }
+      return claimed;
+    },
     async listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]> {
       return audit.filter((entry) => {
         if (entry.tenantId !== context.tenantId) {
@@ -606,6 +766,44 @@ export function createMemoryStore(): AgentStore {
         validation_error: input.validationError ?? null
       });
       return toolCall;
+    },
+    async getSenderStatus(context, address) {
+      return senderStatuses.get(`${context.tenantId}:${context.userId}:${address.toLowerCase()}`);
+    },
+    async setSenderStatus(context, address, status) {
+      senderStatuses.set(`${context.tenantId}:${context.userId}:${address.toLowerCase()}`, status);
+      pushAudit(context, "sender.status.set", "sender", address, { status });
+    },
+    async recordInboundMessage(context, input, classification) {
+      const key = `${context.tenantId}:${context.userId}:${input.providerMessageId}`;
+      const existing = inboundProviderIds.get(key);
+      if (existing) {
+        return { id: existing, duplicate: true };
+      }
+      const id = randomUUID();
+      inboundProviderIds.set(key, id);
+      pushAudit(context, "message.inbound.record", "message", id, { classification });
+      return { id, duplicate: false };
+    },
+    async queueOutboundMessage(context, input) {
+      const now = nowIso();
+      const message: OutboundMessageRecord = {
+        ...input,
+        id: randomUUID(),
+        tenantId: context.tenantId,
+        userId: context.userId,
+        conversationId: input.conversationId ?? null,
+        approvalId: input.approvalId ?? null,
+        subject: input.subject ?? null,
+        createdAt: now,
+        updatedAt: now
+      };
+      outboundMessages.set(message.id, message);
+      pushAudit(context, "outbound.queue", "outbound_message", message.id, {
+        channel: message.channel,
+        status: message.status
+      });
+      return message;
     }
   };
 }

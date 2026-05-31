@@ -7,6 +7,16 @@ const EnvBooleanSchema = z.preprocess((value) => {
   return value;
 }, z.boolean());
 
+function parseList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map(String).map((item) => item.trim()).filter(Boolean);
+  }
+  if (typeof value !== "string") {
+    return [];
+  }
+  return value.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
 const SettingsSchema = z.object({
   appEnv: z.string().default("development"),
   appVersion: z.string().default("0.1.0"),
@@ -34,7 +44,14 @@ const SettingsSchema = z.object({
   agentOpenaiModelRepair: z.string().default("gpt-5-mini"),
   agentRepairAttemptLimit: z.coerce.number().int().min(0).default(1),
   agentMaxToolCalls: z.coerce.number().int().positive().default(10),
-  agentMaxRuntimeSec: z.coerce.number().int().positive().default(120)
+  agentMaxRuntimeSec: z.coerce.number().int().positive().default(120),
+  agentOwnerEmails: z.array(z.string()).default(["dev@example.test"]),
+  agentOwnerSmsEmails: z.array(z.string()).default([]),
+  agentUntrustedReviewSms: z.string().default(""),
+  inboundMaxUntrustedPerSenderPerHour: z.coerce.number().int().positive().default(3),
+  inboundMaxUntrustedNotificationsPerHour: z.coerce.number().int().positive().default(10),
+  goalsApiBaseUrl: z.string().default(""),
+  budgetApiBaseUrl: z.string().default("")
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -77,7 +94,14 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     agentOpenaiModelRepair: env.AGENT_OPENAI_MODEL_REPAIR,
     agentRepairAttemptLimit: env.AGENT_REPAIR_ATTEMPT_LIMIT,
     agentMaxToolCalls: env.AGENT_MAX_TOOL_CALLS,
-    agentMaxRuntimeSec: env.AGENT_MAX_RUNTIME_SEC
+    agentMaxRuntimeSec: env.AGENT_MAX_RUNTIME_SEC,
+    agentOwnerEmails: parseList(env.AGENT_OWNER_EMAILS),
+    agentOwnerSmsEmails: parseList(env.AGENT_OWNER_SMS_EMAILS),
+    agentUntrustedReviewSms: env.AGENT_UNTRUSTED_REVIEW_SMS,
+    inboundMaxUntrustedPerSenderPerHour: env.INBOUND_MAX_UNTRUSTED_PER_SENDER_PER_HOUR,
+    inboundMaxUntrustedNotificationsPerHour: env.INBOUND_MAX_UNTRUSTED_NOTIFICATIONS_PER_HOUR,
+    goalsApiBaseUrl: env.GOALS_API_BASE_URL,
+    budgetApiBaseUrl: env.BUDGET_API_BASE_URL
   });
   if (settings.appEnv === "production" && settings.postgresPassword === "agent_dev_password") {
     throw new Error("Unsafe production configuration values: POSTGRES_PASSWORD");

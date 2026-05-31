@@ -56,3 +56,7 @@ Run targeted checks while iterating:
 
 Agent runtime tests use `MockModelClient`; validation does not call the OpenAI
 API. Real OpenAI wiring must remain behind `AgentModelClient`.
+
+Connector and integration tests also avoid live networks. They use deterministic
+sender classification, mock fetch implementations, and outbox records instead of
+real IMAP, SMTP, SMS, MMS, or cross-app API calls.
