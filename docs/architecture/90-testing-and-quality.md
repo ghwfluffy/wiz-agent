@@ -41,6 +41,8 @@ Phase 1 tests cover:
 - safe URL rejection.
 - MMS image sanitization policy.
 - cross-app integration token enforcement.
+- app capability registry coverage for Goals and Fluffynomics.
+- allowlisted integration-action request resolution.
 - frontend base-path helpers.
 - sign-in button behavior.
 

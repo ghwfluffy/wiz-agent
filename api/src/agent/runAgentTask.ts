@@ -5,6 +5,7 @@ import {
   resolveModelId,
   type AgentTaskComplexity
 } from "./modelTiers.js";
+import { buildAgentPrompt, modelToolDescriptors } from "./promptContext.js";
 import type { AgentStore, RequestContext } from "../domain/types.js";
 import { parseToolProposal, validateOrRepairToolCall } from "../tools/validator.js";
 
@@ -36,15 +37,15 @@ export async function runAgentTask(options: {
     status: "running",
     modelTier: tier,
     modelId,
-    promptVersion: "phase4.v1"
+    promptVersion: "phase5.capabilities.v1"
   });
 
   try {
     const modelOutput = await options.modelClient.runWithTools({
       model: modelId,
       tier,
-      prompt: options.request.prompt,
-      tools: []
+      prompt: buildAgentPrompt(options.request.prompt),
+      tools: modelToolDescriptors()
     });
     const proposal = parseToolProposal(modelOutput);
     if (!proposal) {

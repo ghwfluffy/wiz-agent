@@ -23,6 +23,10 @@
   `docs/project-standards/`.
 - Update docs when introducing a durable architecture, config, auth, deployment,
   or validation decision.
+- Keep `api/src/integrations/capabilityRegistry.ts` current whenever the agent
+  learns about a GHWIZ app, app API, or user-facing capability. Registry updates
+  should include purpose, allowed actions, token/scope expectations, safety
+  boundaries, and response guidance.
 - Do not read, print, or expose files under `secrets/` unless the user
   explicitly asks for secret-file maintenance.
 - Keep production hostnames, production subpaths, redirect URIs, and deployment

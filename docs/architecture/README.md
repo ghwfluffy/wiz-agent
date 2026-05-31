@@ -13,4 +13,5 @@ and approved deviations from `docs/project-standards/`.
 - [Auth And Tenancy](./40-auth-and-tenancy.md)
 - [Agent Runtime](./50-agent-runtime.md)
 - [Connectors And Side Effects](./60-connectors-and-side-effects.md)
+- [App Capability Registry](./70-app-capability-registry.md)
 - [Testing And Quality](./90-testing-and-quality.md)

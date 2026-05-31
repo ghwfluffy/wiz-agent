@@ -6,7 +6,11 @@ import {
   SlidingWindowRateLimiter,
   summarizeUntrustedMessage
 } from "../src/security/senderPolicy.js";
-import { callIntegrationApi } from "../src/tools/integrationGateway.js";
+import {
+  callIntegrationActionApi,
+  callIntegrationApi,
+  resolveIntegrationActionRequest
+} from "../src/tools/integrationGateway.js";
 import { sanitizeImageForMms } from "../src/tools/mmsImagePolicy.js";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
@@ -297,6 +301,78 @@ describe("cross-app integration gateway", () => {
       expect.objectContaining({
         headers: expect.objectContaining({
           authorization: "Bearer secret-user-token",
+          "x-agent-user-id": context.userId
+        })
+      })
+    );
+  });
+
+  it("resolves registered integration actions through the allowlist", async () => {
+    expect(resolveIntegrationActionRequest({
+      actionId: "goals.record_metric_entry",
+      pathParams: { metric_id: "metric 1" },
+      body: { number_value: 42 }
+    })).toEqual({
+      ok: true,
+      app: "goals",
+      path: "/metrics/metric%201/entries",
+      method: "POST",
+      body: { number_value: 42 }
+    });
+
+    expect(resolveIntegrationActionRequest({
+      actionId: "budget.get_net_worth_forecast",
+      query: { through_date: "2027-01-01" }
+    })).toEqual({
+      ok: true,
+      app: "budget",
+      path: "/accounts/net-worth/forecast?through_date=2027-01-01",
+      method: "GET",
+      body: undefined
+    });
+
+    expect(resolveIntegrationActionRequest({
+      actionId: "budget.get_net_worth_forecast",
+      query: { unexpected: "nope" }
+    })).toEqual({
+      ok: false,
+      reason: "query_param_not_allowed"
+    });
+  });
+
+  it("calls only registered integration actions with scoped token enforcement", async () => {
+    const { context } = await testContext();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ({ accounts: [] })
+    });
+
+    const result = await callIntegrationActionApi({
+      settings: loadSettings({
+        APP_ENV: "test",
+        BUDGET_API_BASE_URL: "https://budget.example.test/api"
+      }),
+      context,
+      actionId: "budget.list_accounts",
+      tokenProvider: {
+        async tokenFor() {
+          return "budget-user-token";
+        }
+      },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      status: 200,
+      data: { accounts: [] }
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      new URL("https://budget.example.test/api/accounts"),
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          authorization: "Bearer budget-user-token",
           "x-agent-user-id": context.userId
         })
       })

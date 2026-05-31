@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { MockModelClient, OpenAIModelClient } from "../src/agent/modelClient.js";
 import { chooseModelTier, modelTierConfigFromSettings, resolveModelId } from "../src/agent/modelTiers.js";
+import { buildAgentPrompt, modelToolDescriptors } from "../src/agent/promptContext.js";
 import { runAgentTask } from "../src/agent/runAgentTask.js";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
+import { buildCapabilityContext, getIntegrationAction, listAppCapabilities } from "../src/integrations/capabilityRegistry.js";
 import { validateOrRepairToolCall } from "../src/tools/validator.js";
 
 async function testContext(isAdmin = true): Promise<{ context: RequestContext; store: ReturnType<typeof createMemoryStore> }> {
@@ -133,6 +135,41 @@ describe("tool validation and repair", () => {
       expect(result.repaired).toBe(true);
       expect(result.validationErrors.join(" ")).toContain("title");
     }
+  });
+});
+
+describe("app capability registry", () => {
+  it("documents goals and budget purpose, access, and registered actions for model context", () => {
+    const apps = listAppCapabilities();
+    const context = buildCapabilityContext();
+
+    expect(apps.map((app) => app.id)).toEqual(["goals", "budget"]);
+    expect(context).toContain("Personal goal tracking");
+    expect(context).toContain("Personal finance planning");
+    expect(context).toContain("goals.record_metric_entry");
+    expect(context).toContain("budget.get_net_worth_forecast");
+    expect(getIntegrationAction("budget.update_account_value")).toMatchObject({
+      app: "budget",
+      access: "write",
+      risk: "high",
+      method: "PUT",
+      pathTemplate: "/accounts/:account_id/value"
+    });
+  });
+
+  it("adds integration capability context and tool schemas to model requests", async () => {
+    const prompt = buildAgentPrompt("How are my goals and budget doing?");
+    const tools = modelToolDescriptors();
+
+    expect(prompt).toContain("GHWIZ app capability registry");
+    expect(prompt).toContain("goals.list_goals");
+    expect(prompt).toContain("budget.list_accounts");
+    expect(tools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "integration_action" }),
+        expect.objectContaining({ name: "create_task" })
+      ])
+    );
   });
 });
 

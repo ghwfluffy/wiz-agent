@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { IntegrationActionIds } from "../integrations/capabilityRegistry.js";
 
 export const CreateTaskToolSchema = z.object({
   title: z.string().min(1),
@@ -20,10 +21,20 @@ export const RecordObservationToolSchema = z.object({
   source: z.string().min(1)
 });
 
+export const IntegrationActionToolSchema = z.object({
+  actionId: z.enum(IntegrationActionIds),
+  pathParams: z.record(z.string(), z.string()).default({}),
+  query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
+  body: z.record(z.string(), z.unknown()).optional(),
+  userIntentSummary: z.string().min(1),
+  approvalRequired: z.boolean().default(false)
+});
+
 export const ToolContracts = {
   create_task: CreateTaskToolSchema,
   propose_outbound_message: ProposeOutboundMessageToolSchema,
-  record_observation: RecordObservationToolSchema
+  record_observation: RecordObservationToolSchema,
+  integration_action: IntegrationActionToolSchema
 } as const;
 
 export type ToolName = keyof typeof ToolContracts;

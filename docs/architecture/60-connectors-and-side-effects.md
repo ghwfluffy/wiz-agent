@@ -81,8 +81,9 @@ sizes; and time out aggressively before article extraction or summarization.
 
 ## Cross-App Integrations
 
-The agent may eventually call other GHWIZ app APIs for the same user, such as
-Goals or Fluffynomics. Those calls go through a deterministic integration
+The agent understands other GHWIZ app APIs through the app capability registry
+in `api/src/integrations/capabilityRegistry.ts`. The registry currently covers
+Goals and Fluffynomics. Cross-app calls go through a deterministic integration
 gateway:
 
 - the model requests an allowed integration action;
@@ -94,3 +95,8 @@ gateway:
 
 Root production compose exposes other app APIs to the agent over internal
 app-specific aliases such as `goals_api` and `budget_api`.
+
+The registry is also a maintenance contract. When a future request adds or
+changes an omnisite app, app API, or major user-facing capability, update the
+registry and tests in the same change so the agent's context and allowlist stay
+accurate.
