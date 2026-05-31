@@ -56,12 +56,14 @@ tools should enqueue proposed sends rather than contacting providers directly.
 Outbound side effects may require approval. The first implementation should be
 conservative and approval-gated by default.
 
-The current implementation queues outbound records; it does not contact SMTP,
-SMS, or MMS providers. SMS/MMS sends must stay outbox-mediated even when provider
-delivery is implemented.
+The current implementation delivers `pending` and `approved` outbox records
+through SMTP. SMS and MMS use carrier gateway email addresses while still
+remaining outbox-mediated. Port `465` implies implicit TLS unless the secret file
+explicitly sets `smtp.secure`.
 
-The current `propose_outbound_message` tool only writes an outbound queue
-record. SMTP/SMS/MMS delivery is still a later connector step.
+The `propose_outbound_message` tool only writes an outbound queue record.
+Deterministic host code owns approval handling, SMTP transport configuration,
+delivery, status updates, and audit records.
 
 ## MMS Images
 

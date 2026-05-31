@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSettings } from "../src/config/settings.js";
-import { processOutboundQueue } from "../src/connectors/smtpSender.js";
+import { processOutboundQueue, resolveSmtpSecure } from "../src/connectors/smtpSender.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
 import { FileIntegrationTokenProvider } from "../src/integrations/tokenProvider.js";
@@ -408,6 +408,34 @@ describe("cross-app integration gateway", () => {
 });
 
 describe("outbound queue delivery", () => {
+  it("uses implicit TLS for SMTP port 465 when secure is omitted", () => {
+    expect(resolveSmtpSecure({
+      username: "sender@example.test",
+      password: "secret",
+      smtp: {
+        host: "smtp.example.test",
+        port: 465
+      }
+    })).toBe(true);
+    expect(resolveSmtpSecure({
+      username: "sender@example.test",
+      password: "secret",
+      smtp: {
+        host: "smtp.example.test",
+        port: 587
+      }
+    })).toBe(false);
+    expect(resolveSmtpSecure({
+      username: "sender@example.test",
+      password: "secret",
+      smtp: {
+        host: "smtp.example.test",
+        port: 465,
+        secure: false
+      }
+    })).toBe(false);
+  });
+
   it("sends pending SMS gateway messages through SMTP transport", async () => {
     const { context, store } = await testContext();
     const dir = mkdtempSync(join(tmpdir(), "agent-secrets-"));

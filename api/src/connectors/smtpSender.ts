@@ -28,6 +28,10 @@ export function loadEmailSecret(settings: Settings): EmailSecret {
   return JSON.parse(readFileSync(resolve(settings.agentSecretDir, "email.json"), "utf8")) as EmailSecret;
 }
 
+export function resolveSmtpSecure(secret: EmailSecret): boolean {
+  return secret.smtp?.secure ?? secret.smtp?.port === 465;
+}
+
 export function createSmtpTransport(settings: Settings): MailTransport {
   const secret = loadEmailSecret(settings);
   if (!secret.smtp?.host || !secret.username || !secret.password) {
@@ -36,7 +40,7 @@ export function createSmtpTransport(settings: Settings): MailTransport {
   return nodemailer.createTransport({
     host: secret.smtp.host,
     port: secret.smtp.port ?? 587,
-    secure: secret.smtp.secure ?? false,
+    secure: resolveSmtpSecure(secret),
     auth: {
       user: secret.username,
       pass: secret.password
