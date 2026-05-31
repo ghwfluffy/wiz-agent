@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import {
   createSessionFromSettings,
@@ -36,6 +36,10 @@ const DEFAULT_AI_CONFIG: AiConfig = {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function hashOauthState(state: string): string {
+  return createHash("sha256").update(state).digest("hex");
 }
 
 function taskFromRow(row: Record<string, unknown>): TaskRecord {
@@ -195,6 +199,120 @@ export function createPostgresStore(pool: Pool): AgentStore {
         { auth_mode: "standalone" }
       );
       return session;
+    },
+
+    async createOauthState(input) {
+      await pool.query(
+        `INSERT INTO oauth_state_records (id, state_hash, code_verifier, next_path, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [randomUUID(), hashOauthState(input.state), input.codeVerifier, input.nextPath, input.expiresAt]
+      );
+    },
+
+    async consumeOauthState(state) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await client.query(
+          `SELECT id, code_verifier, next_path
+           FROM oauth_state_records
+           WHERE state_hash = $1
+             AND consumed_at IS NULL
+             AND expires_at > now()
+           FOR UPDATE`,
+          [hashOauthState(state)]
+        );
+        const row = result.rows[0] as Record<string, unknown> | undefined;
+        if (!row) {
+          await client.query("COMMIT");
+          return undefined;
+        }
+        await client.query("UPDATE oauth_state_records SET consumed_at = now() WHERE id = $1", [row.id]);
+        await client.query("COMMIT");
+        return {
+          codeVerifier: String(row.code_verifier),
+          nextPath: String(row.next_path ?? "/")
+        };
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async createOauthSession(settings, input) {
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + settings.sessionDurationMinutes * 60_000);
+      const sessionId = randomUUID();
+      const tenantId = settings.devTenantId;
+      const userId = `oauth:${input.identityProvider}:${input.subject}`;
+      await pool.query(
+        `INSERT INTO tenants (id, name)
+         VALUES ($1, $2)
+         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, updated_at = now()`,
+        [tenantId, settings.devTenantName]
+      );
+      await pool.query(
+        `INSERT INTO users (id, email, display_name, is_admin)
+         VALUES ($1, lower($2), $3, $4)
+         ON CONFLICT (id) DO UPDATE
+           SET email = EXCLUDED.email,
+               display_name = EXCLUDED.display_name,
+               is_admin = EXCLUDED.is_admin,
+               updated_at = now()`,
+        [userId, input.email, input.displayName, input.isAdmin]
+      );
+      await pool.query(
+        `INSERT INTO tenant_memberships (tenant_id, user_id, role)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, updated_at = now()`,
+        [tenantId, userId, input.isAdmin ? "admin" : "member"]
+      );
+      await pool.query(
+        `INSERT INTO identities (id, tenant_id, user_id, kind, value, verified_at, is_primary)
+         VALUES ($1, $2, $3, $4, $5, now(), true)
+         ON CONFLICT (kind, value) DO UPDATE
+           SET tenant_id = EXCLUDED.tenant_id,
+               user_id = EXCLUDED.user_id,
+               verified_at = now(),
+               is_primary = true,
+               updated_at = now()`,
+        [randomUUID(), tenantId, userId, input.identityProvider, input.subject]
+      );
+      await pool.query(
+        `INSERT INTO sessions (id, token_hash, tenant_id, user_id, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [randomUUID(), hashSessionToken(sessionId), tenantId, userId, expiresAt.toISOString()]
+      );
+      await recordAudit(
+        pool,
+        {
+          tenantId,
+          userId,
+          actorType: input.isAdmin ? "admin" : "user",
+          requestId: input.requestId
+        },
+        "auth.oauth_login",
+        "session",
+        null,
+        { identity_provider: input.identityProvider }
+      );
+      return {
+        id: sessionId,
+        user: {
+          id: userId,
+          email: input.email,
+          displayName: input.displayName,
+          isAdmin: input.isAdmin
+        },
+        tenant: {
+          id: tenantId,
+          name: settings.devTenantName
+        },
+        createdAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString()
+      };
     },
 
     async getSession(sessionId: string | undefined): Promise<Session | undefined> {
@@ -599,6 +717,67 @@ export function createMemoryStore(): AgentStore {
         "session",
         null,
         { auth_mode: "standalone" }
+      );
+      return session;
+    },
+    async createOauthState(input) {
+      sessions.set(`oauth-state:${input.state}`, {
+        id: input.codeVerifier,
+        user: {
+          id: input.nextPath,
+          email: "",
+          displayName: "",
+          isAdmin: false
+        },
+        tenant: {
+          id: "",
+          name: ""
+        },
+        createdAt: nowIso(),
+        expiresAt: input.expiresAt
+      });
+    },
+    async consumeOauthState(state) {
+      const record = sessions.get(`oauth-state:${state}`);
+      sessions.delete(`oauth-state:${state}`);
+      if (!record || Date.parse(record.expiresAt) <= Date.now()) {
+        return undefined;
+      }
+      return {
+        codeVerifier: record.id,
+        nextPath: record.user.id
+      };
+    },
+    async createOauthSession(settings, input) {
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + settings.sessionDurationMinutes * 60_000);
+      const session: Session = {
+        id: randomUUID(),
+        user: {
+          id: `oauth:${input.identityProvider}:${input.subject}`,
+          email: input.email,
+          displayName: input.displayName,
+          isAdmin: input.isAdmin
+        },
+        tenant: {
+          id: settings.devTenantId,
+          name: settings.devTenantName
+        },
+        createdAt: now.toISOString(),
+        expiresAt: expiresAt.toISOString()
+      };
+      sessions.set(session.id, session);
+      pushAudit(
+        {
+          tenantId: session.tenant.id,
+          userId: session.user.id,
+          actorType: session.user.isAdmin ? "admin" : "user",
+          requestId: input.requestId
+        },
+        "auth.oauth_login",
+        "session",
+        null,
+        { identity_provider: input.identityProvider }
       );
       return session;
     },

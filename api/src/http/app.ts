@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
-import { randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { loadSettings, type Settings } from "../config/settings.js";
 import { clearSessionCookie, writeSessionCookie } from "../auth/session.js";
 import { createPool } from "../db/pool.js";
@@ -10,6 +10,7 @@ import type { AgentStore, RequestContext } from "../domain/types.js";
 export type AppOptions = {
   settings?: Settings;
   store?: AgentStore;
+  fetchImpl?: typeof fetch;
 };
 
 function errorPayload(code: string, message: string, requestId: string, fieldErrors: unknown[] = []) {
@@ -33,7 +34,36 @@ function createDefaultStore(settings: Settings): AgentStore {
 export function buildApp(options: AppOptions = {}): Hono {
   const settings = options.settings ?? loadSettings();
   const store = options.store ?? createDefaultStore(settings);
+  const fetcher = options.fetchImpl ?? fetch;
   const app = new Hono();
+
+  function appRedirect(path: string, error?: string): string {
+    const safePath = path.startsWith("/") ? path : "/";
+    const base = `${settings.appBasePath || ""}${safePath === "/" ? "/" : safePath}`;
+    if (!error) {
+      return base;
+    }
+    const separator = base.includes("?") ? "&" : "?";
+    return `${base}${separator}oauth_error=${encodeURIComponent(error)}`;
+  }
+
+  function oauthRedirectUri(): string {
+    return `${settings.publicUrl.replace(/\/$/, "")}${settings.appBasePath}/api/v1/auth/oauth/callback`;
+  }
+
+  function tokenUrlSafe(bytes = 32): string {
+    return randomBytes(bytes).toString("base64url");
+  }
+
+  function pkceChallenge(verifier: string): string {
+    return createHash("sha256").update(verifier, "ascii").digest("base64url");
+  }
+
+  function authAuthorizeUrl(params: Record<string, string>): string {
+    const base = settings.authBaseUrl || "/";
+    const separator = base.includes("?") ? "&" : "?";
+    return `${base}/oauth/authorize${separator}${new URLSearchParams(params).toString()}`.replace("//oauth", "/oauth");
+  }
 
   async function requireContext(context: import("hono").Context): Promise<RequestContext | Response> {
     const requestId = context.req.header("x-request-id") ?? randomUUID();
@@ -116,18 +146,96 @@ export function buildApp(options: AppOptions = {}): Hono {
     });
   });
 
-  app.get("/api/v1/auth/login", (context) => {
+  app.get("/api/v1/auth/login", async (context) => {
     if (settings.authMode === "standalone") {
       return context.redirect(`${settings.appBasePath || "/"}`, 302);
     }
 
-    return context.redirect(settings.authBaseUrl || "/", 302);
+    const next = context.req.query("next") ?? "/";
+    const safeNext = next.startsWith("/") && !next.startsWith("//") ? next : "/";
+    const state = tokenUrlSafe(24);
+    const verifier = tokenUrlSafe(32);
+    const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    await store.createOauthState({
+      state,
+      codeVerifier: verifier,
+      nextPath: safeNext,
+      expiresAt
+    });
+    return context.redirect(authAuthorizeUrl({
+      response_type: "code",
+      client_id: settings.oauthClientId,
+      redirect_uri: oauthRedirectUri(),
+      scope: settings.oauthScope,
+      state,
+      code_challenge: pkceChallenge(verifier),
+      code_challenge_method: "S256"
+    }), 302);
   });
 
-  app.get("/api/v1/auth/oauth/callback", (context) => {
-    const redirectBase = settings.appBasePath || "/";
-    const separator = redirectBase.includes("?") ? "&" : "?";
-    return context.redirect(`${redirectBase}${separator}oauth_error=oauth_not_configured`, 302);
+  app.get("/api/v1/auth/oauth/callback", async (context) => {
+    if (settings.authMode !== "oauth") {
+      return context.redirect(appRedirect("/", "oauth_not_enabled"), 302);
+    }
+    const requestId = context.req.header("x-request-id") ?? randomUUID();
+    const code = context.req.query("code");
+    const state = context.req.query("state");
+    if (!code || !state) {
+      return context.redirect(appRedirect("/", "oauth_callback"), 302);
+    }
+    const stateRecord = await store.consumeOauthState(state);
+    if (!stateRecord) {
+      return context.redirect(appRedirect("/", "oauth_state"), 302);
+    }
+    try {
+      const tokenResponse = await fetcher(`${(settings.oauthServerBaseUrl || settings.authBaseUrl).replace(/\/$/, "")}/oauth/token`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        body: new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: settings.oauthClientId,
+          code,
+          redirect_uri: oauthRedirectUri(),
+          code_verifier: stateRecord.codeVerifier
+        }).toString()
+      });
+      if (!tokenResponse.ok) {
+        return context.redirect(appRedirect("/", "oauth_failed"), 302);
+      }
+      const tokenPayload = await tokenResponse.json().catch(() => null) as Record<string, unknown> | null;
+      const accessToken = tokenPayload?.access_token;
+      if (typeof accessToken !== "string") {
+        return context.redirect(appRedirect("/", "oauth_failed"), 302);
+      }
+      const userinfoResponse = await fetcher(`${(settings.oauthServerBaseUrl || settings.authBaseUrl).replace(/\/$/, "")}/oauth/userinfo`, {
+        headers: {
+          authorization: `Bearer ${accessToken}`
+        }
+      });
+      if (!userinfoResponse.ok) {
+        return context.redirect(appRedirect("/", "oauth_failed"), 302);
+      }
+      const userinfo = await userinfoResponse.json().catch(() => null) as Record<string, unknown> | null;
+      const subject = typeof userinfo?.sub === "string" ? userinfo.sub : "";
+      const username = typeof userinfo?.preferred_username === "string" ? userinfo.preferred_username : subject;
+      if (!subject || !username) {
+        return context.redirect(appRedirect("/", "oauth_failed"), 302);
+      }
+      const session = await store.createOauthSession(settings, {
+        subject,
+        email: typeof userinfo?.email === "string" ? userinfo.email : `${username}@central-auth.local`,
+        displayName: typeof userinfo?.name === "string" ? userinfo.name : username,
+        isAdmin: userinfo?.is_admin === true,
+        identityProvider: "central-oauth",
+        requestId
+      });
+      writeSessionCookie(context, settings, session);
+      return context.redirect(appRedirect(stateRecord.nextPath), 302);
+    } catch {
+      return context.redirect(appRedirect("/", "oauth_failed"), 302);
+    }
   });
 
   app.post("/api/v1/auth/logout", async (context) => {

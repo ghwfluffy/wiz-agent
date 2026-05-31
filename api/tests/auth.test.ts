@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../src/config/settings.js";
 import { buildApp } from "../src/http/app.js";
 
@@ -70,23 +70,28 @@ describe("standalone auth", () => {
     });
   });
 
-  it("redirects OAuth mode login to the configured auth base", async () => {
+  it("redirects OAuth mode login to the configured authorization endpoint", async () => {
     const app = buildApp({
       settings: loadSettings({
         APP_ENV: "test",
         AUTH_MODE: "oauth",
         AUTH_BASE_URL: "/central-auth",
-        APP_BASE_PATH: "/agent"
+        APP_BASE_PATH: "/agent",
+        PUBLIC_URL: "https://agent.example.test"
       })
     });
 
     const response = await app.request("/api/v1/auth/login");
 
     expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe("/central-auth");
+    const location = response.headers.get("location") ?? "";
+    expect(location).toContain("/central-auth/oauth/authorize?");
+    expect(location).toContain("client_id=agent");
+    expect(location).toContain("redirect_uri=https%3A%2F%2Fagent.example.test%2Fagent%2Fapi%2Fv1%2Fauth%2Foauth%2Fcallback");
+    expect(location).toContain("code_challenge_method=S256");
   });
 
-  it("redirects placeholder OAuth callbacks back to the app UI", async () => {
+  it("redirects failed OAuth callbacks back to the app UI", async () => {
     const app = buildApp({
       settings: loadSettings({
         APP_ENV: "test",
@@ -98,6 +103,56 @@ describe("standalone auth", () => {
     const response = await app.request("/api/v1/auth/oauth/callback?code=bad&state=bad");
 
     expect(response.status).toBe(302);
-    expect(response.headers.get("location")).toBe("/agent?oauth_error=oauth_not_configured");
+    expect(response.headers.get("location")).toBe("/agent/?oauth_error=oauth_state");
+  });
+
+  it("exchanges OAuth callbacks for local sessions", async () => {
+    const fetchImpl = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ access_token: "access-token" })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          sub: "central-user-1",
+          preferred_username: "ghw",
+          name: "GHW",
+          is_admin: true
+        })
+      });
+    const app = buildApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "oauth",
+        AUTH_BASE_URL: "/central-auth",
+        OAUTH_SERVER_BASE_URL: "http://central-api.test",
+        APP_BASE_PATH: "/agent",
+        PUBLIC_URL: "https://agent.example.test"
+      }),
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    const login = await app.request("/api/v1/auth/login?next=/tasks");
+    const authorize = new URL(`https://agent.example.test${login.headers.get("location") ?? ""}`);
+    const state = authorize.searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const callback = await app.request(`/api/v1/auth/oauth/callback?code=code-1&state=${state}`);
+    expect(callback.status).toBe(302);
+    expect(callback.headers.get("location")).toBe("/agent/tasks");
+    const cookie = callback.headers.get("set-cookie") ?? "";
+    expect(cookie).toContain("agent_session=");
+
+    const me = await app.request("/api/v1/auth/me", {
+      headers: { cookie }
+    });
+    await expect(me.json()).resolves.toMatchObject({
+      authenticated: true,
+      user: {
+        displayName: "GHW",
+        isAdmin: true
+      }
+    });
   });
 });

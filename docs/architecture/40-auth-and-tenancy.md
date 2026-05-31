@@ -22,15 +22,21 @@ mode: tenant id, user id, actor type, and permissions.
 
 ## Omnisite OAuth Mode
 
-`AUTH_MODE=oauth` will be used when the app is published into the omnisite.
+`AUTH_MODE=oauth` is used when the app is published into the omnisite.
 
 Behavior:
 
-- login redirects to the central auth app;
-- callback validates state and exchanges the code through an internal OAuth
-  server URL;
+- login creates a short-lived server-side state record and redirects to the
+  central auth app with PKCE S256;
+- callback consumes state once and exchanges the code through an internal OAuth
+  server URL configured by `OAUTH_SERVER_BASE_URL`;
+- callback fetches central userinfo and upserts a local tenant, user,
+  membership, and identity;
 - the app creates its own local session after successful OAuth;
 - failed callbacks redirect back to the app UI with a friendly error token.
+
+The local user id is derived from the central subject and identity provider. The
+central `is_admin` userinfo claim controls the local admin flag.
 
 The root omnisite repository owns production hosts, subpaths, redirect URIs, and
 OAuth client registration.

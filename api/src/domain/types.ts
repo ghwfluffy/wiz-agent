@@ -129,6 +129,21 @@ export type ToolCallRecord = {
 
 export type AgentStore = {
   createDevelopmentSession(settings: import("../config/settings.js").Settings, requestId: string): Promise<Session>;
+  createOauthState(context: {
+    state: string;
+    codeVerifier: string;
+    nextPath: string;
+    expiresAt: string;
+  }): Promise<void>;
+  consumeOauthState(state: string): Promise<{ codeVerifier: string; nextPath: string } | undefined>;
+  createOauthSession(settings: import("../config/settings.js").Settings, input: {
+    subject: string;
+    email: string;
+    displayName: string;
+    isAdmin: boolean;
+    identityProvider: string;
+    requestId: string;
+  }): Promise<Session>;
   getSession(sessionId: string | undefined): Promise<Session | undefined>;
   revokeSession(sessionId: string | undefined, requestId: string): Promise<void>;
   createTask(context: RequestContext, input: TaskInput): Promise<TaskRecord>;
