@@ -26,6 +26,10 @@ Phase 1 tests cover:
 - API config loading.
 - status route.
 - standalone development auto-login.
+- core schema table coverage.
+- API error envelope.
+- task tenant/user ownership.
+- admin audit and AI config authorization.
 - frontend base-path helpers.
 - sign-in button behavior.
 

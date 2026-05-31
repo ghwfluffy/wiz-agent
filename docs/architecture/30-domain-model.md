@@ -25,11 +25,28 @@ one user.
 - Audit log: durable record of meaningful writes and privileged actions.
 - AI backend config: admin-managed model tiers and budgets.
 
+## Initial Schema
+
+The first migration creates all core Phase 3 tables so later features can add
+behavior without revisiting ownership boundaries. Only a subset is actively used
+by the current API:
+
+- standalone tenant/user/session creation;
+- task CRUD;
+- audit listing;
+- admin AI config.
+
+Unused tables are intentionally present for connectors, memory, messages,
+outbound side effects, agent runs, tool calls, and article snapshots.
+
 ## Ownership Rule
 
 Tenant-scoped tables must include `tenant_id`. User-owned records usually also
 include `user_id`. Services should accept explicit tenant/user context rather
 than deriving scope deep in database helpers.
+
+Current task APIs always query by both `tenant_id` and `user_id`. Admin audit
+queries may see all users inside the current tenant.
 
 ## Source And Derived State
 

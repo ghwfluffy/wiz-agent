@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "dev": "tsx watch src/main.ts",
     "lint": "tsc --noEmit",
-    "migrate": "node -e \"console.log('No agent migrations have been defined yet.')\"",
+    "migrate": "tsx src/db/migrate.ts",
     "start": "node dist/main.js",
     "test": "vitest run",
     "worker": "tsx watch src/worker.ts",

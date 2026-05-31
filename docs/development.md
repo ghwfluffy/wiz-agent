@@ -20,12 +20,19 @@ available at `http://localhost:18080`. In standalone mode, the
 sign-in button calls `POST /api/v1/auth/dev-login` and creates a session for the
 configured development user.
 
+API and worker startup run the TypeScript migration runner before serving:
+
+```bash
+cd api
+npm run migrate
+```
+
 Standalone mode is only for local development. It is not production auth.
 
 ## Services
 
 - `db`: local Postgres.
-- `api`: Fastify API.
+- `api`: Hono API.
 - `worker`: worker process stub.
 - `web`: Vite development server.
 - `nginx`: production-style local static/proxy service.

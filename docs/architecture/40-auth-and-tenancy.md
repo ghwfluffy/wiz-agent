@@ -9,12 +9,13 @@ The app supports two auth modes.
 Behavior:
 
 - `GET /api/v1/auth/me` returns anonymous until the user signs in.
-- `POST /api/v1/auth/dev-login` creates a normal local session for the
-  configured development user.
+- `POST /api/v1/auth/dev-login` creates or updates the configured development
+  tenant, user, membership, email identity, and normal local session.
 - The frontend sign-in button calls `dev-login`.
 - No password, registration, invitation-code, or local user-management workflow
   exists.
 - The development endpoint must be disabled outside standalone mode.
+- Development auto-login writes an audit event.
 
 Standalone mode still creates the same request context shape used by omnisite
 mode: tenant id, user id, actor type, and permissions.
@@ -47,3 +48,18 @@ requestId
 ```
 
 Domain services should require this context for tenant-scoped operations.
+
+## API Error Envelope
+
+Authenticated API routes use a stable error envelope:
+
+```json
+{
+  "error": {
+    "code": "http_401",
+    "message": "Not authenticated.",
+    "field_errors": [],
+    "request_id": "request-id"
+  }
+}
+```

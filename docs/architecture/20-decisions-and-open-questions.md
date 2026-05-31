@@ -5,6 +5,8 @@
 - Backend is TypeScript on Node.js 20+.
 - API framework is Hono.
 - Postgres is the canonical data store.
+- Schema migrations are currently applied by the TypeScript migration runner in
+  `api/src/db/migrate.ts`.
 - Zod owns runtime schemas for config, API payloads, and tool contracts.
 - Vitest is used for backend and frontend tests.
 - Frontend is Vue 3, Vite, TypeScript, Pinia, Vue Router, and Carbon.
@@ -15,6 +17,9 @@
 - The app has separate API and worker process roles.
 - The worker starts as a Compose-managed loop, with database locking added as
   scheduled work grows.
+- Standalone sign-in persists the configured development tenant, user,
+  membership, identity, session, and audit event.
+- Task APIs enforce tenant/user ownership in the service layer.
 
 ## Open Questions
 
