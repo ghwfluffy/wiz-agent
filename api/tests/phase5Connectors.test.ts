@@ -1,4 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { loadSettings } from "../src/config/settings.js";
+import { processOutboundQueue } from "../src/connectors/smtpSender.js";
+import { createMemoryStore } from "../src/domain/store.js";
+import type { RequestContext } from "../src/domain/types.js";
 import { validateSafeHttpUrl } from "../src/links/safeFetch.js";
 import { claimDueTasks } from "../src/scheduler/taskQueue.js";
 import {
@@ -12,9 +19,6 @@ import {
   resolveIntegrationActionRequest
 } from "../src/tools/integrationGateway.js";
 import { sanitizeImageForMms } from "../src/tools/mmsImagePolicy.js";
-import { loadSettings } from "../src/config/settings.js";
-import { createMemoryStore } from "../src/domain/store.js";
-import type { RequestContext } from "../src/domain/types.js";
 
 async function testContext(): Promise<{ context: RequestContext; store: ReturnType<typeof createMemoryStore> }> {
   const settings = loadSettings({
@@ -377,5 +381,68 @@ describe("cross-app integration gateway", () => {
         })
       })
     );
+  });
+});
+
+describe("outbound queue delivery", () => {
+  it("sends pending SMS gateway messages through SMTP transport", async () => {
+    const { context, store } = await testContext();
+    const dir = mkdtempSync(join(tmpdir(), "agent-secrets-"));
+    writeFileSync(join(dir, "email.json"), JSON.stringify({
+      username: "sender@example.test",
+      password: "secret",
+      smtp: {
+        host: "smtp.example.test",
+        from: "sender@example.test"
+      }
+    }), "utf8");
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "pending",
+      toAddr: "15555550100@sms.example.test",
+      bodyText: "hello"
+    });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["15555550100@sms.example.test"] });
+
+    const result = await processOutboundQueue({
+      store,
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_SECRET_DIR: dir,
+        AGENT_OUTBOUND_ENABLED: "true"
+      }),
+      transport: { sendMail }
+    });
+
+    expect(result).toEqual({ attempted: 1, sent: 1, failed: 0 });
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({
+      from: "sender@example.test",
+      to: "15555550100@sms.example.test",
+      text: "hello"
+    }));
+    const messages = await store.listOutboundMessages(context);
+    expect(messages[0]).toMatchObject({ status: "sent" });
+  });
+
+  it("fails queued outbound messages closed when delivery is disabled", async () => {
+    const { context, store } = await testContext();
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "pending",
+      toAddr: "15555550100@sms.example.test",
+      bodyText: "hello"
+    });
+
+    const result = await processOutboundQueue({
+      store,
+      context,
+      settings: loadSettings({ APP_ENV: "test" }),
+      transport: { sendMail: vi.fn() }
+    });
+
+    expect(result).toEqual({ attempted: 1, sent: 0, failed: 1 });
+    const messages = await store.listOutboundMessages(context);
+    expect(messages[0]).toMatchObject({ status: "failed" });
   });
 });

@@ -666,6 +666,41 @@ export function createPostgresStore(pool: Pool): AgentStore {
         status: record.status
       });
       return record;
+    },
+
+    async listOutboundMessages(context, statuses) {
+      const statusFilter = statuses && statuses.length > 0;
+      const result = await pool.query(
+        statusFilter
+          ? `SELECT * FROM outbound_messages
+             WHERE tenant_id = $1 AND user_id = $2 AND status = ANY($3::text[])
+             ORDER BY created_at ASC`
+          : `SELECT * FROM outbound_messages
+             WHERE tenant_id = $1 AND user_id = $2
+             ORDER BY created_at DESC`,
+        statusFilter ? [context.tenantId, context.userId, statuses] : [context.tenantId, context.userId]
+      );
+      return result.rows.map(outboundFromRow);
+    },
+
+    async updateOutboundMessageStatus(context, messageId, status, failureMessage = null) {
+      const result = await pool.query(
+        `UPDATE outbound_messages
+         SET status = $4,
+             failure_message = $5,
+             sent_at = CASE WHEN $4 = 'sent' THEN now() ELSE sent_at END,
+             updated_at = now()
+         WHERE id = $1 AND tenant_id = $2 AND user_id = $3
+         RETURNING *`,
+        [messageId, context.tenantId, context.userId, status, failureMessage]
+      );
+      const record = result.rows[0] ? outboundFromRow(result.rows[0]) : undefined;
+      if (record) {
+        await recordAudit(pool, context, `outbound.${status}`, "outbound_message", messageId, {
+          failure_message: failureMessage
+        });
+      }
+      return record;
     }
   };
 }
@@ -983,6 +1018,30 @@ export function createMemoryStore(): AgentStore {
         status: message.status
       });
       return message;
+    },
+    async listOutboundMessages(context, statuses) {
+      return [...outboundMessages.values()].filter((message) => {
+        if (message.tenantId !== context.tenantId || message.userId !== context.userId) {
+          return false;
+        }
+        return !statuses || statuses.length === 0 || statuses.includes(message.status);
+      });
+    },
+    async updateOutboundMessageStatus(context, messageId, status, failureMessage = null) {
+      const message = outboundMessages.get(messageId);
+      if (!message || message.tenantId !== context.tenantId || message.userId !== context.userId) {
+        return undefined;
+      }
+      const updated = {
+        ...message,
+        status,
+        updatedAt: nowIso()
+      };
+      outboundMessages.set(messageId, updated);
+      pushAudit(context, `outbound.${status}`, "outbound_message", messageId, {
+        failure_message: failureMessage
+      });
+      return updated;
     }
   };
 }

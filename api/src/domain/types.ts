@@ -184,4 +184,11 @@ export type AgentStore = {
     classification: SenderClassification
   ): Promise<{ id: string; duplicate: boolean }>;
   queueOutboundMessage(context: RequestContext, input: OutboundMessageInput): Promise<OutboundMessageRecord>;
+  listOutboundMessages(context: RequestContext, statuses?: string[]): Promise<OutboundMessageRecord[]>;
+  updateOutboundMessageStatus(
+    context: RequestContext,
+    messageId: string,
+    status: OutboundMessageInput["status"],
+    failureMessage?: string | null
+  ): Promise<OutboundMessageRecord | undefined>;
 };
