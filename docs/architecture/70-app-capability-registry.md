@@ -24,6 +24,11 @@ The model can propose an `integration_action` tool call, but deterministic host
 code still owns endpoint allowlisting, token lookup, tenant/user headers,
 authorization, audit logging, redaction, and side-effect execution.
 
+The first token provider reads optional per-user tokens from ignored secret
+storage (`integration-tokens.json` under the configured agent secret directory).
+Missing files or missing user/app tokens fail closed without calling the target
+app.
+
 ## Current Apps
 
 ### Goals

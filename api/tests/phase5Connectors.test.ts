@@ -6,6 +6,7 @@ import { loadSettings } from "../src/config/settings.js";
 import { processOutboundQueue } from "../src/connectors/smtpSender.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
+import { FileIntegrationTokenProvider } from "../src/integrations/tokenProvider.js";
 import { validateSafeHttpUrl } from "../src/links/safeFetch.js";
 import { claimDueTasks } from "../src/scheduler/taskQueue.js";
 import {
@@ -381,6 +382,28 @@ describe("cross-app integration gateway", () => {
         })
       })
     );
+  });
+
+  it("loads per-user integration tokens from ignored secret storage", async () => {
+    const { context } = await testContext();
+    const dir = mkdtempSync(join(tmpdir(), "agent-integration-tokens-"));
+    writeFileSync(join(dir, "integration-tokens.json"), JSON.stringify({
+      users: {
+        [context.userId]: {
+          goals: "goals-token"
+        }
+      },
+      default: {
+        budget: "budget-token"
+      }
+    }), "utf8");
+    const provider = new FileIntegrationTokenProvider(loadSettings({
+      APP_ENV: "test",
+      AGENT_SECRET_DIR: dir
+    }));
+
+    await expect(provider.tokenFor(context, "goals")).resolves.toBe("goals-token");
+    await expect(provider.tokenFor(context, "budget")).resolves.toBe("budget-token");
   });
 });
 
