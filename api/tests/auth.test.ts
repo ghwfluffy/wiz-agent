@@ -69,4 +69,35 @@ describe("standalone auth", () => {
       }
     });
   });
+
+  it("redirects OAuth mode login to the configured auth base", async () => {
+    const app = buildApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "oauth",
+        AUTH_BASE_URL: "/central-auth",
+        APP_BASE_PATH: "/agent"
+      })
+    });
+
+    const response = await app.request("/api/v1/auth/login");
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/central-auth");
+  });
+
+  it("redirects placeholder OAuth callbacks back to the app UI", async () => {
+    const app = buildApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "oauth",
+        APP_BASE_PATH: "/agent"
+      })
+    });
+
+    const response = await app.request("/api/v1/auth/oauth/callback?code=bad&state=bad");
+
+    expect(response.status).toBe(302);
+    expect(response.headers.get("location")).toBe("/agent?oauth_error=oauth_not_configured");
+  });
 });

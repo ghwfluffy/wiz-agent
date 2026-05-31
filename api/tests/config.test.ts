@@ -6,6 +6,7 @@ describe("settings", () => {
     const settings = loadSettings({});
 
     expect(settings.authMode).toBe("standalone");
+    expect(settings.authBaseUrl).toBe("/auth");
     expect(settings.appBasePath).toBe("");
     expect(settings.devUserEmail).toBe("dev@example.test");
   });

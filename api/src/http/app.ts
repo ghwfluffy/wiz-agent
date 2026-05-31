@@ -67,6 +67,20 @@ export function buildApp(options: AppOptions = {}): Hono {
     });
   });
 
+  app.get("/api/v1/auth/login", (context) => {
+    if (settings.authMode === "standalone") {
+      return context.redirect(`${settings.appBasePath || "/"}`, 302);
+    }
+
+    return context.redirect(settings.authBaseUrl || "/", 302);
+  });
+
+  app.get("/api/v1/auth/oauth/callback", (context) => {
+    const redirectBase = settings.appBasePath || "/";
+    const separator = redirectBase.includes("?") ? "&" : "?";
+    return context.redirect(`${redirectBase}${separator}oauth_error=oauth_not_configured`, 302);
+  });
+
   app.post("/api/v1/auth/logout", (context) => {
     const sessionId = getCookie(context, settings.sessionCookieName);
     sessionStore.delete(sessionId);
