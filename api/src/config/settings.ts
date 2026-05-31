@@ -27,7 +27,14 @@ const SettingsSchema = z.object({
   devUserId: z.string().default("dev-user"),
   devUserEmail: z.string().email().default("dev@example.test"),
   devUserDisplayName: z.string().default("Development User"),
-  devUserIsAdmin: EnvBooleanSchema.default(true)
+  devUserIsAdmin: EnvBooleanSchema.default(true),
+  agentOpenaiModelFast: z.string().default("gpt-5-mini"),
+  agentOpenaiModelSmart: z.string().default("gpt-5"),
+  agentOpenaiModelOrchestrator: z.string().default("gpt-5"),
+  agentOpenaiModelRepair: z.string().default("gpt-5-mini"),
+  agentRepairAttemptLimit: z.coerce.number().int().min(0).default(1),
+  agentMaxToolCalls: z.coerce.number().int().positive().default(10),
+  agentMaxRuntimeSec: z.coerce.number().int().positive().default(120)
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -63,7 +70,14 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     devUserId: env.DEV_USER_ID,
     devUserEmail: env.DEV_USER_EMAIL,
     devUserDisplayName: env.DEV_USER_DISPLAY_NAME,
-    devUserIsAdmin: env.DEV_USER_IS_ADMIN
+    devUserIsAdmin: env.DEV_USER_IS_ADMIN,
+    agentOpenaiModelFast: env.AGENT_OPENAI_MODEL_FAST,
+    agentOpenaiModelSmart: env.AGENT_OPENAI_MODEL_SMART,
+    agentOpenaiModelOrchestrator: env.AGENT_OPENAI_MODEL_ORCHESTRATOR,
+    agentOpenaiModelRepair: env.AGENT_OPENAI_MODEL_REPAIR,
+    agentRepairAttemptLimit: env.AGENT_REPAIR_ATTEMPT_LIMIT,
+    agentMaxToolCalls: env.AGENT_MAX_TOOL_CALLS,
+    agentMaxRuntimeSec: env.AGENT_MAX_RUNTIME_SEC
   });
   if (settings.appEnv === "production" && settings.postgresPassword === "agent_dev_password") {
     throw new Error("Unsafe production configuration values: POSTGRES_PASSWORD");

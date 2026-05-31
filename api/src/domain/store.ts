@@ -10,12 +10,14 @@ import {
 import type { Settings } from "../config/settings.js";
 import type {
   AgentStore,
+  AgentRunRecord,
   AiConfig,
   AuditRecord,
   RequestContext,
   TaskInput,
   TaskRecord,
-  TaskUpdate
+  TaskUpdate,
+  ToolCallRecord
 } from "./types.js";
 
 const DEFAULT_AI_CONFIG: AiConfig = {
@@ -61,6 +63,42 @@ function auditFromRow(row: Record<string, unknown>): AuditRecord {
     details: (row.details_json as Record<string, unknown> | null) ?? {},
     requestId: row.request_id ? String(row.request_id) : null,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
+  };
+}
+
+function runFromRow(row: Record<string, unknown>): AgentRunRecord {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    userId: String(row.user_id),
+    taskId: row.task_id ? String(row.task_id) : null,
+    status: String(row.status),
+    modelTier: String(row.model_tier),
+    modelId: String(row.model_id),
+    promptVersion: row.prompt_version ? String(row.prompt_version) : null,
+    startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : String(row.started_at),
+    finishedAt: row.finished_at instanceof Date ? row.finished_at.toISOString() : row.finished_at ? String(row.finished_at) : null,
+    failureMessage: row.failure_message ? String(row.failure_message) : null
+  };
+}
+
+function toolCallFromRow(row: Record<string, unknown>): ToolCallRecord {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    userId: String(row.user_id),
+    runId: row.run_id ? String(row.run_id) : null,
+    toolName: String(row.tool_name),
+    status: String(row.status),
+    arguments: (row.arguments_json as Record<string, unknown> | null) ?? {},
+    result: (row.result_json as Record<string, unknown> | null) ?? {},
+    validationError: row.validation_error ? String(row.validation_error) : null,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    completedAt: row.completed_at instanceof Date
+      ? row.completed_at.toISOString()
+      : row.completed_at
+        ? String(row.completed_at)
+        : null
   };
 }
 
@@ -307,6 +345,68 @@ export function createPostgresStore(pool: Pool): AgentStore {
       );
       await recordAudit(pool, context, "admin.ai_config.update", "admin_ai_config", "default");
       return config;
+    },
+
+    async createAgentRun(context, input) {
+      const id = randomUUID();
+      const result = await pool.query(
+        `INSERT INTO agent_runs
+          (id, tenant_id, user_id, task_id, status, model_tier, model_id, prompt_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING *`,
+        [
+          id,
+          context.tenantId,
+          context.userId,
+          input.taskId ?? null,
+          input.status,
+          input.modelTier,
+          input.modelId,
+          input.promptVersion ?? null
+        ]
+      );
+      await recordAudit(pool, context, "agent_run.create", "agent_run", id, {
+        model_tier: input.modelTier,
+        model_id: input.modelId
+      });
+      return runFromRow(result.rows[0]);
+    },
+
+    async finishAgentRun(context, runId, status, failureMessage = null) {
+      await pool.query(
+        `UPDATE agent_runs
+         SET status = $4, failure_message = $5, finished_at = now()
+         WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
+        [runId, context.tenantId, context.userId, status, failureMessage]
+      );
+      await recordAudit(pool, context, `agent_run.${status}`, "agent_run", runId, {
+        failure_message: failureMessage
+      });
+    },
+
+    async recordToolCall(context, input) {
+      const result = await pool.query(
+        `INSERT INTO tool_calls
+          (id, tenant_id, user_id, run_id, tool_name, status, arguments_json, result_json, validation_error, completed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $6 IN ('accepted', 'rejected', 'failed') THEN now() ELSE NULL END)
+         RETURNING *`,
+        [
+          randomUUID(),
+          context.tenantId,
+          context.userId,
+          input.runId ?? null,
+          input.toolName,
+          input.status,
+          input.arguments,
+          input.result ?? {},
+          input.validationError ?? null
+        ]
+      );
+      await recordAudit(pool, context, `tool_call.${input.status}`, "tool_call", result.rows[0].id, {
+        tool_name: input.toolName,
+        validation_error: input.validationError ?? null
+      });
+      return toolCallFromRow(result.rows[0]);
     }
   };
 }
@@ -314,6 +414,8 @@ export function createPostgresStore(pool: Pool): AgentStore {
 export function createMemoryStore(): AgentStore {
   const sessions = new Map<string, Session>();
   const tasks = new Map<string, TaskRecord>();
+  const runs = new Map<string, AgentRunRecord>();
+  const toolCalls = new Map<string, ToolCallRecord>();
   const audit: AuditRecord[] = [];
   let aiConfig = DEFAULT_AI_CONFIG;
 
@@ -446,6 +548,64 @@ export function createMemoryStore(): AgentStore {
       aiConfig = config;
       pushAudit(context, "admin.ai_config.update", "admin_ai_config", "default");
       return aiConfig;
+    },
+    async createAgentRun(context, input) {
+      const now = nowIso();
+      const run: AgentRunRecord = {
+        id: randomUUID(),
+        tenantId: context.tenantId,
+        userId: context.userId,
+        taskId: input.taskId ?? null,
+        status: input.status,
+        modelTier: input.modelTier,
+        modelId: input.modelId,
+        promptVersion: input.promptVersion ?? null,
+        startedAt: now,
+        finishedAt: null,
+        failureMessage: null
+      };
+      runs.set(run.id, run);
+      pushAudit(context, "agent_run.create", "agent_run", run.id, {
+        model_tier: input.modelTier,
+        model_id: input.modelId
+      });
+      return run;
+    },
+    async finishAgentRun(context, runId, status, failureMessage = null) {
+      const run = runs.get(runId);
+      if (run) {
+        runs.set(runId, {
+          ...run,
+          status,
+          finishedAt: nowIso(),
+          failureMessage
+        });
+      }
+      pushAudit(context, `agent_run.${status}`, "agent_run", runId, {
+        failure_message: failureMessage
+      });
+    },
+    async recordToolCall(context, input) {
+      const now = nowIso();
+      const toolCall: ToolCallRecord = {
+        id: randomUUID(),
+        tenantId: context.tenantId,
+        userId: context.userId,
+        runId: input.runId ?? null,
+        toolName: input.toolName,
+        status: input.status,
+        arguments: input.arguments,
+        result: input.result ?? {},
+        validationError: input.validationError ?? null,
+        createdAt: now,
+        completedAt: ["accepted", "rejected", "failed"].includes(input.status) ? now : null
+      };
+      toolCalls.set(toolCall.id, toolCall);
+      pushAudit(context, `tool_call.${input.status}`, "tool_call", toolCall.id, {
+        tool_name: input.toolName,
+        validation_error: input.validationError ?? null
+      });
+      return toolCall;
     }
   };
 }

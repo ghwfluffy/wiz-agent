@@ -30,6 +30,11 @@ Phase 1 tests cover:
 - API error envelope.
 - task tenant/user ownership.
 - admin audit and AI config authorization.
+- model tier selection.
+- structured tool-call validation and repair.
+- failed repair rejection.
+- mock model agent runs.
+- run/tool-call audit traceability.
 - frontend base-path helpers.
 - sign-in button behavior.
 

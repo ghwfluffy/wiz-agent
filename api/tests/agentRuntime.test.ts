@@ -1,0 +1,265 @@
+import { describe, expect, it } from "vitest";
+import { MockModelClient, OpenAIModelClient } from "../src/agent/modelClient.js";
+import { chooseModelTier, modelTierConfigFromSettings, resolveModelId } from "../src/agent/modelTiers.js";
+import { runAgentTask } from "../src/agent/runAgentTask.js";
+import { loadSettings } from "../src/config/settings.js";
+import { createMemoryStore } from "../src/domain/store.js";
+import type { RequestContext } from "../src/domain/types.js";
+import { validateOrRepairToolCall } from "../src/tools/validator.js";
+
+async function testContext(isAdmin = true): Promise<{ context: RequestContext; store: ReturnType<typeof createMemoryStore> }> {
+  const settings = loadSettings({
+    APP_ENV: "test",
+    AUTH_MODE: "standalone",
+    DEV_USER_IS_ADMIN: String(isAdmin)
+  });
+  const store = createMemoryStore();
+  const session = await store.createDevelopmentSession(settings, "agent-test-login");
+  return {
+    store,
+    context: {
+      tenantId: session.tenant.id,
+      userId: session.user.id,
+      actorType: session.user.isAdmin ? "admin" : "user",
+      permissions: session.user.isAdmin ? ["user", "admin"] : ["user"],
+      requestId: "agent-test",
+      session
+    }
+  };
+}
+
+describe("model tiers", () => {
+  it("selects tiers from task complexity", () => {
+    expect(chooseModelTier({})).toBe("fast");
+    expect(chooseModelTier({ ambiguous: true })).toBe("smart");
+    expect(chooseModelTier({ orchestration: true })).toBe("orchestrator");
+    expect(chooseModelTier({ repair: true })).toBe("repair");
+  });
+
+  it("resolves model ids from settings", () => {
+    const settings = loadSettings({
+      AGENT_OPENAI_MODEL_FAST: "fast-model",
+      AGENT_OPENAI_MODEL_SMART: "smart-model",
+      AGENT_OPENAI_MODEL_ORCHESTRATOR: "orchestrator-model",
+      AGENT_OPENAI_MODEL_REPAIR: "repair-model"
+    });
+
+    const config = modelTierConfigFromSettings(settings);
+
+    expect(resolveModelId(config, "fast")).toBe("fast-model");
+    expect(resolveModelId(config, "smart")).toBe("smart-model");
+    expect(resolveModelId(config, "orchestrator")).toBe("orchestrator-model");
+    expect(resolveModelId(config, "repair")).toBe("repair-model");
+  });
+});
+
+describe("tool validation and repair", () => {
+  it("accepts valid tool arguments without repair", async () => {
+    const result = await validateOrRepairToolCall(
+      {
+        toolName: "create_task",
+        arguments: {
+          title: "Check mail",
+          prompt: "Summarize messages."
+        }
+      },
+      {
+        modelClient: new MockModelClient(),
+        repairModel: "repair-model",
+        repairAttemptLimit: 1
+      }
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      repaired: false
+    });
+  });
+
+  it("repairs malformed tool arguments through the repair tier", async () => {
+    const result = await validateOrRepairToolCall(
+      {
+        toolName: "create_task",
+        arguments: {
+          prompt: "Missing title."
+        }
+      },
+      {
+        modelClient: new MockModelClient({
+          repairs: [
+            {
+              title: "Repaired task",
+              prompt: "Missing title."
+            }
+          ]
+        }),
+        repairModel: "repair-model",
+        repairAttemptLimit: 1
+      }
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      repaired: true,
+      arguments: {
+        title: "Repaired task"
+      }
+    });
+  });
+
+  it("fails closed when repair cannot satisfy the contract", async () => {
+    const result = await validateOrRepairToolCall(
+      {
+        toolName: "create_task",
+        arguments: {
+          prompt: "Still missing title."
+        }
+      },
+      {
+        modelClient: new MockModelClient({
+          repairs: [
+            {
+              prompt: "Still missing title."
+            }
+          ]
+        }),
+        repairModel: "repair-model",
+        repairAttemptLimit: 1
+      }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.repaired).toBe(true);
+      expect(result.validationErrors.join(" ")).toContain("title");
+    }
+  });
+});
+
+describe("agent task execution", () => {
+  it("records accepted tool calls without executing side effects", async () => {
+    const { context, store } = await testContext();
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "create_task",
+            arguments: {
+              title: "Proposed task",
+              prompt: "Do useful work."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Create a task."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "accepted",
+      repaired: false
+    });
+
+    const audit = await store.listAudit(context, true);
+    expect(audit).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "agent_run.create" }),
+        expect.objectContaining({ action: "tool_call.accepted" }),
+        expect.objectContaining({ action: "agent_run.completed" })
+      ])
+    );
+  });
+
+  it("repairs a malformed tool call before accepting it", async () => {
+    const { context, store } = await testContext();
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "create_task",
+            arguments: {
+              prompt: "Needs a title."
+            }
+          }
+        ],
+        repairs: [
+          {
+            title: "Fixed",
+            prompt: "Needs a title."
+          }
+        ]
+      }),
+      request: {
+        prompt: "Create a task."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "accepted",
+      repaired: true
+    });
+  });
+
+  it("rejects invalid tool calls after repair budget without side effects", async () => {
+    const { context, store } = await testContext();
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "create_task",
+            arguments: {
+              prompt: "Invalid."
+            }
+          }
+        ],
+        repairs: [
+          {
+            prompt: "Still invalid."
+          }
+        ]
+      }),
+      request: {
+        prompt: "Create a task."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      toolStatus: "rejected",
+      repaired: true
+    });
+
+    const tasks = await store.listTasks(context);
+    expect(tasks).toEqual([]);
+    const audit = await store.listAudit(context, true);
+    expect(audit).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "tool_call.rejected" }),
+        expect.objectContaining({ action: "agent_run.failed" })
+      ])
+    );
+  });
+
+  it("isolates real OpenAI calls behind a dedicated adapter", async () => {
+    const client = new OpenAIModelClient();
+
+    await expect(client.runWithTools({
+      model: "test",
+      tier: "fast",
+      prompt: "hello",
+      tools: []
+    })).rejects.toThrow("OpenAIModelClient is not wired yet");
+  });
+});

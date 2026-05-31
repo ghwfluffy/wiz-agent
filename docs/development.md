@@ -53,3 +53,6 @@ Run targeted checks while iterating:
 ./web/test.sh
 ./web/build.sh
 ```
+
+Agent runtime tests use `MockModelClient`; validation does not call the OpenAI
+API. Real OpenAI wiring must remain behind `AgentModelClient`.

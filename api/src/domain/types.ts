@@ -60,6 +60,34 @@ export type AiConfig = {
   repairAttemptLimit: number;
 };
 
+export type AgentRunRecord = {
+  id: string;
+  tenantId: string;
+  userId: string;
+  taskId: string | null;
+  status: string;
+  modelTier: string;
+  modelId: string;
+  promptVersion: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  failureMessage: string | null;
+};
+
+export type ToolCallRecord = {
+  id: string;
+  tenantId: string;
+  userId: string;
+  runId: string | null;
+  toolName: string;
+  status: string;
+  arguments: Record<string, unknown>;
+  result: Record<string, unknown>;
+  validationError: string | null;
+  createdAt: string;
+  completedAt: string | null;
+};
+
 export type AgentStore = {
   createDevelopmentSession(settings: import("../config/settings.js").Settings, requestId: string): Promise<Session>;
   getSession(sessionId: string | undefined): Promise<Session | undefined>;
@@ -71,4 +99,26 @@ export type AgentStore = {
   listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]>;
   getAiConfig(): Promise<AiConfig>;
   updateAiConfig(context: RequestContext, config: AiConfig): Promise<AiConfig>;
+  createAgentRun(
+    context: RequestContext,
+    input: {
+      taskId?: string | null;
+      status: string;
+      modelTier: string;
+      modelId: string;
+      promptVersion?: string | null;
+    }
+  ): Promise<AgentRunRecord>;
+  finishAgentRun(context: RequestContext, runId: string, status: string, failureMessage?: string | null): Promise<void>;
+  recordToolCall(
+    context: RequestContext,
+    input: {
+      runId?: string | null;
+      toolName: string;
+      status: string;
+      arguments: Record<string, unknown>;
+      result?: Record<string, unknown>;
+      validationError?: string | null;
+    }
+  ): Promise<ToolCallRecord>;
 };

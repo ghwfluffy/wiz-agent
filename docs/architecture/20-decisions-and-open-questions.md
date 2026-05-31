@@ -20,11 +20,14 @@
 - Standalone sign-in persists the configured development tenant, user,
   membership, identity, session, and audit event.
 - Task APIs enforce tenant/user ownership in the service layer.
+- Agent runtime uses an internal `AgentModelClient` adapter.
+- Real OpenAI calls are isolated behind `OpenAIModelClient`; tests use
+  `MockModelClient`.
+- Phase 4 accepts or rejects tool calls after schema validation but does not
+  execute external side effects.
 
 ## Open Questions
 
-- Which OpenAI model IDs should seed the default `fast`, `smart`,
-  `orchestrator`, and `repair` tiers at the time of implementation?
 - Which mailbox and SMS/MMS gateway providers will be used first?
 - Should local attachment/article artifacts live in Postgres, mounted storage,
   or object storage for the first release?
