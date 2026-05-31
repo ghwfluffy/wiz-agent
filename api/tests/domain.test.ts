@@ -168,4 +168,49 @@ describe("domain and tenancy APIs", () => {
       repairAttemptLimit: 2
     });
   });
+
+  it("lists and updates queued outbound messages for the current user", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_IS_ADMIN: "true"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "outbox-login");
+    await store.queueOutboundMessage({
+      tenantId: session.tenant.id,
+      userId: session.user.id,
+      actorType: "admin",
+      permissions: ["user", "admin"],
+      requestId: "outbox-test",
+      session
+    }, {
+      channel: "sms",
+      status: "requires_approval",
+      toAddr: "15555550100@sms.example.test",
+      bodyText: "hello"
+    });
+
+    const list = await app.request("/api/v1/outbox", {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(list.status).toBe(200);
+    const payload = await list.json() as { messages: Array<{ id: string }> };
+    expect(payload.messages).toHaveLength(1);
+
+    const update = await app.request(`/api/v1/outbox/${payload.messages[0]?.id}`, {
+      method: "PATCH",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ status: "approved" })
+    });
+
+    expect(update.status).toBe(200);
+    await expect(update.json()).resolves.toMatchObject({ status: "approved" });
+  });
 });

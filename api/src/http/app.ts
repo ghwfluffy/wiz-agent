@@ -332,6 +332,35 @@ export function buildApp(options: AppOptions = {}): Hono {
     return context.json({ events: await store.listAudit(authContext, false) });
   });
 
+  app.get("/api/v1/outbox", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    return context.json({ messages: await store.listOutboundMessages(authContext) });
+  });
+
+  app.patch("/api/v1/outbox/:id", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
+    const statusValue = payload?.status;
+    if (!["pending", "approved", "cancelled"].includes(String(statusValue))) {
+      return context.json(errorPayload("validation_error", "A valid outbox status is required.", authContext.requestId), 400);
+    }
+    const message = await store.updateOutboundMessageStatus(
+      authContext,
+      context.req.param("id"),
+      statusValue as "pending" | "approved" | "cancelled"
+    );
+    if (!message) {
+      return context.json(errorPayload("http_404", "Outbox message not found.", authContext.requestId), 404);
+    }
+    return context.json(message);
+  });
+
   app.get("/api/v1/admin/audit", async (context) => {
     const authContext = await requireAdmin(context);
     if (authContext instanceof Response) {

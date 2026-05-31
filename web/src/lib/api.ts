@@ -19,6 +19,34 @@ export type AuthMeResponse = {
   expiresAt?: string;
 };
 
+export type Task = {
+  id: string;
+  status: string;
+  title: string;
+  prompt: string;
+  dueAt: string | null;
+  priority: number;
+};
+
+export type OutboxMessage = {
+  id: string;
+  channel: "email" | "sms" | "mms";
+  status: string;
+  toAddr: string;
+  subject?: string | null;
+  bodyText: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type AuditEvent = {
+  id: string;
+  action: string;
+  entityType: string | null;
+  entityId: string | null;
+  createdAt: string;
+};
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(apiUrl(path), {
     credentials: "include",
@@ -45,5 +73,17 @@ export const api = {
   },
   logout(): Promise<AuthMeResponse> {
     return request<AuthMeResponse>("/auth/logout", { method: "POST" });
+  },
+  async dashboard(): Promise<{ tasks: Task[]; outbox: OutboxMessage[]; audit: AuditEvent[] }> {
+    const [tasks, outbox, audit] = await Promise.all([
+      request<{ tasks: Task[] }>("/tasks"),
+      request<{ messages: OutboxMessage[] }>("/outbox"),
+      request<{ events: AuditEvent[] }>("/audit")
+    ]);
+    return {
+      tasks: tasks.tasks,
+      outbox: outbox.messages,
+      audit: audit.events
+    };
   }
 };

@@ -56,11 +56,58 @@ h1 {
   margin: 0;
 }
 
-.dashboard {
+.dashboard-header {
   display: grid;
   grid-template-columns: 1fr 1fr auto;
   gap: 24px;
   align-items: end;
+}
+
+.dashboard {
+  display: grid;
+  gap: 24px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: #c6c6c6;
+  border: 1px solid #c6c6c6;
+}
+
+.metric-grid section,
+.activity-section {
+  background: #ffffff;
+  padding: 16px;
+}
+
+.activity-section h2 {
+  margin: 0 0 16px;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.activity-section ul {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  background: #e0e0e0;
+}
+
+.activity-section li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  padding: 12px;
+  background: #f4f4f4;
+}
+
+.empty {
+  margin: 0;
+  color: #6f6f6f;
 }
 
 .value {
@@ -78,7 +125,9 @@ h1 {
 
 @media (max-width: 720px) {
   .auth-panel,
-  .dashboard {
+  .dashboard-header,
+  .metric-grid,
+  .activity-section li {
     grid-template-columns: 1fr;
     align-items: stretch;
   }
