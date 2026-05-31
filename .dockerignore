@@ -1,0 +1,12 @@
+.env
+.env.local
+.git
+api/coverage
+api/dist
+api/node_modules
+coverage
+node_modules
+web/coverage
+web/dist
+web/node_modules
+*.tsbuildinfo

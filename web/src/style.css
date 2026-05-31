@@ -1,0 +1,90 @@
+:root {
+  color: #161616;
+  background: #f4f4f4;
+  font-family: "IBM Plex Sans", Arial, sans-serif;
+}
+
+body {
+  margin: 0;
+}
+
+.app-shell {
+  min-height: 100vh;
+}
+
+.home-view {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 48px 24px;
+}
+
+.home-header {
+  margin-bottom: 32px;
+}
+
+.eyebrow,
+.label {
+  margin: 0 0 8px;
+  color: #525252;
+  font-size: 0.875rem;
+}
+
+h1 {
+  max-width: 720px;
+  margin: 0;
+  font-size: 2.5rem;
+  font-weight: 400;
+  line-height: 1.15;
+}
+
+.auth-panel,
+.dashboard,
+.status {
+  border: 1px solid #c6c6c6;
+  background: #ffffff;
+  padding: 24px;
+}
+
+.auth-panel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+.auth-panel p {
+  margin: 0;
+}
+
+.dashboard {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 24px;
+  align-items: end;
+}
+
+.value {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+.status {
+  margin-bottom: 16px;
+}
+
+.status-error {
+  border-left: 4px solid #da1e28;
+}
+
+@media (max-width: 720px) {
+  .auth-panel,
+  .dashboard {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .auth-panel {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
