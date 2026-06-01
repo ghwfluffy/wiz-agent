@@ -183,6 +183,7 @@ export async function processImapInbox(options: {
     },
     logger: false
   });
+  client.on("error", () => undefined);
   let attempted = 0;
   let recorded = 0;
   let failed = 0;
@@ -284,6 +285,7 @@ export async function testImapConnection(options: {
     },
     logger: false
   });
+  client.on("error", () => undefined);
   try {
     await client.connect();
     const lock = await client.getMailboxLock(config.mailbox);
