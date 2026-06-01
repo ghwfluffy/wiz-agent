@@ -20,6 +20,7 @@ const signInLabel = computed(() => (authMode === "standalone" ? "Sign in" : "Con
 const tabs = [
   { id: "overview", label: "Overview" },
   { id: "inbox", label: "Inbox" },
+  { id: "outbox", label: "Outbox" },
   { id: "tasks", label: "Tasks" },
   { id: "senders", label: "Senders" },
   { id: "workers", label: "Workers" },
@@ -40,8 +41,10 @@ const dashboardError = ref<string | null>(null);
 const saving = ref(false);
 const taskPage = ref(1);
 const inboxPage = ref(1);
+const outboxPage = ref(1);
 const tasksPerPage = 10;
 const inboxPerPage = 10;
+const outboxPerPage = 10;
 const selectedTask = ref<Task | null>(null);
 const selectedTaskEvents = ref<TaskEvent[]>([]);
 const taskStatusDraft = ref("");
@@ -69,10 +72,12 @@ const configForm = reactive<AiConfig>({
 });
 
 const taskStatuses = ["pending", "claimed", "running", "completed", "cancelled", "failed"];
-const pendingOutbox = computed(() => outbox.value.filter((message) => ["requires_approval", "pending", "approved", "failed"].includes(message.status)));
+const activeOutbox = computed(() => outbox.value.filter((message) => ["requires_approval", "pending", "approved", "sending"].includes(message.status)));
+const outboxHistory = computed(() => outbox.value.filter((message) => ["sent", "failed"].includes(message.status)));
 const recentAudit = computed(() => audit.value.slice(0, 12));
 const totalTaskPages = computed(() => Math.max(1, Math.ceil(tasks.value.length / tasksPerPage)));
 const totalInboxPages = computed(() => Math.max(1, Math.ceil(inbox.value.length / inboxPerPage)));
+const totalOutboxPages = computed(() => Math.max(1, Math.ceil(outboxHistory.value.length / outboxPerPage)));
 const paginatedTasks = computed(() => {
   const page = Math.min(taskPage.value, totalTaskPages.value);
   const offset = (page - 1) * tasksPerPage;
@@ -82,6 +87,11 @@ const paginatedInbox = computed(() => {
   const page = Math.min(inboxPage.value, totalInboxPages.value);
   const offset = (page - 1) * inboxPerPage;
   return inbox.value.slice(offset, offset + inboxPerPage);
+});
+const paginatedOutbox = computed(() => {
+  const page = Math.min(outboxPage.value, totalOutboxPages.value);
+  const offset = (page - 1) * outboxPerPage;
+  return outboxHistory.value.slice(offset, offset + outboxPerPage);
 });
 const selectedTaskOpen = computed(() => selectedTask.value !== null);
 const taskModalTitle = computed(() => selectedTask.value?.title ?? "Task details");
@@ -148,6 +158,14 @@ function nextInboxPage(): void {
   inboxPage.value = Math.min(totalInboxPages.value, inboxPage.value + 1);
 }
 
+function previousOutboxPage(): void {
+  outboxPage.value = Math.max(1, outboxPage.value - 1);
+}
+
+function nextOutboxPage(): void {
+  outboxPage.value = Math.min(totalOutboxPages.value, outboxPage.value + 1);
+}
+
 async function loadDashboard(): Promise<void> {
   if (!auth.authenticated) {
     return;
@@ -163,6 +181,7 @@ async function loadDashboard(): Promise<void> {
     applyAiConfig(data.aiConfig);
     taskPage.value = Math.min(taskPage.value, totalTaskPages.value);
     inboxPage.value = Math.min(inboxPage.value, totalInboxPages.value);
+    outboxPage.value = Math.min(outboxPage.value, totalOutboxPages.value);
     dashboardError.value = null;
   } catch {
     dashboardError.value = "Unable to load agent activity.";
@@ -416,11 +435,11 @@ watch(() => auth.authenticated, (authenticated) => {
           </section>
         </div>
 
-        <section class="activity-section" aria-label="Outbound queue">
+        <section class="activity-section" aria-label="Active outbound queue">
           <div class="section-heading">
-            <h2>Outbound queue</h2>
+            <h2>Needs attention</h2>
           </div>
-          <p v-if="pendingOutbox.length === 0" class="empty">No queued messages.</p>
+          <p v-if="activeOutbox.length === 0" class="empty">No outbound messages need attention.</p>
           <table v-else class="cds--data-table cds--data-table--zebra">
             <thead>
               <tr>
@@ -432,7 +451,7 @@ watch(() => auth.authenticated, (authenticated) => {
               </tr>
             </thead>
             <tbody>
-              <tr v-for="message in pendingOutbox" :key="message.id">
+              <tr v-for="message in activeOutbox" :key="message.id">
                 <td>{{ message.channel }}</td>
                 <td>{{ message.toAddr }}</td>
                 <td>
@@ -443,12 +462,14 @@ watch(() => auth.authenticated, (authenticated) => {
                 </td>
                 <td>
                   <div class="table-actions">
-                    <button class="cds--btn cds--btn--sm cds--btn--primary" type="button" :disabled="message.status === 'sent'" @click="updateOutboxStatus(message, 'approved')">
+                    <button v-if="message.status === 'requires_approval'" class="cds--btn cds--btn--sm cds--btn--primary" type="button" @click="updateOutboxStatus(message, 'approved')">
                       Approve
                     </button>
-                    <button class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="updateOutboxStatus(message, 'cancelled')">
+                    <button v-if="message.status !== 'sending'" class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="updateOutboxStatus(message, 'cancelled')">
                       Cancel
                     </button>
+                    <span v-if="message.status !== 'requires_approval' && message.status !== 'sending'" class="label">Queued for delivery</span>
+                    <span v-if="message.status === 'sending'" class="label">Sending</span>
                   </div>
                 </td>
               </tr>
@@ -507,6 +528,57 @@ watch(() => auth.authenticated, (authenticated) => {
                   Previous
                 </button>
                 <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="inboxPage === totalInboxPages" @click="nextInboxPage">
+                  Next
+                </button>
+              </div>
+            </div>
+          </template>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'outbox'" id="panel-outbox" class="tab-panel" role="tabpanel" aria-labelledby="tab-outbox">
+        <section class="activity-section" aria-label="Outbox history">
+          <div class="section-heading">
+            <h2>Outbox</h2>
+            <p class="label">{{ outboxHistory.length }} sent or failed</p>
+          </div>
+          <p v-if="outboxHistory.length === 0" class="empty">No sent or failed outbound messages.</p>
+          <template v-else>
+            <table class="cds--data-table cds--data-table--zebra">
+              <thead>
+                <tr>
+                  <th>Created</th>
+                  <th>Sent</th>
+                  <th>Channel</th>
+                  <th>Recipient</th>
+                  <th>Status</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="message in paginatedOutbox" :key="message.id">
+                  <td>{{ formatDate(message.createdAt) }}</td>
+                  <td>{{ formatDate(message.sentAt) }}</td>
+                  <td>{{ message.channel }}</td>
+                  <td>{{ message.toAddr }}</td>
+                  <td>
+                    <span class="cds--tag" :class="statusTagClass(message.status)">{{ message.status }}</span>
+                  </td>
+                  <td>
+                    <span class="table-copy">{{ message.failureMessage ? `Failure: ${message.failureMessage}` : message.bodyText }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="cds--pagination pagination-bar">
+              <div class="cds--pagination__left">
+                Page {{ outboxPage }} of {{ totalOutboxPages }}
+              </div>
+              <div class="cds--pagination__right">
+                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="outboxPage === 1" @click="previousOutboxPage">
+                  Previous
+                </button>
+                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="outboxPage === totalOutboxPages" @click="nextOutboxPage">
                   Next
                 </button>
               </div>

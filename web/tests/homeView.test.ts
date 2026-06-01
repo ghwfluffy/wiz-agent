@@ -46,7 +46,13 @@ describe("home view", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ messages: [{ id: "msg-1", channel: "sms", status: "approved", toAddr: "sms@example.test", bodyText: "hi", createdAt: "", updatedAt: "" }] })
+        json: async () => ({
+          messages: [
+            { id: "msg-1", channel: "sms", status: "requires_approval", toAddr: "sms@example.test", bodyText: "please approve", createdAt: "", updatedAt: "" },
+            { id: "msg-2", channel: "sms", status: "sent", toAddr: "sent@example.test", bodyText: "sent message", createdAt: "", updatedAt: "", sentAt: "" },
+            { id: "msg-3", channel: "email", status: "failed", toAddr: "failed@example.test", bodyText: "failed message", createdAt: "", updatedAt: "", failureMessage: "SMTP error" }
+          ]
+        })
       })
       .mockResolvedValueOnce({
         ok: true,
@@ -82,9 +88,13 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("sms@example.test");
     expect(wrapper.text()).toContain("Overview");
     expect(wrapper.text()).toContain("Inbox");
+    expect(wrapper.text()).toContain("Outbox");
     expect(wrapper.text()).toContain("Tasks");
     expect(wrapper.text()).toContain("Audit events");
     expect(wrapper.text()).toContain("owner@example.test");
     expect(wrapper.text()).toContain("AI configuration");
+    expect(wrapper.text()).toContain("please approve");
+    expect(wrapper.text()).toContain("sent@example.test");
+    expect(wrapper.text()).toContain("SMTP error");
   });
 });

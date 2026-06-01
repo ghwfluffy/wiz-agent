@@ -89,10 +89,25 @@ The `propose_outbound_message` tool only writes an outbound queue record.
 Deterministic host code owns approval handling, SMTP transport configuration,
 delivery, status updates, and audit records.
 
-The operations UI lists actionable outbox records, shows delivery failure
-messages, and lets an authenticated operator approve or cancel queued outbound
-messages. Sent records remain auditable through API/history rather than being
-treated as active queue work.
+Approval gates delivery only for records with `status = 'requires_approval'`.
+The model tool defaults to requiring approval unless the tool arguments
+explicitly set `approvalRequired: false`; deterministic host code may also queue
+review notifications as `requires_approval`. The delivery worker only attempts
+records with `pending` or `approved` status, so `requires_approval` records stay
+blocked until an operator or future approval mechanism changes the status.
+
+The current implemented approval mechanism is the operations UI calling
+`PATCH /api/v1/outbox/:id` to change a record to `approved` or `cancelled`.
+There is not yet an SMS/email reply approval parser, scheduled auto-approval
+rule, or policy engine. Those should be added as explicit host-owned approval
+mechanisms before they can send messages without dashboard interaction.
+
+The operations UI Overview lists only active outbound records that need
+attention or delivery tracking: `requires_approval`, `pending`, `approved`, and
+`sending`. The Outbox tab is history-oriented and lists sent and failed
+messages in a paged table, including delivery failure messages. Failed records
+are not shown as actionable approvals; a future retry workflow should make retry
+state explicit rather than reusing the approval button.
 
 Sender trust is operator-managed. The API and UI can list sender
 classifications and set a sender to `owner`, `newsletter`, `trusted`,
