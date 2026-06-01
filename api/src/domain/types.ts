@@ -1,4 +1,4 @@
-import type { Session } from "../auth/session.js";
+import type { AuthenticatedUser, Session } from "../auth/session.js";
 
 export type ActorType = "user" | "admin" | "agent" | "system";
 
@@ -235,6 +235,7 @@ export type AgentStore = {
   ): Promise<InboundMessageRecord | undefined>;
   queueOutboundMessage(context: RequestContext, input: OutboundMessageInput): Promise<OutboundMessageRecord>;
   listOutboundMessages(context: RequestContext, statuses?: string[]): Promise<OutboundMessageRecord[]>;
+  listUsersWithWork(statuses?: string[], now?: Date): Promise<AuthenticatedUser[]>;
   updateOutboundMessageStatus(
     context: RequestContext,
     messageId: string,

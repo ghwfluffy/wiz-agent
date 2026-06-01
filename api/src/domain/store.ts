@@ -212,6 +212,15 @@ function toolCallFromRow(row: Record<string, unknown>): ToolCallRecord {
   };
 }
 
+function userFromRow(row: Record<string, unknown>): AuthenticatedUser {
+  return {
+    id: String(row.id),
+    email: String(row.email),
+    displayName: String(row.display_name),
+    isAdmin: Boolean(row.is_admin)
+  };
+}
+
 async function recordAudit(
   pool: Pool,
   context: Pick<RequestContext, "userId" | "actorType" | "requestId">,
@@ -873,6 +882,29 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return result.rows.map(outboundFromRow);
     },
 
+    async listUsersWithWork(statuses = ["pending", "approved"], now = new Date()) {
+      const result = await pool.query(
+        `SELECT DISTINCT u.*
+         FROM users u
+         WHERE EXISTS (
+           SELECT 1
+           FROM outbound_messages om
+           WHERE om.user_id = u.id
+             AND om.status = ANY($1::text[])
+         )
+         OR EXISTS (
+           SELECT 1
+           FROM tasks t
+           WHERE t.user_id = u.id
+             AND t.status = 'pending'
+             AND (t.due_at IS NULL OR t.due_at <= $2)
+         )
+         ORDER BY u.email ASC`,
+        [statuses, now.toISOString()]
+      );
+      return result.rows.map(userFromRow);
+    },
+
     async updateOutboundMessageStatus(context, messageId, status, failureMessage = null) {
       const result = await pool.query(
         `UPDATE outbound_messages
@@ -897,6 +929,7 @@ export function createPostgresStore(pool: Pool): AgentStore {
 
 export function createMemoryStore(): AgentStore {
   const sessions = new Map<string, Session>();
+  const users = new Map<string, AuthenticatedUser>();
   const tasks = new Map<string, TaskRecord>();
   const taskEvents = new Map<string, TaskEventRecord[]>();
   const runs = new Map<string, AgentRunRecord>();
@@ -951,6 +984,7 @@ export function createMemoryStore(): AgentStore {
     async createDevelopmentSession(settings: Settings, requestId: string): Promise<Session> {
       const session = createSessionFromSettings(settings);
       sessions.set(session.id, session);
+      users.set(session.user.id, session.user);
       pushAudit(
         {
           userId: session.user.id,
@@ -1003,6 +1037,7 @@ export function createMemoryStore(): AgentStore {
         expiresAt: expiresAt.toISOString()
       };
       sessions.set(session.id, session);
+      users.set(session.user.id, session.user);
       pushAudit(
         {
           userId: session.user.id,
@@ -1362,6 +1397,24 @@ export function createMemoryStore(): AgentStore {
         }
         return !statuses || statuses.length === 0 || statuses.includes(message.status);
       });
+    },
+    async listUsersWithWork(statuses = ["pending", "approved"], now = new Date()) {
+      const userIds = new Set<string>();
+      for (const message of outboundMessages.values()) {
+        if (statuses.includes(message.status)) {
+          userIds.add(message.userId);
+        }
+      }
+      for (const task of tasks.values()) {
+        const isDue = task.dueAt === null || Date.parse(task.dueAt) <= now.getTime();
+        if (task.status === "pending" && isDue) {
+          userIds.add(task.userId);
+        }
+      }
+      return [...userIds]
+        .map((userId) => users.get(userId))
+        .filter((user): user is AuthenticatedUser => Boolean(user))
+        .sort((a, b) => a.email.localeCompare(b.email));
     },
     async updateOutboundMessageStatus(context, messageId, status, failureMessage = null) {
       const message = outboundMessages.get(messageId);

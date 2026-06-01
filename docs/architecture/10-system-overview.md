@@ -7,8 +7,8 @@ agent safely.
 
 - API service: HTTP API, session handling, user context, domain writes, and
   admin routes.
-- Worker service: due task processing, mailbox polling, outbound queues, and
-  agent runs.
+- Worker service: due task processing, mailbox polling, rate-limited outbound
+  queues, and agent runs.
 - Web service: Vue/Carbon frontend.
 - Nginx service: production-style static frontend and API proxy.
 - Postgres: canonical durable state.

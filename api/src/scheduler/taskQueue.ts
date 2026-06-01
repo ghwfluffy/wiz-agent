@@ -20,20 +20,24 @@ export async function daemonOnce(options: {
   settings?: Settings;
   modelClient?: AgentModelClient;
   mailTransport?: MailTransport;
+  outboundLimit?: number;
   now?: Date;
 }): Promise<{ claimedTasks: number; ranTasks: number; outboundAttempted: number; outboundSent: number; outboundFailed: number }> {
-  const claimed = await claimDueTasks({
-    store: options.store,
-    context: options.context,
-    now: options.now
-  });
+  const modelClient = options.modelClient;
+  const claimed = modelClient
+    ? await claimDueTasks({
+        store: options.store,
+        context: options.context,
+        now: options.now
+      })
+    : [];
   let ranTasks = 0;
-  if (options.modelClient) {
+  if (modelClient) {
     for (const task of claimed) {
       await runAgentTask({
         context: options.context,
         store: options.store,
-        modelClient: options.modelClient,
+        modelClient,
         settings: options.settings,
         integrationTokenProvider: options.settings ? new SignedIntegrationTokenProvider(options.settings) : undefined,
         request: {
@@ -50,7 +54,8 @@ export async function daemonOnce(options: {
         store: options.store,
         context: options.context,
         settings: options.settings,
-        transport: options.mailTransport
+        transport: options.mailTransport,
+        limit: options.outboundLimit
       })
     : { attempted: 0, sent: 0, failed: 0 };
   return {

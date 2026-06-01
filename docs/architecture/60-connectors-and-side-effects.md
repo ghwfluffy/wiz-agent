@@ -75,9 +75,9 @@ Outbound side effects may require approval. The first implementation should be
 conservative and approval-gated by default.
 
 The current implementation delivers `pending` and `approved` outbox records
-through SMTP. SMS and MMS use carrier gateway email addresses while still
-remaining outbox-mediated. Port `465` implies implicit TLS unless the secret file
-explicitly sets `smtp.secure`.
+through SMTP from the worker. SMS and MMS use carrier gateway email addresses
+while still remaining outbox-mediated. Port `465` implies implicit TLS unless
+the secret file explicitly sets `smtp.secure`.
 
 Production connector settings are read from ignored mounted files:
 
@@ -108,6 +108,13 @@ attention or delivery tracking: `requires_approval`, `pending`, `approved`, and
 messages in a paged table, including delivery failure messages. Failed records
 are not shown as actionable approvals; a future retry workflow should make retry
 state explicit rather than reusing the approval button.
+
+The worker enforces outbound pacing. It discovers users with due tasks or
+deliverable outbound messages, then runs scheduler work with a global outbound
+batch limit of one message per 20 second tick. That keeps delivery below one
+message every 10 seconds and at no more than three messages per minute. The
+lower-level queue processor also defaults to one message per call so tests,
+manual scripts, and future workers do not accidentally send a large batch.
 
 Sender trust is operator-managed. The API and UI can list sender
 classifications and set a sender to `owner`, `newsletter`, `trusted`,

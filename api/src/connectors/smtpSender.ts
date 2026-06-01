@@ -99,7 +99,7 @@ export async function processOutboundQueue(options: {
   transport?: MailTransport;
 }): Promise<{ attempted: number; sent: number; failed: number }> {
   const messages = (await options.store.listOutboundMessages(options.context, ["pending", "approved"]))
-    .slice(0, options.limit ?? 10);
+    .slice(0, options.limit ?? 1);
   let sent = 0;
   let failed = 0;
   for (const message of messages) {

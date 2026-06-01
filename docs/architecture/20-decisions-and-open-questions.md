@@ -16,8 +16,10 @@
 - Omnisite mode uses federated OAuth and local server-side sessions.
 - Central OAuth `is_admin` userinfo controls the local admin flag.
 - The app has separate API and worker process roles.
-- The worker starts as a Compose-managed loop, with database locking added as
-  scheduled work grows.
+- The worker starts as a Compose-managed loop, discovers users with due work or
+  deliverable outbound messages, and runs one scheduler tick per user.
+- The worker outbound delivery loop is globally rate-limited to one message per
+  20 second tick, which is no more than three messages per minute.
 - Standalone sign-in persists the configured development user, identity,
   session, and audit event.
 - Task APIs enforce user ownership in the service layer.
