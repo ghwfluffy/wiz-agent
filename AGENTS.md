@@ -23,6 +23,9 @@
   `docs/project-standards/`.
 - Update docs when introducing a durable architecture, config, auth, deployment,
   or validation decision.
+- When the user corrects an agent's implementation, UX, configuration, naming,
+  or workflow choice, update the relevant architecture or style documentation in
+  the same change so future agents do not repeat the mistake.
 - Keep `api/src/integrations/capabilityRegistry.ts` current whenever the agent
   learns about a GHWIZ app, app API, or user-facing capability. Registry updates
   should include purpose, allowed actions, token/scope expectations, safety

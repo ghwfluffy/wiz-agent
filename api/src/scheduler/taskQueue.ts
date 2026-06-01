@@ -3,6 +3,7 @@ import type { AgentModelClient } from "../agent/modelClient.js";
 import { runAgentTask } from "../agent/runAgentTask.js";
 import type { Settings } from "../config/settings.js";
 import { processOutboundQueue, type MailTransport } from "../connectors/smtpSender.js";
+import { SignedIntegrationTokenProvider } from "../integrations/tokenProvider.js";
 
 export async function claimDueTasks(options: {
   store: AgentStore;
@@ -34,6 +35,7 @@ export async function daemonOnce(options: {
         store: options.store,
         modelClient: options.modelClient,
         settings: options.settings,
+        integrationTokenProvider: options.settings ? new SignedIntegrationTokenProvider(options.settings) : undefined,
         request: {
           taskId: task.id,
           prompt: task.prompt

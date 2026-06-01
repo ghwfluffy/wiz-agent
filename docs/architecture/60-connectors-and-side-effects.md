@@ -109,10 +109,11 @@ gateway:
 
 - the model requests an allowed integration action;
 - the host chooses the target app and endpoint;
-- the host obtains a user-scoped integration token;
+- the host mints a short-lived user-scoped token for that app and action;
 - the token is never shown to the model;
 - requests include tenant/user context headers for downstream audit;
-- missing tokens fail closed without calling the target app.
+- missing token signing configuration or non-OAuth users fail closed without
+  calling the target app.
 
 Root production compose exposes other app APIs to the agent over internal
 app-specific aliases such as `goals_api` and `budget_api`.
@@ -126,6 +127,9 @@ Current execution status:
 
 - local persistence tools execute after schema validation;
 - cross-app tools resolve through the action allowlist;
-- cross-app API calls require a host-supplied user-scoped token provider;
-- missing integration tokens or missing token provider configuration fail closed
+- cross-app API calls require signed agent-scoped bearer tokens;
+- missing token signing configuration or missing token provider configuration fail closed
   without calling the target app.
+- integration responses are recursively redacted for secrets, credentials,
+  passwords, session values, cookies, and bearer tokens before they can enter
+  model-visible tool results.

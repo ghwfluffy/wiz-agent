@@ -75,7 +75,7 @@ Accepted local tool calls now execute through deterministic host code:
 
 `integration_action` resolves through the registered app capability allowlist
 and then through the scoped integration gateway. It fails closed unless settings
-and a user-scoped integration token provider are supplied by host code.
+and signed agent-token configuration are supplied by host code.
 
 ## Repair Flow
 

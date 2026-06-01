@@ -43,5 +43,5 @@
 - What maximum image dimensions and byte limits should MMS use?
 - How should durable tenant-wide spam/rate limits be stored for live IMAP
   polling?
-- What token exchange should mint per-user integration tokens for Goals,
-  Fluffynomics, and future apps?
+- Whether future apps should keep using the shared HMAC agent-token secret or
+  move to a central token-exchange service when integration count grows.

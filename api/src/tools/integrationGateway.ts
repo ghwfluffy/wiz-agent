@@ -8,7 +8,7 @@ import {
 export type IntegrationApp = "goals" | "budget";
 
 export type IntegrationTokenProvider = {
-  tokenFor(context: RequestContext, app: IntegrationApp): Promise<string | undefined>;
+  tokenFor(context: RequestContext, app: IntegrationApp, scope: string): Promise<string | undefined>;
 };
 
 export type IntegrationGatewayResult =
@@ -29,6 +29,24 @@ export function integrationBaseUrl(settings: Settings, app: IntegrationApp): str
   return app === "goals" ? settings.goalsApiBaseUrl : settings.budgetApiBaseUrl;
 }
 
+export function redactIntegrationData(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactIntegrationData);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const redacted: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value)) {
+    if (/(token|secret|password|credential|authorization|cookie|session)/i.test(key)) {
+      redacted[key] = "[redacted]";
+      continue;
+    }
+    redacted[key] = redactIntegrationData(nested);
+  }
+  return redacted;
+}
+
 export async function callIntegrationApi(options: {
   settings: Settings;
   context: RequestContext;
@@ -36,6 +54,7 @@ export async function callIntegrationApi(options: {
   path: string;
   method?: string;
   body?: unknown;
+  scope?: string;
   tokenProvider: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
 }): Promise<IntegrationGatewayResult> {
@@ -43,7 +62,7 @@ export async function callIntegrationApi(options: {
   if (!baseUrl) {
     return { ok: false, reason: "integration_not_configured" };
   }
-  const token = await options.tokenProvider.tokenFor(options.context, options.app);
+  const token = await options.tokenProvider.tokenFor(options.context, options.app, options.scope ?? `${options.app}:unspecified`);
   if (!token) {
     return { ok: false, reason: "missing_user_integration_token" };
   }
@@ -59,7 +78,7 @@ export async function callIntegrationApi(options: {
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body)
   });
-  const data = await response.json().catch(() => null);
+  const data = redactIntegrationData(await response.json().catch(() => null));
   return {
     ok: true,
     status: response.status,
@@ -139,6 +158,7 @@ export async function callIntegrationActionApi(options: {
     path: request.path,
     method: request.method,
     body: request.body,
+    scope: options.actionId,
     tokenProvider: options.tokenProvider,
     fetchImpl: options.fetchImpl
   });

@@ -6,7 +6,7 @@ import { loadSettings } from "../src/config/settings.js";
 import { processOutboundQueue, resolveSmtpSecure } from "../src/connectors/smtpSender.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
-import { FileIntegrationTokenProvider } from "../src/integrations/tokenProvider.js";
+import { FileIntegrationTokenProvider, SignedIntegrationTokenProvider } from "../src/integrations/tokenProvider.js";
 import { validateSafeHttpUrl } from "../src/links/safeFetch.js";
 import { claimDueTasks } from "../src/scheduler/taskQueue.js";
 import {
@@ -17,6 +17,7 @@ import {
 import {
   callIntegrationActionApi,
   callIntegrationApi,
+  redactIntegrationData,
   resolveIntegrationActionRequest
 } from "../src/tools/integrationGateway.js";
 import { sanitizeImageForMms } from "../src/tools/mmsImagePolicy.js";
@@ -384,7 +385,7 @@ describe("cross-app integration gateway", () => {
     );
   });
 
-  it("loads per-user integration tokens from ignored secret storage", async () => {
+  it("loads legacy integration tokens from ignored secret storage", async () => {
     const { context } = await testContext();
     const dir = mkdtempSync(join(tmpdir(), "agent-integration-tokens-"));
     writeFileSync(join(dir, "integration-tokens.json"), JSON.stringify({
@@ -404,6 +405,52 @@ describe("cross-app integration gateway", () => {
 
     await expect(provider.tokenFor(context, "goals")).resolves.toBe("goals-token");
     await expect(provider.tokenFor(context, "budget")).resolves.toBe("budget-token");
+  });
+
+  it("mints short-lived signed tokens scoped to the central OAuth subject and action", async () => {
+    const { context } = await testContext();
+    const provider = new SignedIntegrationTokenProvider(loadSettings({
+      APP_ENV: "test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "integration-secret"
+    }), { now: () => 1_700_000_000 });
+    const token = await provider.tokenFor({
+      ...context,
+      userId: "oauth:central-oauth:central-user-1"
+    }, "goals", "goals.list_goals");
+
+    expect(token).toMatch(/^agent-v1\./);
+    const payload = JSON.parse(Buffer.from(String(token).split(".")[1] ?? "", "base64url").toString("utf8")) as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      aud: "goals",
+      exp: 1_700_000_300,
+      iss: "ghwiz-agent",
+      scope: "goals.list_goals",
+      sub: "central-user-1"
+    });
+  });
+
+  it("does not mint signed integration tokens for non-OAuth users or missing secrets", async () => {
+    const { context } = await testContext();
+    const provider = new SignedIntegrationTokenProvider(loadSettings({ APP_ENV: "test" }));
+    await expect(provider.tokenFor(context, "goals", "goals.list_goals")).resolves.toBeUndefined();
+  });
+
+  it("redacts sensitive integration response fields before model-visible results", () => {
+    expect(redactIntegrationData({
+      account: {
+        name: "Checking",
+        session_token: "secret",
+        nested: [{ password: "secret", value: 10 }]
+      },
+      authorization: "Bearer secret"
+    })).toEqual({
+      account: {
+        name: "Checking",
+        session_token: "[redacted]",
+        nested: [{ password: "[redacted]", value: 10 }]
+      },
+      authorization: "[redacted]"
+    });
   });
 });
 

@@ -58,6 +58,7 @@ const SettingsSchema = z.object({
   agentUntrustedReviewSms: z.string().default(""),
   inboundMaxUntrustedPerSenderPerHour: z.coerce.number().int().positive().default(3),
   inboundMaxUntrustedNotificationsPerHour: z.coerce.number().int().positive().default(10),
+  agentIntegrationTokenSecret: z.string().default(""),
   goalsApiBaseUrl: z.string().default(""),
   budgetApiBaseUrl: z.string().default("")
 });
@@ -118,6 +119,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     agentUntrustedReviewSms: env.AGENT_UNTRUSTED_REVIEW_SMS,
     inboundMaxUntrustedPerSenderPerHour: env.INBOUND_MAX_UNTRUSTED_PER_SENDER_PER_HOUR,
     inboundMaxUntrustedNotificationsPerHour: env.INBOUND_MAX_UNTRUSTED_NOTIFICATIONS_PER_HOUR,
+    agentIntegrationTokenSecret: env.AGENT_INTEGRATION_TOKEN_SECRET,
     goalsApiBaseUrl: env.GOALS_API_BASE_URL,
     budgetApiBaseUrl: env.BUDGET_API_BASE_URL
   });
