@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockModelClient, OpenAIModelClient } from "../src/agent/modelClient.js";
+import { buildOwnerInboundPrompt, runOwnerInboundAgent } from "../src/agent/inboundMessageAgent.js";
 import { chooseModelTier, modelTierConfigFromSettings, resolveModelId } from "../src/agent/modelTiers.js";
 import { buildAgentPrompt, modelToolDescriptors } from "../src/agent/promptContext.js";
 import { runAgentTask } from "../src/agent/runAgentTask.js";
@@ -217,6 +218,53 @@ describe("agent task execution", () => {
         expect.objectContaining({ action: "agent_run.completed" })
       ])
     );
+  });
+
+  it("lets owner inbound messages continue an existing task", async () => {
+    const { context, store } = await testContext();
+    const task = await store.createTask(context, {
+      title: "Call the dentist",
+      prompt: "Find an appointment."
+    });
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-inbound-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "This is for the dentist task. Try mornings.",
+      source: "sms"
+    }, "owner");
+
+    const prompt = await buildOwnerInboundPrompt({ context, store, message });
+    expect(prompt).toContain(task.id);
+    expect(prompt).toContain("If it belongs to an active task, use append_task_prompt");
+
+    const result = await runOwnerInboundAgent({
+      context,
+      store,
+      message,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "append_task_prompt",
+            arguments: {
+              taskId: task.id,
+              prompt: "Owner added a morning preference."
+            }
+          }
+        ]
+      })
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "append_task_prompt",
+      taskId: task.id
+    });
+    expect(result.taskEventId).toBeTruthy();
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({
+      status: "pending",
+      prompt: expect.stringContaining("Owner added a morning preference.")
+    });
   });
 
   it("repairs a malformed tool call before accepting it", async () => {

@@ -349,7 +349,6 @@ export function buildApp(options: AppOptions = {}): Hono {
 
   for (const [path, key] of [
     ["/api/v1/conversations", "conversations"],
-    ["/api/v1/messages", "messages"],
     ["/api/v1/memory", "documents"],
     ["/api/v1/connectors", "connectors"],
     ["/api/v1/approvals", "approvals"]
@@ -362,6 +361,14 @@ export function buildApp(options: AppOptions = {}): Hono {
       return context.json({ [key]: [] });
     });
   }
+
+  app.get("/api/v1/messages", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    return context.json({ messages: await store.listInboundMessages(authContext) });
+  });
 
   app.get("/api/v1/audit", async (context) => {
     const authContext = await requireContext(context);

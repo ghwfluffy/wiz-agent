@@ -316,6 +316,54 @@ describe("domain and user ownership APIs", () => {
     });
   });
 
+  it("lists inbound inbox messages for the current user", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "inbox-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "inbox-test",
+      session
+    };
+    const recorded = await store.recordInboundMessage(context, {
+      providerMessageId: "inbox-provider-1",
+      fromAddr: "owner@example.test",
+      toAddr: "agent@example.test",
+      subject: "Follow-up",
+      bodyText: "what happened?",
+      source: "sms"
+    }, "owner");
+    await store.updateInboundMessageHandling(context, recorded.id, {
+      action: "routed_to_agent",
+      agentRunId: "run-1"
+    });
+
+    const response = await app.request("/api/v1/messages", {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      messages: [
+        expect.objectContaining({
+          fromAddr: "owner@example.test",
+          source: "sms",
+          classification: "owner",
+          handlingAction: "routed_to_agent",
+          agentRunId: "run-1"
+        })
+      ]
+    });
+  });
+
   it("returns operational job status for administrators", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

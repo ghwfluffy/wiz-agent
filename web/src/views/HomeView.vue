@@ -4,6 +4,7 @@ import {
   api,
   type AiConfig,
   type AuditEvent,
+  type InboundMessage,
   type JobStatus,
   type OutboxMessage,
   type Sender,
@@ -18,6 +19,7 @@ const authMode = import.meta.env.VITE_AUTH_MODE || "standalone";
 const signInLabel = computed(() => (authMode === "standalone" ? "Sign in" : "Continue with central sign-in"));
 const tabs = [
   { id: "overview", label: "Overview" },
+  { id: "inbox", label: "Inbox" },
   { id: "tasks", label: "Tasks" },
   { id: "senders", label: "Senders" },
   { id: "workers", label: "Workers" },
@@ -28,6 +30,7 @@ type TabId = typeof tabs[number]["id"];
 const activeTab = ref<TabId>("overview");
 
 const tasks = ref<Task[]>([]);
+const inbox = ref<InboundMessage[]>([]);
 const outbox = ref<OutboxMessage[]>([]);
 const audit = ref<AuditEvent[]>([]);
 const senders = ref<Sender[]>([]);
@@ -36,7 +39,9 @@ const jobs = ref<JobStatus[]>([]);
 const dashboardError = ref<string | null>(null);
 const saving = ref(false);
 const taskPage = ref(1);
+const inboxPage = ref(1);
 const tasksPerPage = 10;
+const inboxPerPage = 10;
 const selectedTask = ref<Task | null>(null);
 const selectedTaskEvents = ref<TaskEvent[]>([]);
 const taskStatusDraft = ref("");
@@ -67,10 +72,16 @@ const taskStatuses = ["pending", "claimed", "running", "completed", "cancelled",
 const pendingOutbox = computed(() => outbox.value.filter((message) => ["requires_approval", "pending", "approved", "failed"].includes(message.status)));
 const recentAudit = computed(() => audit.value.slice(0, 12));
 const totalTaskPages = computed(() => Math.max(1, Math.ceil(tasks.value.length / tasksPerPage)));
+const totalInboxPages = computed(() => Math.max(1, Math.ceil(inbox.value.length / inboxPerPage)));
 const paginatedTasks = computed(() => {
   const page = Math.min(taskPage.value, totalTaskPages.value);
   const offset = (page - 1) * tasksPerPage;
   return tasks.value.slice(offset, offset + tasksPerPage);
+});
+const paginatedInbox = computed(() => {
+  const page = Math.min(inboxPage.value, totalInboxPages.value);
+  const offset = (page - 1) * inboxPerPage;
+  return inbox.value.slice(offset, offset + inboxPerPage);
 });
 const selectedTaskOpen = computed(() => selectedTask.value !== null);
 const taskModalTitle = computed(() => selectedTask.value?.title ?? "Task details");
@@ -101,7 +112,7 @@ function statusTagClass(status: string): string {
   if (["failed", "blocked"].includes(status)) {
     return "cds--tag--red";
   }
-  if (["running", "claimed", "sending", "newsletter"].includes(status)) {
+  if (["running", "claimed", "sending", "newsletter", "routed_to_agent", "accepted_newsletter"].includes(status)) {
     return "cds--tag--blue";
   }
   if (["cancelled", "untrusted"].includes(status)) {
@@ -129,6 +140,14 @@ function nextTaskPage(): void {
   taskPage.value = Math.min(totalTaskPages.value, taskPage.value + 1);
 }
 
+function previousInboxPage(): void {
+  inboxPage.value = Math.max(1, inboxPage.value - 1);
+}
+
+function nextInboxPage(): void {
+  inboxPage.value = Math.min(totalInboxPages.value, inboxPage.value + 1);
+}
+
 async function loadDashboard(): Promise<void> {
   if (!auth.authenticated) {
     return;
@@ -136,12 +155,14 @@ async function loadDashboard(): Promise<void> {
   try {
     const data = await api.dashboard();
     tasks.value = data.tasks;
+    inbox.value = data.inbox;
     outbox.value = data.outbox;
     audit.value = data.audit;
     senders.value = data.senders;
     jobs.value = data.jobs;
     applyAiConfig(data.aiConfig);
     taskPage.value = Math.min(taskPage.value, totalTaskPages.value);
+    inboxPage.value = Math.min(inboxPage.value, totalInboxPages.value);
     dashboardError.value = null;
   } catch {
     dashboardError.value = "Unable to load agent activity.";
@@ -182,6 +203,18 @@ async function openTask(task: Task): Promise<void> {
     selectedTaskEvents.value = [];
     taskModalError.value = "Unable to load task events.";
   }
+}
+
+async function openInboxTask(message: InboundMessage): Promise<void> {
+  if (!message.taskId) {
+    return;
+  }
+  const task = tasks.value.find((candidate) => candidate.id === message.taskId);
+  if (!task) {
+    dashboardError.value = "The linked task is not in the current task list.";
+    return;
+  }
+  await openTask(task);
 }
 
 function closeTask(): void {
@@ -370,6 +403,10 @@ watch(() => auth.authenticated, (authenticated) => {
             <p class="metric-value">{{ outbox.length }}</p>
           </section>
           <section class="metric-card">
+            <p class="label">Inbox</p>
+            <p class="metric-value">{{ inbox.length }}</p>
+          </section>
+          <section class="metric-card">
             <p class="label">Senders</p>
             <p class="metric-value">{{ senders.length }}</p>
           </section>
@@ -417,6 +454,64 @@ watch(() => auth.authenticated, (authenticated) => {
               </tr>
             </tbody>
           </table>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'inbox'" id="panel-inbox" class="tab-panel" role="tabpanel" aria-labelledby="tab-inbox">
+        <section class="activity-section" aria-label="Inbox">
+          <div class="section-heading">
+            <h2>Inbox</h2>
+            <p class="label">{{ inbox.length }} messages</p>
+          </div>
+          <p v-if="inbox.length === 0" class="empty">No inbound messages recorded.</p>
+          <template v-else>
+            <table class="cds--data-table cds--data-table--zebra">
+              <thead>
+                <tr>
+                  <th>Received</th>
+                  <th>From</th>
+                  <th>Source</th>
+                  <th>Classification</th>
+                  <th>Action</th>
+                  <th>Task</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="message in paginatedInbox" :key="message.id">
+                  <td>{{ formatDate(message.receivedAt || message.createdAt) }}</td>
+                  <td>{{ message.fromAddr }}</td>
+                  <td>{{ message.source || "imap" }}</td>
+                  <td>
+                    <span class="cds--tag" :class="statusTagClass(message.classification)">{{ message.classification }}</span>
+                  </td>
+                  <td>{{ message.handlingAction || "recorded" }}</td>
+                  <td>
+                    <button v-if="message.taskId" class="link-button" type="button" @click="openInboxTask(message)">
+                      {{ message.taskId }}
+                    </button>
+                    <span v-else>none</span>
+                  </td>
+                  <td>
+                    <span class="table-copy">{{ message.subject ? `${message.subject}: ${message.bodyText}` : message.bodyText }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="cds--pagination pagination-bar">
+              <div class="cds--pagination__left">
+                Page {{ inboxPage }} of {{ totalInboxPages }}
+              </div>
+              <div class="cds--pagination__right">
+                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="inboxPage === 1" @click="previousInboxPage">
+                  Previous
+                </button>
+                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="inboxPage === totalInboxPages" @click="nextInboxPage">
+                  Next
+                </button>
+              </div>
+            </div>
+          </template>
         </section>
       </section>
 

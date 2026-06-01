@@ -13,6 +13,7 @@ import type {
   AiConfig,
   AuditRecord,
   InboundMessageInput,
+  InboundMessageRecord,
   OutboundMessageRecord,
   RequestContext,
   SenderClassification,
@@ -139,6 +140,30 @@ function outboundFromRow(row: Record<string, unknown>): OutboundMessageRecord {
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
     sentAt: row.sent_at instanceof Date ? row.sent_at.toISOString() : row.sent_at ? String(row.sent_at) : null,
     failureMessage: row.failure_message ? String(row.failure_message) : null
+  };
+}
+
+function inboundFromRow(row: Record<string, unknown>): InboundMessageRecord {
+  const authJson = (row.auth_json as Record<string, unknown> | null) ?? {};
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    providerMessageId: String(row.provider_message_id ?? ""),
+    fromAddr: String(row.from_addr ?? ""),
+    toAddr: String(row.to_addr ?? ""),
+    subject: row.subject ? String(row.subject) : null,
+    bodyText: String(row.body_text ?? ""),
+    receivedAt: row.received_at instanceof Date ? row.received_at.toISOString() : row.received_at ? String(row.received_at) : null,
+    source: String(row.source ?? "imap"),
+    classification: row.auth_status as InboundMessageRecord["classification"],
+    handlingAction: typeof authJson.handling_action === "string"
+      ? authJson.handling_action as InboundMessageRecord["handlingAction"]
+      : null,
+    taskId: typeof authJson.task_id === "string" ? authJson.task_id : null,
+    taskEventId: typeof authJson.task_event_id === "string" ? authJson.task_event_id : null,
+    agentRunId: typeof authJson.agent_run_id === "string" ? authJson.agent_run_id : null,
+    outboundMessageId: typeof authJson.outbound_message_id === "string" ? authJson.outbound_message_id : null,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
   };
 }
 
@@ -734,15 +759,15 @@ export function createPostgresStore(pool: Pool): AgentStore {
 
     async recordInboundMessage(context, input: InboundMessageInput, classification: SenderClassification) {
       const existing = await pool.query(
-        `SELECT id FROM messages
+        `SELECT * FROM messages
          WHERE user_id = $1 AND provider_message_id = $2`,
         [context.userId, input.providerMessageId]
       );
       if (existing.rows[0]) {
-        return { id: existing.rows[0].id as string, duplicate: true };
+        return { ...inboundFromRow(existing.rows[0]), duplicate: true };
       }
       const id = randomUUID();
-      await pool.query(
+      const result = await pool.query(
         `INSERT INTO messages
           (id, user_id, direction, source, provider_message_id, from_addr, to_addr, subject, body_text,
            auth_status, received_at)
@@ -761,7 +786,50 @@ export function createPostgresStore(pool: Pool): AgentStore {
         ]
       );
       await recordAudit(pool, context, "message.inbound.record", "message", id, { classification });
-      return { id, duplicate: false };
+      const inserted = await pool.query("SELECT * FROM messages WHERE id = $1 AND user_id = $2", [id, context.userId]);
+      return { ...inboundFromRow(inserted.rows[0] ?? result.rows[0]), duplicate: false };
+    },
+
+    async listInboundMessages(context) {
+      const result = await pool.query(
+        `SELECT * FROM messages
+         WHERE user_id = $1 AND direction = 'inbound'
+         ORDER BY COALESCE(received_at, created_at) DESC, created_at DESC
+         LIMIT 500`,
+        [context.userId]
+      );
+      return result.rows.map(inboundFromRow);
+    },
+
+    async updateInboundMessageHandling(context, messageId, handling) {
+      const result = await pool.query(
+        `UPDATE messages
+         SET auth_json = auth_json || $3::jsonb
+         WHERE id = $1 AND user_id = $2 AND direction = 'inbound'
+         RETURNING *`,
+        [
+          messageId,
+          context.userId,
+          JSON.stringify({
+            handling_action: handling.action,
+            task_id: handling.taskId ?? null,
+            task_event_id: handling.taskEventId ?? null,
+            agent_run_id: handling.agentRunId ?? null,
+            outbound_message_id: handling.outboundMessageId ?? null
+          })
+        ]
+      );
+      if (!result.rows[0]) {
+        return undefined;
+      }
+      await recordAudit(pool, context, "message.inbound.handled", "message", messageId, {
+        action: handling.action,
+        task_id: handling.taskId ?? null,
+        task_event_id: handling.taskEventId ?? null,
+        agent_run_id: handling.agentRunId ?? null,
+        outbound_message_id: handling.outboundMessageId ?? null
+      });
+      return inboundFromRow(result.rows[0]);
     },
 
     async queueOutboundMessage(context, input) {
@@ -835,6 +903,7 @@ export function createMemoryStore(): AgentStore {
   const toolCalls = new Map<string, ToolCallRecord>();
   const senderStatuses = new Map<string, SenderRecord>();
   const inboundProviderIds = new Map<string, string>();
+  const inboundMessages = new Map<string, InboundMessageRecord>();
   const outboundMessages = new Map<string, OutboundMessageRecord>();
   const audit: AuditRecord[] = [];
   let aiConfig = DEFAULT_AI_CONFIG;
@@ -1194,12 +1263,76 @@ export function createMemoryStore(): AgentStore {
       const key = `${context.userId}:${input.providerMessageId}`;
       const existing = inboundProviderIds.get(key);
       if (existing) {
-        return { id: existing, duplicate: true };
+        const message = inboundMessages.get(existing);
+        if (!message) {
+          return {
+            ...input,
+            id: existing,
+            userId: context.userId,
+            classification,
+            handlingAction: null,
+            taskId: null,
+            taskEventId: null,
+            agentRunId: null,
+            outboundMessageId: null,
+            createdAt: nowIso(),
+            duplicate: true
+          };
+        }
+        return { ...message, duplicate: true };
       }
       const id = randomUUID();
+      const message: InboundMessageRecord = {
+        ...input,
+        id,
+        userId: context.userId,
+        classification,
+        handlingAction: null,
+        taskId: null,
+        taskEventId: null,
+        agentRunId: null,
+        outboundMessageId: null,
+        subject: input.subject ?? null,
+        receivedAt: input.receivedAt ?? null,
+        source: input.source ?? "imap",
+        createdAt: nowIso()
+      };
       inboundProviderIds.set(key, id);
+      inboundMessages.set(id, message);
       pushAudit(context, "message.inbound.record", "message", id, { classification });
-      return { id, duplicate: false };
+      return { ...message, duplicate: false };
+    },
+    async listInboundMessages(context) {
+      return [...inboundMessages.values()]
+        .filter((message) => message.userId === context.userId)
+        .sort((a, b) => {
+          const aDate = a.receivedAt ?? a.createdAt;
+          const bDate = b.receivedAt ?? b.createdAt;
+          return bDate.localeCompare(aDate) || b.createdAt.localeCompare(a.createdAt);
+        });
+    },
+    async updateInboundMessageHandling(context, messageId, handling) {
+      const message = inboundMessages.get(messageId);
+      if (!message || message.userId !== context.userId) {
+        return undefined;
+      }
+      const updated: InboundMessageRecord = {
+        ...message,
+        handlingAction: handling.action,
+        taskId: handling.taskId ?? null,
+        taskEventId: handling.taskEventId ?? null,
+        agentRunId: handling.agentRunId ?? null,
+        outboundMessageId: handling.outboundMessageId ?? null
+      };
+      inboundMessages.set(messageId, updated);
+      pushAudit(context, "message.inbound.handled", "message", messageId, {
+        action: handling.action,
+        task_id: handling.taskId ?? null,
+        task_event_id: handling.taskEventId ?? null,
+        agent_run_id: handling.agentRunId ?? null,
+        outbound_message_id: handling.outboundMessageId ?? null
+      });
+      return updated;
     },
     async queueOutboundMessage(context, input) {
       const now = nowIso();

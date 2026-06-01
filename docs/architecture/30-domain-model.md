@@ -30,6 +30,7 @@ behavior without revisiting ownership boundaries. Only a subset is actively used
 by the current API:
 
 - standalone user/session creation;
+- inbound message recording/listing;
 - task CRUD, task event listing, and follow-up prompts;
 - audit listing;
 - admin AI config.
@@ -69,3 +70,22 @@ returns only events for tasks owned by the signed-in user.
 Adding a follow-up prompt appends the new instruction to the task prompt, returns
 the task to `pending`, and records a `task.prompt_added` event so the user can
 see why the task re-entered the queue.
+
+Inbound owner messages that the agent associates with a task also record
+`message.inbound.assigned` on that task. The inbox record stores the task id,
+task event id, agent run id, outbound review id where applicable, and handling
+action in `messages.auth_json` so the web UI can link from a message to the
+task timeline without adding deployment-specific columns.
+
+## Inbox Messages
+
+Inbound email/SMS/MMS records are source records in `messages` with
+`direction = 'inbound'`. They are listed chronologically through
+`GET /api/v1/messages` for the signed-in user. Sender classification is stored
+in `auth_status`; derived handling state such as `routed_to_agent`,
+`queued_owner_review`, `accepted_newsletter`, `blocked`, and `rate_limited` is
+stored in `auth_json`.
+
+Inbox entries are not command history by themselves. Only messages classified as
+`owner` may be handed to the agent path. Newsletter, untrusted, and blocked
+messages remain durable data for review/audit and must not trigger tool calls.

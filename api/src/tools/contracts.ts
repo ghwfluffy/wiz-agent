@@ -8,6 +8,16 @@ export const CreateTaskToolSchema = z.object({
   priority: z.number().int().min(0).max(100).optional()
 });
 
+export const ListOngoingTasksToolSchema = z.object({
+  reason: z.string().min(1).optional()
+});
+
+export const AppendTaskPromptToolSchema = z.object({
+  taskId: z.string().min(1),
+  prompt: z.string().min(1),
+  status: z.enum(["pending", "claimed", "running"]).default("pending")
+});
+
 export const ProposeOutboundMessageToolSchema = z.object({
   channel: z.enum(["email", "sms", "mms"]),
   to: z.string().min(1),
@@ -32,6 +42,8 @@ export const IntegrationActionToolSchema = z.object({
 
 export const ToolContracts = {
   create_task: CreateTaskToolSchema,
+  list_ongoing_tasks: ListOngoingTasksToolSchema,
+  append_task_prompt: AppendTaskPromptToolSchema,
   propose_outbound_message: ProposeOutboundMessageToolSchema,
   record_observation: RecordObservationToolSchema,
   integration_action: IntegrationActionToolSchema

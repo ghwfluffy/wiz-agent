@@ -3,6 +3,8 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSettings } from "../src/config/settings.js";
+import { MockModelClient } from "../src/agent/modelClient.js";
+import { processInboundMessage } from "../src/connectors/inboundProcessor.js";
 import { processOutboundQueue, resolveSmtpSecure } from "../src/connectors/smtpSender.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
@@ -69,6 +71,114 @@ describe("inbound sender policy", () => {
       classification: "owner",
       action: "routed_to_agent"
     });
+  });
+
+  it("records owner agent handling links back to inbox and task events", async () => {
+    const { context, store } = await testContext();
+
+    const result = await handleInboundMessage({
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OWNER_SMS_EMAILS: "15555550100@sms.example.test"
+      }),
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      ownerAgentRunner: async () => {
+        const task = await store.createTask(context, {
+          title: "Existing task",
+          prompt: "Keep this moving."
+        });
+        return {
+          runId: "run-owner-1",
+          taskId: task.id
+        };
+      },
+      message: {
+        providerMessageId: "owner-sms-1",
+        fromAddr: "15555550100@sms.example.test",
+        toAddr: "agent@example.test",
+        subject: null,
+        bodyText: "Any progress on this?",
+        source: "sms"
+      }
+    });
+
+    expect(result).toMatchObject({
+      classification: "owner",
+      action: "routed_to_agent",
+      agentRunId: "run-owner-1"
+    });
+    expect(result.taskId).toBeTruthy();
+    expect(result.taskEventId).toBeTruthy();
+
+    const inbox = await store.listInboundMessages(context);
+    expect(inbox).toEqual([
+      expect.objectContaining({
+        fromAddr: "15555550100@sms.example.test",
+        handlingAction: "routed_to_agent",
+        taskId: result.taskId,
+        taskEventId: result.taskEventId,
+        agentRunId: "run-owner-1"
+      })
+    ]);
+
+    const events = await store.listTaskEvents(context, result.taskId ?? "");
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: result.taskEventId,
+          eventType: "message.inbound.assigned"
+        })
+      ])
+    );
+  });
+
+  it("processes owner inbound messages through the agent wrapper", async () => {
+    const { context, store } = await testContext();
+
+    const result = await processInboundMessage({
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OWNER_SMS_EMAILS: "15555550100@sms.example.test"
+      }),
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "create_task",
+            arguments: {
+              title: "New owner request",
+              prompt: "Follow up from SMS."
+            }
+          }
+        ]
+      }),
+      message: {
+        providerMessageId: "owner-sms-processor-1",
+        fromAddr: "15555550100@sms.example.test",
+        toAddr: "agent@example.test",
+        bodyText: "Start a new follow-up.",
+        source: "sms"
+      }
+    });
+
+    expect(result).toMatchObject({
+      classification: "owner",
+      action: "routed_to_agent"
+    });
+    expect(result.agentRunId).toBeTruthy();
+    expect(result.taskId).toBeTruthy();
+
+    await expect(store.listInboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        handlingAction: "routed_to_agent",
+        taskId: result.taskId,
+        agentRunId: result.agentRunId
+      })
+    ]);
   });
 
   it("accepts trusted newsletter senders without treating them as owner commands", async () => {

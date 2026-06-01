@@ -3,6 +3,7 @@ import type {
   AgentStore,
   InboundHandlingResult,
   InboundMessageInput,
+  InboundMessageRecord,
   RequestContext,
   SenderClassification
 } from "../domain/types.js";
@@ -75,6 +76,11 @@ export async function handleInboundMessage(
     store: AgentStore;
     message: InboundMessageInput;
     rateLimiter: InboundRateLimiter;
+    ownerAgentRunner?: (message: InboundMessageRecord) => Promise<{
+      runId?: string;
+      taskId?: string;
+      taskEventId?: string;
+    }>;
   }
 ): Promise<InboundHandlingResult> {
   const classification = await classifySender({
@@ -92,6 +98,9 @@ export async function handleInboundMessage(
     };
   }
   if (classification === "blocked") {
+    await options.store.updateInboundMessageHandling(options.context, recorded.id, {
+      action: "blocked"
+    });
     return {
       classification,
       action: "blocked",
@@ -99,13 +108,37 @@ export async function handleInboundMessage(
     };
   }
   if (classification === "owner") {
+    const agentResult = await options.ownerAgentRunner?.(recorded);
+    let taskEventId = agentResult?.taskEventId;
+    if (agentResult?.taskId) {
+      const event = await options.store.recordTaskEvent(options.context, agentResult.taskId, "message.inbound.assigned", {
+        message_id: recorded.id,
+        from_addr: options.message.fromAddr,
+        source: options.message.source ?? "imap",
+        subject: options.message.subject ?? null,
+        summary: "Inbound owner message assigned to this task."
+      });
+      taskEventId = event.id;
+    }
+    await options.store.updateInboundMessageHandling(options.context, recorded.id, {
+      action: "routed_to_agent",
+      taskId: agentResult?.taskId ?? null,
+      taskEventId: taskEventId ?? null,
+      agentRunId: agentResult?.runId ?? null
+    });
     return {
       classification,
       action: "routed_to_agent",
-      messageId: recorded.id
+      messageId: recorded.id,
+      taskId: agentResult?.taskId,
+      taskEventId,
+      agentRunId: agentResult?.runId
     };
   }
   if (classification === "newsletter") {
+    await options.store.updateInboundMessageHandling(options.context, recorded.id, {
+      action: "accepted_newsletter"
+    });
     return {
       classification,
       action: "accepted_newsletter",
@@ -113,6 +146,9 @@ export async function handleInboundMessage(
     };
   }
   if (!options.rateLimiter.allow(options.message.fromAddr)) {
+    await options.store.updateInboundMessageHandling(options.context, recorded.id, {
+      action: "rate_limited"
+    });
     return {
       classification,
       action: "rate_limited",
@@ -120,6 +156,9 @@ export async function handleInboundMessage(
     };
   }
   if (!options.settings.agentUntrustedReviewSms) {
+    await options.store.updateInboundMessageHandling(options.context, recorded.id, {
+      action: "queued_owner_review"
+    });
     return {
       classification,
       action: "queued_owner_review",
@@ -131,6 +170,10 @@ export async function handleInboundMessage(
     status: "requires_approval",
     toAddr: options.settings.agentUntrustedReviewSms,
     bodyText: summarizeUntrustedMessage(options.message)
+  });
+  await options.store.updateInboundMessageHandling(options.context, recorded.id, {
+    action: "queued_owner_review",
+    outboundMessageId: outbound.id
   });
   return {
     classification,

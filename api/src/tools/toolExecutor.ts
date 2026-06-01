@@ -30,13 +30,62 @@ export async function executeToolCall(options: {
         dueAt: typeof options.args.dueAt === "string" ? options.args.dueAt : null,
         priority: typeof options.args.priority === "number" ? options.args.priority : 0
       });
+      const events = await options.store.listTaskEvents(options.context, task.id);
       return {
         executed: true,
         sideEffect: "local_persistence",
         result: {
           task_id: task.id,
+          task_event_id: events.find((event) => event.eventType === "task.created")?.id ?? null,
           status: task.status,
           due_at: task.dueAt
+        }
+      };
+    }
+    case "list_ongoing_tasks": {
+      const tasks = (await options.store.listTasks(options.context))
+        .filter((task) => !["completed", "cancelled", "failed"].includes(task.status))
+        .slice(0, 20)
+        .map((task) => ({
+          task_id: task.id,
+          title: task.title,
+          status: task.status,
+          due_at: task.dueAt,
+          priority: task.priority,
+          prompt_excerpt: task.prompt.slice(0, 240)
+        }));
+      return {
+        executed: true,
+        sideEffect: "none",
+        result: { tasks }
+      };
+    }
+    case "append_task_prompt": {
+      const taskId = String(options.args.taskId);
+      const task = await options.store.getTask(options.context, taskId);
+      if (!task) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { reason: "task_not_found" }
+        };
+      }
+      const prompt = String(options.args.prompt);
+      const updated = await options.store.updateTask(options.context, taskId, {
+        prompt: `${task.prompt}\n\nInbound follow-up:\n${prompt}`,
+        status: String(options.args.status)
+      });
+      const event = await options.store.recordTaskEvent(options.context, taskId, "task.prompt_added", {
+        prompt,
+        summary: "Inbound owner message appended to task and returned to active work."
+      });
+      return {
+        executed: Boolean(updated),
+        sideEffect: "local_persistence",
+        result: {
+          task_id: taskId,
+          task_event_id: event.id,
+          status: updated?.status ?? null
         }
       };
     }

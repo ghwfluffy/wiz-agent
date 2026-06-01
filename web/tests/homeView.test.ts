@@ -24,6 +24,28 @@ describe("home view", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
+        json: async () => ({
+          messages: [{
+            id: "in-1",
+            providerMessageId: "provider-1",
+            fromAddr: "owner@example.test",
+            toAddr: "agent@example.test",
+            subject: "Task update",
+            bodyText: "please keep going",
+            source: "sms",
+            classification: "owner",
+            handlingAction: "routed_to_agent",
+            taskId: "task-1",
+            taskEventId: "event-1",
+            agentRunId: "run-1",
+            outboundMessageId: null,
+            receivedAt: "",
+            createdAt: ""
+          }]
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
         json: async () => ({ messages: [{ id: "msg-1", channel: "sms", status: "approved", toAddr: "sms@example.test", bodyText: "hi", createdAt: "", updatedAt: "" }] })
       })
       .mockResolvedValueOnce({
@@ -59,6 +81,7 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("sms");
     expect(wrapper.text()).toContain("sms@example.test");
     expect(wrapper.text()).toContain("Overview");
+    expect(wrapper.text()).toContain("Inbox");
     expect(wrapper.text()).toContain("Tasks");
     expect(wrapper.text()).toContain("Audit events");
     expect(wrapper.text()).toContain("owner@example.test");

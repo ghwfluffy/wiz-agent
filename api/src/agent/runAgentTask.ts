@@ -23,6 +23,9 @@ export type AgentTaskResult = {
   runId: string;
   toolStatus: "accepted" | "rejected" | "none";
   repaired: boolean;
+  toolName?: string;
+  sideEffect?: "none" | "local_persistence" | "cross_app_api";
+  executionResult?: Record<string, unknown>;
   failureMessage?: string;
 };
 
@@ -123,12 +126,15 @@ export async function runAgentTask(options: {
       }
     });
     await options.store.finishAgentRun(options.context, run.id, "completed");
-    return {
-      status: "completed",
-      runId: run.id,
-      toolStatus: "accepted",
-      repaired: validated.repaired
-    };
+      return {
+        status: "completed",
+        runId: run.id,
+        toolStatus: "accepted",
+        repaired: validated.repaired,
+        toolName: validated.toolName,
+        sideEffect: execution.sideEffect,
+        executionResult: execution.result
+      };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent run failed.";
     await options.store.finishAgentRun(options.context, run.id, "failed", message);

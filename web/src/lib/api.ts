@@ -40,6 +40,24 @@ export type TaskEvent = {
   createdAt: string;
 };
 
+export type InboundMessage = {
+  id: string;
+  providerMessageId: string;
+  fromAddr: string;
+  toAddr: string;
+  subject?: string | null;
+  bodyText: string;
+  receivedAt?: string | null;
+  source?: string | null;
+  classification: "owner" | "newsletter" | "untrusted" | "blocked";
+  handlingAction: string | null;
+  taskId: string | null;
+  taskEventId: string | null;
+  agentRunId: string | null;
+  outboundMessageId: string | null;
+  createdAt: string;
+};
+
 export type OutboxMessage = {
   id: string;
   channel: "email" | "sms" | "mms";
@@ -159,14 +177,16 @@ export const api = {
   },
   async dashboard(): Promise<{
     tasks: Task[];
+    inbox: InboundMessage[];
     outbox: OutboxMessage[];
     audit: AuditEvent[];
     senders: Sender[];
     aiConfig: AiConfig | null;
     jobs: JobStatus[];
   }> {
-    const [tasks, outbox, audit, senders, aiConfig, jobs] = await Promise.all([
+    const [tasks, inbox, outbox, audit, senders, aiConfig, jobs] = await Promise.all([
       request<{ tasks: Task[] }>("/tasks"),
+      request<{ messages: InboundMessage[] }>("/messages"),
       request<{ messages: OutboxMessage[] }>("/outbox"),
       request<{ events: AuditEvent[] }>("/audit"),
       request<{ senders: Sender[] }>("/senders"),
@@ -175,6 +195,7 @@ export const api = {
     ]);
     return {
       tasks: tasks.tasks,
+      inbox: inbox.messages,
       outbox: outbox.messages,
       audit: audit.events,
       senders: senders.senders,

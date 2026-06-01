@@ -68,6 +68,18 @@ export type InboundMessageInput = {
   source?: string;
 };
 
+export type InboundMessageRecord = InboundMessageInput & {
+  id: string;
+  userId: string;
+  classification: SenderClassification;
+  handlingAction: InboundHandlingResult["action"] | null;
+  taskId: string | null;
+  taskEventId: string | null;
+  agentRunId: string | null;
+  outboundMessageId: string | null;
+  createdAt: string;
+};
+
 export type OutboundMessageInput = {
   channel: "email" | "sms" | "mms";
   status: "pending" | "requires_approval" | "approved" | "sending" | "sent" | "failed" | "cancelled";
@@ -91,6 +103,9 @@ export type InboundHandlingResult = {
   classification: SenderClassification;
   action: "routed_to_agent" | "queued_owner_review" | "accepted_newsletter" | "blocked" | "rate_limited";
   messageId?: string;
+  taskId?: string;
+  taskEventId?: string;
+  agentRunId?: string;
   outboundMessageId?: string;
 };
 
@@ -205,7 +220,19 @@ export type AgentStore = {
     context: RequestContext,
     input: InboundMessageInput,
     classification: SenderClassification
-  ): Promise<{ id: string; duplicate: boolean }>;
+  ): Promise<InboundMessageRecord & { duplicate: boolean }>;
+  listInboundMessages(context: RequestContext): Promise<InboundMessageRecord[]>;
+  updateInboundMessageHandling(
+    context: RequestContext,
+    messageId: string,
+    handling: {
+      action: InboundHandlingResult["action"];
+      taskId?: string | null;
+      taskEventId?: string | null;
+      agentRunId?: string | null;
+      outboundMessageId?: string | null;
+    }
+  ): Promise<InboundMessageRecord | undefined>;
   queueOutboundMessage(context: RequestContext, input: OutboundMessageInput): Promise<OutboundMessageRecord>;
   listOutboundMessages(context: RequestContext, statuses?: string[]): Promise<OutboundMessageRecord[]>;
   updateOutboundMessageStatus(

@@ -56,6 +56,8 @@ the malformed payload, expected contract shape, and validation errors.
 Current tool contracts:
 
 - `create_task`
+- `list_ongoing_tasks`
+- `append_task_prompt`
 - `propose_outbound_message`
 - `record_observation`
 - `integration_action`
@@ -70,6 +72,9 @@ model knows what Goals and Fluffynomics are for and which actions are available.
 Accepted local tool calls now execute through deterministic host code:
 
 - `create_task` creates a user-scoped task.
+- `list_ongoing_tasks` returns active user-scoped tasks without side effects.
+- `append_task_prompt` appends owner follow-up context to an existing task,
+  returns it to active work, and writes a task event.
 - `propose_outbound_message` queues an outbound message rather than sending it.
 - `record_observation` records the accepted observation in the tool-call result.
 
@@ -115,6 +120,14 @@ the run. The task timeline should show when the agent was prompted, a bounded
 summary of the model response, run completion or failure, and accepted or
 rejected tool-call outcomes. These task events are for the owner-facing task
 modal; audit logs remain the broader operational record.
+
+Owner inbound SMS/MMS/email handling uses the same runtime boundary. After
+sender policy classifies a message as `owner`, host code builds an inbound
+prompt that includes a bounded list of active tasks. The model can then choose
+to append the message to an existing task, create/schedule a new task, queue a
+reply, call a registered app integration, or record an observation. The inbox
+record is updated with the agent run id and any linked task/task-event ids so
+the UI can show what the message triggered.
 
 ## Host-Owned Controls
 
