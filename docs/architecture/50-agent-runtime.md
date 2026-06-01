@@ -62,14 +62,14 @@ Current tool contracts:
 
 Cross-app API access is intentionally outside direct model control. The model
 may request an integration action, but deterministic host code must enforce
-sender trust, tenant/user scope, allowed app/action, and token availability
-before any API call.
+sender trust, user scope, allowed app/action, and token availability before any
+API call.
 
 The runtime includes the app capability registry in the model prompt so the
 model knows what Goals and Fluffynomics are for and which actions are available.
 Accepted local tool calls now execute through deterministic host code:
 
-- `create_task` creates a tenant/user-scoped task.
+- `create_task` creates a user-scoped task.
 - `propose_outbound_message` queues an outbound message rather than sending it.
 - `record_observation` records the accepted observation in the tool-call result.
 
@@ -94,14 +94,14 @@ The repair payload must not include secrets or raw credential references.
 
 Every agent run records:
 
-- tenant and user;
+- user;
 - model tier and concrete model id;
 - prompt version;
 - status and failure reason.
 
 Every proposed tool call records:
 
-- tenant and user;
+- user;
 - run id;
 - tool name;
 - validated or rejected arguments;
@@ -114,7 +114,7 @@ acceptance/rejection.
 
 The host owns:
 
-- tenant and user scope;
+- user scope;
 - credentials;
 - persistence;
 - task scheduling;

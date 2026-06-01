@@ -11,16 +11,16 @@
 - Vitest is used for backend and frontend tests.
 - Frontend is Vue 3, Vite, TypeScript, Pinia, Vue Router, and Carbon.
 - Local development starts in `AUTH_MODE=standalone`.
-- Standalone mode has one development tenant and one development user.
+- Standalone mode has one development user.
 - Standalone sign-in uses a development-only endpoint, not passwords.
 - Omnisite mode uses federated OAuth and local server-side sessions.
 - Central OAuth `is_admin` userinfo controls the local admin flag.
 - The app has separate API and worker process roles.
 - The worker starts as a Compose-managed loop, with database locking added as
   scheduled work grows.
-- Standalone sign-in persists the configured development tenant, user,
-  membership, identity, session, and audit event.
-- Task APIs enforce tenant/user ownership in the service layer.
+- Standalone sign-in persists the configured development user, identity,
+  session, and audit event.
+- Task APIs enforce user ownership in the service layer.
 - Agent runtime uses an internal `AgentModelClient` adapter.
 - Real OpenAI calls are isolated behind `OpenAIModelClient`; tests use
   `MockModelClient`.
@@ -41,7 +41,7 @@
 - What exact long-term approval policy should allow automatic SMS, MMS, or email
   sends beyond explicitly owner-authorized deployment checks?
 - What maximum image dimensions and byte limits should MMS use?
-- How should durable tenant-wide spam/rate limits be stored for live IMAP
+- How should durable user-wide spam/rate limits be stored for live IMAP
   polling?
 - Whether future apps should keep using the shared HMAC agent-token secret or
   move to a central token-exchange service when integration count grows.

@@ -10,7 +10,7 @@ and approved deviations from `docs/project-standards/`.
 - [System Overview](./10-system-overview.md)
 - [Decisions And Open Questions](./20-decisions-and-open-questions.md)
 - [Domain Model](./30-domain-model.md)
-- [Auth And Tenancy](./40-auth-and-tenancy.md)
+- [Auth And User Ownership](./40-auth-and-user-ownership.md)
 - [Agent Runtime](./50-agent-runtime.md)
 - [Connectors And Side Effects](./60-connectors-and-side-effects.md)
 - [App Capability Registry](./70-app-capability-registry.md)

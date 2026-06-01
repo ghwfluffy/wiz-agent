@@ -5,7 +5,7 @@ agent safely.
 
 ## Runtime Components
 
-- API service: HTTP API, session handling, tenant context, domain writes, and
+- API service: HTTP API, session handling, user context, domain writes, and
   admin routes.
 - Worker service: due task processing, mailbox polling, outbound queues, and
   agent runs.
@@ -16,9 +16,9 @@ agent safely.
 ## Development Mode
 
 The project starts in standalone local mode. The local Compose stack runs
-Postgres, API, worker, web, and Nginx. It uses one development tenant and one
-development user. A development sign-in endpoint creates a normal local session
-without involving OAuth.
+Postgres, API, worker, web, and Nginx. It uses one development user. A
+development sign-in endpoint creates a normal local session without involving
+OAuth.
 
 ## Omnisite Mode
 
@@ -38,6 +38,6 @@ checkout's ignored `apps/agent/secrets/` directory.
 
 The agent does not receive raw credentials or unrestricted access to databases,
 mailboxes, file systems, shell commands, or external network fetches. It proposes
-actions through typed tools. Deterministic host code validates tenant scope,
+actions through typed tools. Deterministic host code validates user scope,
 authorization, policy, budgets, idempotency, and approval requirements before
 anything is persisted or sent.

@@ -1,15 +1,13 @@
 # Domain Model
 
-The durable model is multi-tenant even while standalone mode uses one tenant and
-one user.
+The durable model is user-owned. A signed-in user owns their personal agent
+configuration, schedules, messages, memory, audit history, outbox, and app
+integration activity. `users.id` is the isolation boundary for user-owned data.
 
 ## Core Entities
 
-- Tenant: isolation boundary for users, tasks, memory, messages, connectors, and
-  agent runs.
 - User: local representation of a signed-in person.
-- Tenant membership: user role within a tenant.
-- Session: server-side session tied to a user and tenant context.
+- Session: server-side session tied to one user.
 - Connector: configured external integration such as IMAP or SMTP.
 - Conversation: grouped messages and agent interactions.
 - Message: inbound, outbound, or internal communication.
@@ -31,7 +29,7 @@ The first migration creates all core Phase 3 tables so later features can add
 behavior without revisiting ownership boundaries. Only a subset is actively used
 by the current API:
 
-- standalone tenant/user/session creation;
+- standalone user/session creation;
 - task CRUD;
 - audit listing;
 - admin AI config.
@@ -41,12 +39,19 @@ outbound side effects, agent runs, tool calls, and article snapshots.
 
 ## Ownership Rule
 
-Tenant-scoped tables must include `tenant_id`. User-owned records usually also
-include `user_id`. Services should accept explicit tenant/user context rather
-than deriving scope deep in database helpers.
+User-owned tables must include `user_id`, and services should accept explicit
+user context rather than deriving scope deep in database helpers. Normal API
+queries must filter by the current `user_id` for reads and writes.
 
-Current task APIs always query by both `tenant_id` and `user_id`. Admin audit
-queries may see all users inside the current tenant.
+Admin-only global data, such as `admin_ai_config`, is not user-owned, but every
+privileged write must still carry audit context such as `updated_by`, `user_id`
+where applicable, request id, and actor type.
+
+Admin audit queries may intentionally inspect all users' audit records. Normal
+users may only inspect records tied to their own `user_id`.
+
+Future shared workspaces, organizations, or household accounts would require a
+new explicit design. Do not reintroduce generic tenant fields ad hoc.
 
 ## Source And Derived State
 

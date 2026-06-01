@@ -46,7 +46,7 @@ Controls:
 
 The current spam guard limits untrusted review notifications per sender within a
 sliding time window. Production connector workers should also add durable
-tenant-wide rate limits before enabling live polling.
+user-wide rate limits before enabling live polling.
 
 ## Outbound
 
@@ -111,9 +111,12 @@ gateway:
 - the host chooses the target app and endpoint;
 - the host mints a short-lived user-scoped token for that app and action;
 - the token is never shown to the model;
-- requests include tenant/user context headers for downstream audit;
+- requests include a user context header for downstream audit;
 - missing token signing configuration or non-OAuth users fail closed without
   calling the target app.
+
+Cross-app requests include `x-agent-user-id` only. They do not include a tenant
+context header.
 
 Root production compose exposes other app APIs to the agent over internal
 app-specific aliases such as `goals_api` and `budget_api`.

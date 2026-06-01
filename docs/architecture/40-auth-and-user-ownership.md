@@ -1,4 +1,4 @@
-# Auth And Tenancy
+# Auth And User Ownership
 
 The app supports two auth modes.
 
@@ -10,7 +10,7 @@ Behavior:
 
 - `GET /api/v1/auth/me` returns anonymous until the user signs in.
 - `POST /api/v1/auth/dev-login` creates or updates the configured development
-  tenant, user, membership, email identity, and normal local session.
+  user, email identity, and normal local session.
 - The frontend sign-in button calls `dev-login`.
 - No password, registration, invitation-code, or local user-management workflow
   exists.
@@ -18,7 +18,7 @@ Behavior:
 - Development auto-login writes an audit event.
 
 Standalone mode still creates the same request context shape used by omnisite
-mode: tenant id, user id, actor type, and permissions.
+mode: user id, actor type, permissions, and request id.
 
 ## Omnisite OAuth Mode
 
@@ -30,8 +30,8 @@ Behavior:
   central auth app with PKCE S256;
 - callback consumes state once and exchanges the code through an internal OAuth
   server URL configured by `OAUTH_SERVER_BASE_URL`;
-- callback fetches central userinfo and upserts a local tenant, user,
-  membership, and identity;
+- callback fetches central userinfo and upserts a local user and central
+  identity;
 - the app creates its own local session after successful OAuth;
 - failed callbacks redirect back to the app UI with a friendly error token.
 
@@ -42,24 +42,24 @@ The root omnisite repository owns production hosts, subpaths, redirect URIs, and
 OAuth client registration.
 
 For live operational seeding, the target central OAuth user must already have a
-matching local agent user, tenant membership, and `central-oauth` identity. A
-normal OAuth sign-in creates that mapping automatically; operators may also
-insert it deliberately before running `npm run seed:live-config` for an existing
-central admin account.
+matching local agent user and `central-oauth` identity. A normal OAuth sign-in
+creates that mapping automatically; operators may also insert it deliberately
+before running `npm run seed:live-config` for an existing central admin account.
 
-## Tenant Context
+## User Context
 
 Every authenticated request should resolve a context containing:
 
 ```text
-tenantId
 userId
 actorType
 permissions
 requestId
 ```
 
-Domain services should require this context for tenant-scoped operations.
+Domain services should require this context for user-owned operations. Normal
+users are always filtered by their own `user_id`. Admin users may query all
+users' audit logs through explicit admin-only routes.
 
 ## API Error Envelope
 

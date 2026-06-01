@@ -21,7 +21,7 @@ authority. Each app entry describes:
 - safety rules and response guidance.
 
 The model can propose an `integration_action` tool call, but deterministic host
-code still owns endpoint allowlisting, token lookup, tenant/user headers,
+code still owns endpoint allowlisting, token lookup, user context headers,
 authorization, audit logging, redaction, and side-effect execution.
 
 The production token provider mints short-lived HMAC-signed bearer tokens from

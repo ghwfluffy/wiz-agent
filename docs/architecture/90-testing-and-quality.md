@@ -28,7 +28,7 @@ Current tests cover:
 - standalone development auto-login.
 - core schema table coverage.
 - API error envelope.
-- task tenant/user ownership.
+- task user ownership.
 - admin audit and AI config authorization.
 - model tier selection.
 - structured tool-call validation and repair.
@@ -54,5 +54,7 @@ Current tests cover:
   delivery.
 - operations dashboard rendering.
 
-Future phases should add migration, tenancy, authorization, worker, tool-call,
-connector, and admin UI tests alongside the feature work.
+Future phases should add migration, user ownership, authorization, worker,
+tool-call, connector, and admin UI tests alongside the feature work. Tenant
+removal migrations and no-tenant API responses need explicit coverage so the
+collapsed ownership model does not regress.
