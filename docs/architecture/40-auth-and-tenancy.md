@@ -41,6 +41,12 @@ central `is_admin` userinfo claim controls the local admin flag.
 The root omnisite repository owns production hosts, subpaths, redirect URIs, and
 OAuth client registration.
 
+For live operational seeding, the target central OAuth user must already have a
+matching local agent user, tenant membership, and `central-oauth` identity. A
+normal OAuth sign-in creates that mapping automatically; operators may also
+insert it deliberately before running `npm run seed:live-config` for an existing
+central admin account.
+
 ## Tenant Context
 
 Every authenticated request should resolve a context containing:

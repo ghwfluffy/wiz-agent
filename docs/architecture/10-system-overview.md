@@ -28,6 +28,12 @@ OAuth client registration, and secrets. This submodule must stay deployable with
 placeholder base paths and must not contain production hostnames or production
 subpaths.
 
+In omnisite mode, the API, worker, and migration service use the root-owned
+shared Postgres service. The API and worker also need outbound egress for OpenAI
+and SMTP delivery, but cross-app API calls remain on the root-owned internal
+agent network. Production connector files are mounted read-only from the root
+checkout's ignored `apps/agent/secrets/` directory.
+
 ## Agent Boundary
 
 The agent does not receive raw credentials or unrestricted access to databases,

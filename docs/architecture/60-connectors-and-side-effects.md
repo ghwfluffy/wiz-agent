@@ -61,6 +61,12 @@ through SMTP. SMS and MMS use carrier gateway email addresses while still
 remaining outbox-mediated. Port `465` implies implicit TLS unless the secret file
 explicitly sets `smtp.secure`.
 
+Production connector settings are read from ignored mounted files:
+
+- `contact.json`: owner contact and SMS/MMS gateway addresses;
+- `email.json`: IMAP and SMTP host, port, username, password, and sender;
+- `openai.txt`: OpenAI API key when selected by `AGENT_OPENAI_API_KEY_FILE`.
+
 The `propose_outbound_message` tool only writes an outbound queue record.
 Deterministic host code owns approval handling, SMTP transport configuration,
 delivery, status updates, and audit records.

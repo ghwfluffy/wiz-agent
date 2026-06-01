@@ -5,25 +5,23 @@ tool gateway, and web administration surface.
 
 ## Overview
 
-This project is the agent sub-app for a larger omnisite, but it starts as a
-standalone local application. During early development it runs with one local
-tenant and one local user. The local sign-in button calls a development-only
-auto-login endpoint; there is no local password, registration, or user
-management system.
+This project is the agent sub-app for a larger omnisite, and it also runs as a
+standalone local application. Local development uses one local tenant and one
+local user. The local sign-in button calls a development-only auto-login
+endpoint; there is no local password, registration, or user-management system.
 
-When the app is ready to publish into the omnisite, it will switch to federated
-OAuth through the central auth app while keeping the same local session and
-tenant-scoped authorization model.
+In omnisite mode, the app uses federated OAuth through the central auth app
+while keeping its own local session and tenant-scoped authorization model.
 
 ## Features
 
 - Scheduled personal agent tasks.
-- IMAP mailbox listener and SMTP/SMS/MMS outbound queue.
+- IMAP mailbox ingestion policy and SMTP/SMS/MMS outbound queue.
 - Deterministic host policy around credentials, scheduling, and side effects.
 - OpenAI-backed agent runtime through configurable model tiers.
 - Multi-tenant data model with a single-user standalone development mode.
-- Carbon-based web UI for tasks, activity, approvals, audit logs, and admin
-  configuration.
+- Carbon-based web UI for sign-in, tasks, outbox, activity, audit logs, and
+  admin operations.
 
 ## Tech Stack
 
@@ -45,4 +43,6 @@ Development instructions live in [docs/development.md](./docs/development.md).
 
 ## Status
 
-Experimental, active development.
+Active development. The app supports standalone local mode and production
+omnisite OAuth mode, with live OpenAI and SMTP connector paths behind ignored
+secret configuration.

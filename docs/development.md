@@ -56,8 +56,9 @@ Run targeted checks while iterating:
 
 Agent runtime tests use `MockModelClient`; validation does not call the OpenAI
 API. Real OpenAI wiring must remain behind `AgentModelClient`. To run real
-model calls locally, set `AGENT_OPENAI_API_KEY` in your ignored local env file.
-`AGENT_OPENAI_BASE_URL` defaults to `https://api.openai.com/v1`.
+model calls locally, set `AGENT_OPENAI_API_KEY` in your ignored local env file
+or point `AGENT_OPENAI_API_KEY_FILE` at an ignored file. `AGENT_OPENAI_BASE_URL`
+defaults to `https://api.openai.com/v1`.
 
 Live connector config can be seeded from ignored files with:
 
@@ -69,6 +70,13 @@ AGENT_SEED_USER_EMAIL=person@example.test npm run seed:live-config -- --secret-d
 The dry run reports which settings are present without printing secret values.
 The non-dry-run path requires an existing local agent user created by standalone
 or OAuth sign-in.
+
+The seed command reads:
+
+- `contact.json` for owner email/SMS/MMS gateway addresses;
+- `email.json` for IMAP/SMTP connector metadata;
+- `openai.txt` when `AGENT_OPENAI_API_KEY_FILE` points at the mounted secret
+  file.
 
 Connector and integration tests also avoid live networks. They use deterministic
 sender classification, mock fetch implementations, and outbox records instead of

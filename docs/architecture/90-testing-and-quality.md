@@ -21,7 +21,7 @@ Targeted commands:
 
 ## Baseline Coverage
 
-Phase 1 tests cover:
+Current tests cover:
 
 - API config loading.
 - status route.
@@ -47,6 +47,12 @@ Phase 1 tests cover:
 - allowlisted integration-action request resolution.
 - frontend base-path helpers.
 - sign-in button behavior.
+- OAuth login redirect, callback failure handling, and callback session
+  creation.
+- live config seeding from ignored connector files.
+- outbox listing, status updates, SMTP queue delivery, and fail-closed outbound
+  delivery.
+- operations dashboard rendering.
 
 Future phases should add migration, tenancy, authorization, worker, tool-call,
 connector, and admin UI tests alongside the feature work.

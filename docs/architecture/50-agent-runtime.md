@@ -39,8 +39,9 @@ This keeps real network calls out of tests and keeps OpenAI API details behind a
 small adapter.
 
 OpenAI API credentials are secret config. Use `AGENT_OPENAI_API_KEY` in ignored
-secret env files. `AGENT_OPENAI_BASE_URL` is non-secret configuration and
-defaults to `https://api.openai.com/v1`.
+secret env files or `AGENT_OPENAI_API_KEY_FILE` to read a mounted ignored secret
+file. `AGENT_OPENAI_BASE_URL` is non-secret configuration and defaults to
+`https://api.openai.com/v1`.
 
 ## Tool Contracts
 

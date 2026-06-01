@@ -13,7 +13,8 @@
 - Local development starts in `AUTH_MODE=standalone`.
 - Standalone mode has one development tenant and one development user.
 - Standalone sign-in uses a development-only endpoint, not passwords.
-- Omnisite mode later uses federated OAuth and local server-side sessions.
+- Omnisite mode uses federated OAuth and local server-side sessions.
+- Central OAuth `is_admin` userinfo controls the local admin flag.
 - The app has separate API and worker process roles.
 - The worker starts as a Compose-managed loop, with database locking added as
   scheduled work grows.
@@ -35,12 +36,10 @@
 
 ## Open Questions
 
-- Which mailbox and SMS/MMS gateway providers will be used first?
 - Should local attachment/article artifacts live in Postgres, mounted storage,
   or object storage for the first release?
-- Which central auth claim or local config should grant admin rights in omnisite
-  mode?
-- What exact approval policy should allow automatic SMS, MMS, or email sends?
+- What exact long-term approval policy should allow automatic SMS, MMS, or email
+  sends beyond explicitly owner-authorized deployment checks?
 - What maximum image dimensions and byte limits should MMS use?
 - How should durable tenant-wide spam/rate limits be stored for live IMAP
   polling?
