@@ -11,6 +11,10 @@ import type {
   AgentStore,
   AgentRunRecord,
   AiConfig,
+  ConnectorInput,
+  ConnectorKind,
+  ConnectorRecord,
+  ConnectorStatus,
   AuditRecord,
   InboundMessageInput,
   InboundMessageRecord,
@@ -164,6 +168,18 @@ function inboundFromRow(row: Record<string, unknown>): InboundMessageRecord {
     agentRunId: typeof authJson.agent_run_id === "string" ? authJson.agent_run_id : null,
     outboundMessageId: typeof authJson.outbound_message_id === "string" ? authJson.outbound_message_id : null,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
+  };
+}
+
+function connectorFromRow(row: Record<string, unknown>): ConnectorRecord {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    kind: String(row.kind) as ConnectorKind,
+    status: String(row.status) as ConnectorStatus,
+    config: (row.config_json as Record<string, unknown> | null) ?? {},
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
   };
 }
 
@@ -647,6 +663,61 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return config;
     },
 
+    async listConnectors(context: RequestContext): Promise<ConnectorRecord[]> {
+      const result = await pool.query(
+        `SELECT DISTINCT ON (kind) *
+         FROM connectors
+         WHERE user_id = $1
+         ORDER BY kind, updated_at DESC, created_at DESC`,
+        [context.userId]
+      );
+      return result.rows.map(connectorFromRow);
+    },
+
+    async getConnector(context: RequestContext, kind: ConnectorKind): Promise<ConnectorRecord | undefined> {
+      const result = await pool.query(
+        `SELECT *
+         FROM connectors
+         WHERE user_id = $1 AND kind = $2
+         ORDER BY updated_at DESC, created_at DESC
+         LIMIT 1`,
+        [context.userId, kind]
+      );
+      return result.rows[0] ? connectorFromRow(result.rows[0]) : undefined;
+    },
+
+    async upsertConnector(context: RequestContext, input: ConnectorInput): Promise<ConnectorRecord> {
+      const existing = await pool.query(
+        `SELECT id
+         FROM connectors
+         WHERE user_id = $1 AND kind = $2
+         ORDER BY updated_at DESC, created_at DESC
+         LIMIT 1`,
+        [context.userId, input.kind]
+      );
+      const existingId = existing.rows[0]?.id as string | undefined;
+      const result = existingId
+        ? await pool.query(
+          `UPDATE connectors
+           SET status = $3, config_json = $4, updated_at = now()
+           WHERE id = $1 AND user_id = $2
+           RETURNING *`,
+          [existingId, context.userId, input.status, input.config]
+        )
+        : await pool.query(
+          `INSERT INTO connectors (id, user_id, kind, status, config_json)
+           VALUES ($1, $2, $3, $4, $5)
+           RETURNING *`,
+          [randomUUID(), context.userId, input.kind, input.status, input.config]
+        );
+      const record = connectorFromRow(result.rows[0]);
+      await recordAudit(pool, context, "connector.upsert", "connector", record.id, {
+        kind: record.kind,
+        status: record.status
+      });
+      return record;
+    },
+
     async createAgentRun(context, input) {
       const id = randomUUID();
       const result = await pool.query(
@@ -899,6 +970,13 @@ export function createPostgresStore(pool: Pool): AgentStore {
              AND t.status = 'pending'
              AND (t.due_at IS NULL OR t.due_at <= $2)
          )
+         OR EXISTS (
+           SELECT 1
+           FROM connectors c
+           WHERE c.user_id = u.id
+             AND c.kind = 'imap'
+             AND c.status = 'enabled'
+         )
          ORDER BY u.email ASC`,
         [statuses, now.toISOString()]
       );
@@ -935,6 +1013,7 @@ export function createMemoryStore(): AgentStore {
   const runs = new Map<string, AgentRunRecord>();
   const toolCalls = new Map<string, ToolCallRecord>();
   const senderStatuses = new Map<string, SenderRecord>();
+  const connectors = new Map<string, ConnectorRecord>();
   const inboundProviderIds = new Map<string, string>();
   const inboundMessages = new Map<string, InboundMessageRecord>();
   const outboundMessages = new Map<string, OutboundMessageRecord>();
@@ -1190,6 +1269,33 @@ export function createMemoryStore(): AgentStore {
       pushAudit(context, "admin.ai_config.update", "admin_ai_config", "default");
       return aiConfig;
     },
+    async listConnectors(context: RequestContext): Promise<ConnectorRecord[]> {
+      return [...connectors.values()]
+        .filter((connector) => connector.userId === context.userId)
+        .sort((a, b) => a.kind.localeCompare(b.kind));
+    },
+    async getConnector(context: RequestContext, kind: ConnectorKind): Promise<ConnectorRecord | undefined> {
+      return [...connectors.values()].find((connector) => connector.userId === context.userId && connector.kind === kind);
+    },
+    async upsertConnector(context: RequestContext, input: ConnectorInput): Promise<ConnectorRecord> {
+      const existing = await this.getConnector(context, input.kind);
+      const now = nowIso();
+      const record: ConnectorRecord = {
+        id: existing?.id ?? randomUUID(),
+        userId: context.userId,
+        kind: input.kind,
+        status: input.status,
+        config: input.config,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      };
+      connectors.set(record.id, record);
+      pushAudit(context, "connector.upsert", "connector", record.id, {
+        kind: record.kind,
+        status: record.status
+      });
+      return record;
+    },
     async createAgentRun(context, input) {
       const now = nowIso();
       const run: AgentRunRecord = {
@@ -1409,6 +1515,11 @@ export function createMemoryStore(): AgentStore {
         const isDue = task.dueAt === null || Date.parse(task.dueAt) <= now.getTime();
         if (task.status === "pending" && isDue) {
           userIds.add(task.userId);
+        }
+      }
+      for (const connector of connectors.values()) {
+        if (connector.kind === "imap" && connector.status === "enabled") {
+          userIds.add(connector.userId);
         }
       }
       return [...userIds]

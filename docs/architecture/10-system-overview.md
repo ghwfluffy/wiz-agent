@@ -7,8 +7,8 @@ agent safely.
 
 - API service: HTTP API, session handling, user context, domain writes, and
   admin routes.
-- Worker service: due task processing, mailbox polling, rate-limited outbound
-  queues, and agent runs.
+- Worker service: due task processing, per-user IMAP mailbox polling,
+  rate-limited outbound queues, and agent runs.
 - Web service: Vue/Carbon frontend.
 - Nginx service: production-style static frontend and API proxy.
 - Postgres: canonical durable state.
@@ -33,6 +33,12 @@ shared Postgres service. The API and worker also need outbound egress for OpenAI
 and SMTP delivery, but cross-app API calls remain on the root-owned internal
 agent network. Production connector files are mounted read-only from the root
 checkout's ignored `apps/agent/secrets/` directory.
+
+User-owned connector settings are stored in the database and managed from the
+web Settings tab. That includes the user's contact details, SMS/MMS gateway
+addresses, assistant mailbox identity, IMAP settings, and SMTP settings. The
+webmaster-provisioned OpenAI API key remains deployment-owned secret
+configuration and is never displayed in the UI.
 
 ## Agent Boundary
 

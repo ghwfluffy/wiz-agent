@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import nodemailer from "nodemailer";
 import type { Settings } from "../config/settings.js";
@@ -7,6 +7,12 @@ import type { AgentStore, OutboundMessageRecord, RequestContext } from "../domai
 type EmailSecret = {
   username?: string;
   password?: string;
+  imap?: {
+    host?: string;
+    port?: number;
+    secure?: boolean;
+    mailbox?: string;
+  };
   smtp?: {
     host?: string;
     port?: number;
@@ -25,11 +31,77 @@ export type MailTransport = {
 };
 
 export function loadEmailSecret(settings: Settings): EmailSecret {
-  return JSON.parse(readFileSync(resolve(settings.agentSecretDir, "email.json"), "utf8")) as EmailSecret;
+  const path = resolve(settings.agentSecretDir, "email.json");
+  if (!existsSync(path)) {
+    return {};
+  }
+  return JSON.parse(readFileSync(path, "utf8")) as EmailSecret;
 }
 
 export function resolveSmtpSecure(secret: EmailSecret): boolean {
   return secret.smtp?.secure ?? secret.smtp?.port === 465;
+}
+
+function objectValue(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+
+function stringConfig(primary: unknown, fallback: unknown): string | undefined {
+  if (typeof primary === "string" && primary.trim()) {
+    return primary.trim();
+  }
+  if (typeof fallback === "string" && fallback.trim()) {
+    return fallback.trim();
+  }
+  return undefined;
+}
+
+function numberConfig(primary: unknown, fallback: unknown): number | undefined {
+  if (typeof primary === "number" && Number.isFinite(primary)) {
+    return primary;
+  }
+  if (typeof fallback === "number" && Number.isFinite(fallback)) {
+    return fallback;
+  }
+  return undefined;
+}
+
+function booleanConfig(primary: unknown, fallback: unknown): boolean | undefined {
+  if (typeof primary === "boolean") {
+    return primary;
+  }
+  if (typeof fallback === "boolean") {
+    return fallback;
+  }
+  return undefined;
+}
+
+export type SmtpDeliveryConfig = {
+  username?: string;
+  password?: string;
+  host?: string;
+  port?: number;
+  secure?: boolean;
+  from?: string;
+};
+
+export async function resolveSmtpDeliveryConfig(options: {
+  store: AgentStore;
+  context: RequestContext;
+  settings: Settings;
+}): Promise<SmtpDeliveryConfig> {
+  const secret = loadEmailSecret(options.settings);
+  const connector = await options.store.getConnector(options.context, "smtp");
+  const config = connector?.status === "enabled" ? connector.config : {};
+  const smtpConfig = objectValue(config.smtp);
+  return {
+    username: stringConfig(config.username, secret.username),
+    password: stringConfig(smtpConfig.password, secret.password),
+    host: stringConfig(smtpConfig.host, secret.smtp?.host),
+    port: numberConfig(smtpConfig.port, secret.smtp?.port),
+    secure: booleanConfig(smtpConfig.secure, secret.smtp?.secure),
+    from: stringConfig(smtpConfig.from, secret.smtp?.from)
+  };
 }
 
 export function createSmtpTransport(settings: Settings): MailTransport {
@@ -66,12 +138,23 @@ export async function sendOutboundMessage(options: {
   if (!["pending", "approved"].includes(options.message.status)) {
     return options.message;
   }
-  const secret = loadEmailSecret(options.settings);
-  const from = secret.smtp?.from ?? secret.username;
+  const delivery = await resolveSmtpDeliveryConfig(options);
+  const from = delivery.from ?? delivery.username;
   if (!from) {
     return options.store.updateOutboundMessageStatus(options.context, options.message.id, "failed", "SMTP sender is missing.");
   }
-  const transport = options.transport ?? createSmtpTransport(options.settings);
+  if (!delivery.host || !delivery.username || !delivery.password) {
+    return options.store.updateOutboundMessageStatus(options.context, options.message.id, "failed", "SMTP configuration is incomplete.");
+  }
+  const transport = options.transport ?? nodemailer.createTransport({
+    host: delivery.host,
+    port: delivery.port ?? 587,
+    secure: delivery.secure ?? delivery.port === 465,
+    auth: {
+      user: delivery.username,
+      pass: delivery.password
+    }
+  });
   await options.store.updateOutboundMessageStatus(options.context, options.message.id, "sending");
   try {
     await transport.sendMail({

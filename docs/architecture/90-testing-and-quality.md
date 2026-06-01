@@ -51,10 +51,13 @@ Current tests cover:
 - OAuth login redirect, callback failure handling, and callback session
   creation.
 - live config seeding from ignored connector files.
+- user-managed connector configuration with API-redacted credentials.
+- sender-table owner classification.
 - outbox listing, status updates, SMTP queue delivery, and fail-closed outbound
   delivery.
 - operations dashboard rendering.
-- tabbed Carbon dashboard rendering.
+- tabbed Carbon dashboard rendering, URL-backed active tabs, and focused tab
+  polling.
 
 Future phases should add migration, user ownership, authorization, worker,
 tool-call, connector, and admin UI tests alongside the feature work. Tenant

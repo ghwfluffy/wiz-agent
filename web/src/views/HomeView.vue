@@ -1,9 +1,13 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import {
   api,
   type AiConfig,
   type AuditEvent,
+  type Connector,
+  type ConnectorKind,
+  type ConnectorStatus,
   type InboundMessage,
   type JobStatus,
   type OutboxMessage,
@@ -15,6 +19,8 @@ import { apiUrl } from "../lib/basePath";
 import { useAuthStore } from "../stores/auth";
 
 const auth = useAuthStore();
+const route = useRoute();
+const router = useRouter();
 const authMode = import.meta.env.VITE_AUTH_MODE || "standalone";
 const signInLabel = computed(() => (authMode === "standalone" ? "Sign in" : "Continue with central sign-in"));
 const tabs = [
@@ -25,16 +31,22 @@ const tabs = [
   { id: "senders", label: "Senders" },
   { id: "workers", label: "Workers" },
   { id: "logs", label: "Logs" },
+  { id: "settings", label: "Settings" },
   { id: "admin", label: "Admin" }
 ] as const;
 type TabId = typeof tabs[number]["id"];
-const activeTab = ref<TabId>("overview");
+const tabIds = new Set<TabId>(tabs.map((tab) => tab.id));
+const dashboardPollIntervalMs = 10_000;
+let dashboardPollHandle: number | null = null;
+let activeTabRefreshInFlight = false;
+const activeTab = ref<TabId>(tabFromRoute(route.query.tab));
 
 const tasks = ref<Task[]>([]);
 const inbox = ref<InboundMessage[]>([]);
 const outbox = ref<OutboxMessage[]>([]);
 const audit = ref<AuditEvent[]>([]);
 const senders = ref<Sender[]>([]);
+const connectors = ref<Connector[]>([]);
 const aiConfig = ref<AiConfig | null>(null);
 const jobs = ref<JobStatus[]>([]);
 const dashboardError = ref<string | null>(null);
@@ -60,6 +72,35 @@ const taskForm = reactive({
 const senderForm = reactive({
   address: "",
   status: "trusted" as Sender["status"]
+});
+const ownerContactForm = reactive({
+  status: "enabled" as ConnectorStatus,
+  name: "",
+  email: "",
+  mobile: "",
+  provider: "",
+  smsGateway: "",
+  mmsGateway: ""
+});
+const imapForm = reactive({
+  status: "disabled" as ConnectorStatus,
+  username: "",
+  password: "",
+  passwordSet: false,
+  host: "",
+  port: 993,
+  secure: true,
+  mailbox: "INBOX"
+});
+const smtpForm = reactive({
+  status: "disabled" as ConnectorStatus,
+  username: "",
+  password: "",
+  passwordSet: false,
+  host: "",
+  port: 587,
+  secure: false,
+  from: ""
 });
 const configForm = reactive<AiConfig>({
   fastModel: "",
@@ -96,12 +137,77 @@ const paginatedOutbox = computed(() => {
 const selectedTaskOpen = computed(() => selectedTask.value !== null);
 const taskModalTitle = computed(() => selectedTask.value?.title ?? "Task details");
 
+function tabFromRoute(value: unknown): TabId {
+  const tab = Array.isArray(value) ? value[0] : value;
+  return typeof tab === "string" && tabIds.has(tab as TabId) ? tab as TabId : "overview";
+}
+
 function applyAiConfig(config: AiConfig | null): void {
   aiConfig.value = config;
   if (!config) {
     return;
   }
   Object.assign(configForm, config);
+}
+
+function configObject(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+}
+
+function configString(config: Record<string, unknown>, key: string): string {
+  const value = config[key];
+  return typeof value === "string" ? value : "";
+}
+
+function configNumber(config: Record<string, unknown>, key: string, fallback: number): number {
+  const value = config[key];
+  return typeof value === "number" ? value : fallback;
+}
+
+function configBoolean(config: Record<string, unknown>, key: string, fallback: boolean): boolean {
+  const value = config[key];
+  return typeof value === "boolean" ? value : fallback;
+}
+
+function findConnector(kind: ConnectorKind): Connector | undefined {
+  return connectors.value.find((connector) => connector.kind === kind);
+}
+
+function applyConnectors(nextConnectors: Connector[]): void {
+  connectors.value = nextConnectors;
+  const ownerContact = findConnector("owner-contact");
+  const ownerConfig = ownerContact?.config ?? {};
+  ownerContactForm.status = ownerContact?.status ?? "enabled";
+  ownerContactForm.name = configString(ownerConfig, "name");
+  ownerContactForm.email = configString(ownerConfig, "email");
+  ownerContactForm.mobile = configString(ownerConfig, "mobile");
+  ownerContactForm.provider = configString(ownerConfig, "provider");
+  ownerContactForm.smsGateway = configString(ownerConfig, "sms_gateway");
+  ownerContactForm.mmsGateway = configString(ownerConfig, "mms_gateway");
+
+  const imap = findConnector("imap");
+  const imapConfig = imap?.config ?? {};
+  const imapServer = configObject(imapConfig.imap);
+  imapForm.status = imap?.status ?? "disabled";
+  imapForm.username = configString(imapConfig, "username");
+  imapForm.password = "";
+  imapForm.passwordSet = configBoolean(imapServer, "password_set", false);
+  imapForm.host = configString(imapServer, "host");
+  imapForm.port = configNumber(imapServer, "port", 993);
+  imapForm.secure = configBoolean(imapServer, "secure", true);
+  imapForm.mailbox = configString(imapServer, "mailbox") || "INBOX";
+
+  const smtp = findConnector("smtp");
+  const smtpConfig = smtp?.config ?? {};
+  const smtpServer = configObject(smtpConfig.smtp);
+  smtpForm.status = smtp?.status ?? "disabled";
+  smtpForm.username = configString(smtpConfig, "username");
+  smtpForm.password = "";
+  smtpForm.passwordSet = configBoolean(smtpServer, "password_set", false);
+  smtpForm.host = configString(smtpServer, "host");
+  smtpForm.port = configNumber(smtpServer, "port", 587);
+  smtpForm.secure = configBoolean(smtpServer, "secure", false);
+  smtpForm.from = configString(smtpServer, "from");
 }
 
 function formatDate(value: string | null | undefined): string {
@@ -140,6 +246,13 @@ function formatDetails(details: Record<string, unknown>): string {
 
 function setActiveTab(tabId: TabId): void {
   activeTab.value = tabId;
+  void router.replace({ query: { ...route.query, tab: tabId } });
+}
+
+function clampPages(): void {
+  taskPage.value = Math.min(taskPage.value, totalTaskPages.value);
+  inboxPage.value = Math.min(inboxPage.value, totalInboxPages.value);
+  outboxPage.value = Math.min(outboxPage.value, totalOutboxPages.value);
 }
 
 function previousTaskPage(): void {
@@ -178,14 +291,93 @@ async function loadDashboard(): Promise<void> {
     audit.value = data.audit;
     senders.value = data.senders;
     jobs.value = data.jobs;
+    applyConnectors(data.connectors);
     applyAiConfig(data.aiConfig);
-    taskPage.value = Math.min(taskPage.value, totalTaskPages.value);
-    inboxPage.value = Math.min(inboxPage.value, totalInboxPages.value);
-    outboxPage.value = Math.min(outboxPage.value, totalOutboxPages.value);
+    clampPages();
     dashboardError.value = null;
   } catch {
     dashboardError.value = "Unable to load agent activity.";
   }
+}
+
+async function loadActiveTab(): Promise<void> {
+  if (!auth.authenticated || activeTabRefreshInFlight) {
+    return;
+  }
+  activeTabRefreshInFlight = true;
+  try {
+    switch (activeTab.value) {
+      case "overview": {
+        await loadDashboard();
+        return;
+      }
+      case "inbox": {
+        const response = await api.listInbox();
+        inbox.value = response.messages;
+        break;
+      }
+      case "outbox": {
+        const response = await api.listOutbox();
+        outbox.value = response.messages;
+        break;
+      }
+      case "tasks": {
+        const response = await api.listTasks();
+        tasks.value = response.tasks;
+        break;
+      }
+      case "senders": {
+        const response = await api.listSenders();
+        senders.value = response.senders;
+        break;
+      }
+      case "workers": {
+        const response = await api.listJobs().catch(() => ({ jobs: [] }));
+        jobs.value = response.jobs;
+        break;
+      }
+      case "logs": {
+        const response = await api.listAudit();
+        audit.value = response.events;
+        break;
+      }
+      case "settings": {
+        const response = await api.listConnectors();
+        applyConnectors(response.connectors);
+        break;
+      }
+      case "admin": {
+        applyAiConfig(await api.getAiConfig().catch(() => null));
+        break;
+      }
+    }
+    clampPages();
+    dashboardError.value = null;
+  } catch {
+    dashboardError.value = "Unable to refresh the selected tab.";
+  } finally {
+    activeTabRefreshInFlight = false;
+  }
+}
+
+function startDashboardPolling(): void {
+  if (dashboardPollHandle) {
+    return;
+  }
+  dashboardPollHandle = window.setInterval(() => {
+    if (document.visibilityState === "hidden") {
+      return;
+    }
+    void loadActiveTab();
+  }, dashboardPollIntervalMs);
+}
+
+function stopDashboardPolling(): void {
+  if (!dashboardPollHandle) {
+    return;
+  }
+  window.clearInterval(dashboardPollHandle);
+  dashboardPollHandle = null;
 }
 
 async function createTask(): Promise<void> {
@@ -323,6 +515,69 @@ async function saveAiConfig(): Promise<void> {
   }
 }
 
+async function saveOwnerContactConfig(): Promise<void> {
+  saving.value = true;
+  try {
+    await api.updateConnector("owner-contact", ownerContactForm.status, {
+      name: ownerContactForm.name,
+      email: ownerContactForm.email,
+      mobile: ownerContactForm.mobile,
+      provider: ownerContactForm.provider,
+      smsGateway: ownerContactForm.smsGateway,
+      mmsGateway: ownerContactForm.mmsGateway
+    });
+    const response = await api.listConnectors();
+    applyConnectors(response.connectors);
+    dashboardError.value = null;
+  } catch {
+    dashboardError.value = "Unable to save owner contact configuration.";
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function saveImapConfig(): Promise<void> {
+  saving.value = true;
+  try {
+    await api.updateConnector("imap", imapForm.status, {
+      username: imapForm.username,
+      password: imapForm.password,
+      host: imapForm.host,
+      port: Number(imapForm.port),
+      secure: imapForm.secure,
+      mailbox: imapForm.mailbox
+    });
+    const response = await api.listConnectors();
+    applyConnectors(response.connectors);
+    dashboardError.value = null;
+  } catch {
+    dashboardError.value = "Unable to save IMAP configuration.";
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function saveSmtpConfig(): Promise<void> {
+  saving.value = true;
+  try {
+    await api.updateConnector("smtp", smtpForm.status, {
+      username: smtpForm.username,
+      password: smtpForm.password,
+      host: smtpForm.host,
+      port: Number(smtpForm.port),
+      secure: smtpForm.secure,
+      from: smtpForm.from
+    });
+    const response = await api.listConnectors();
+    applyConnectors(response.connectors);
+    dashboardError.value = null;
+  } catch {
+    dashboardError.value = "Unable to save SMTP configuration.";
+  } finally {
+    saving.value = false;
+  }
+}
+
 function signIn(): void {
   if (authMode === "standalone") {
     void auth.signIn();
@@ -334,13 +589,31 @@ function signIn(): void {
 onMounted(() => {
   if (!auth.loaded) {
     void auth.restore();
+  } else if (auth.authenticated) {
+    void loadDashboard();
   }
+  startDashboardPolling();
 });
 
 watch(() => auth.authenticated, (authenticated) => {
   if (authenticated) {
     void loadDashboard();
   }
+});
+
+watch(() => route.query.tab, (tab) => {
+  const nextTab = tabFromRoute(tab);
+  if (nextTab !== activeTab.value) {
+    activeTab.value = nextTab;
+  }
+});
+
+watch(activeTab, () => {
+  void loadActiveTab();
+});
+
+onUnmounted(() => {
+  stopDashboardPolling();
 });
 </script>
 
@@ -776,6 +1049,135 @@ watch(() => auth.authenticated, (authenticated) => {
               </tr>
             </tbody>
           </table>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'settings'" id="panel-settings" class="tab-panel" role="tabpanel" aria-labelledby="tab-settings">
+        <section class="activity-section" aria-label="Connector configuration">
+          <div class="section-heading">
+            <h2>Account settings</h2>
+          </div>
+          <div class="connector-grid">
+            <form class="form-grid connector-form" @submit.prevent="saveOwnerContactConfig">
+              <h3>Owner contact</h3>
+              <div class="cds--form-item">
+                <label class="cds--label" for="owner-contact-status">Status</label>
+                <select id="owner-contact-status" v-model="ownerContactForm.status" class="cds--select-input">
+                  <option value="enabled">enabled</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="owner-contact-name">Name</label>
+                <input id="owner-contact-name" v-model="ownerContactForm.name" class="cds--text-input" type="text">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="owner-contact-email">Email</label>
+                <input id="owner-contact-email" v-model="ownerContactForm.email" class="cds--text-input" type="email">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="owner-contact-mobile">Mobile</label>
+                <input id="owner-contact-mobile" v-model="ownerContactForm.mobile" class="cds--text-input" type="tel">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="owner-contact-provider">Mobile provider</label>
+                <input id="owner-contact-provider" v-model="ownerContactForm.provider" class="cds--text-input" type="text">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="owner-contact-sms">SMS gateway</label>
+                <input id="owner-contact-sms" v-model="ownerContactForm.smsGateway" class="cds--text-input" type="email">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="owner-contact-mms">MMS gateway</label>
+                <input id="owner-contact-mms" v-model="ownerContactForm.mmsGateway" class="cds--text-input" type="email">
+              </div>
+              <div class="form-actions">
+                <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
+                  Save owner contact
+                </button>
+              </div>
+            </form>
+
+            <form class="form-grid connector-form" @submit.prevent="saveImapConfig">
+              <h3>IMAP inbox</h3>
+              <div class="cds--form-item">
+                <label class="cds--label" for="imap-status">Status</label>
+                <select id="imap-status" v-model="imapForm.status" class="cds--select-input">
+                  <option value="enabled">enabled</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="imap-username">Username</label>
+                <input id="imap-username" v-model="imapForm.username" class="cds--text-input" type="email">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="imap-password">Password</label>
+                <input id="imap-password" v-model="imapForm.password" class="cds--text-input" type="password" :placeholder="imapForm.passwordSet ? 'Saved' : ''" autocomplete="new-password">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="imap-host">Host</label>
+                <input id="imap-host" v-model="imapForm.host" class="cds--text-input" type="text">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="imap-port">Port</label>
+                <input id="imap-port" v-model.number="imapForm.port" class="cds--text-input" type="number" min="1">
+              </div>
+              <div class="cds--form-item checkbox-item">
+                <input id="imap-secure" v-model="imapForm.secure" class="cds--checkbox" type="checkbox">
+                <label class="cds--checkbox-label" for="imap-secure">Use TLS</label>
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="imap-mailbox">Mailbox</label>
+                <input id="imap-mailbox" v-model="imapForm.mailbox" class="cds--text-input" type="text">
+              </div>
+              <div class="form-actions">
+                <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
+                  Save IMAP
+                </button>
+              </div>
+            </form>
+
+            <form class="form-grid connector-form" @submit.prevent="saveSmtpConfig">
+              <h3>SMTP outbox</h3>
+              <div class="cds--form-item">
+                <label class="cds--label" for="smtp-status">Status</label>
+                <select id="smtp-status" v-model="smtpForm.status" class="cds--select-input">
+                  <option value="enabled">enabled</option>
+                  <option value="disabled">disabled</option>
+                </select>
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="smtp-username">Username</label>
+                <input id="smtp-username" v-model="smtpForm.username" class="cds--text-input" type="email">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="smtp-password">Password</label>
+                <input id="smtp-password" v-model="smtpForm.password" class="cds--text-input" type="password" :placeholder="smtpForm.passwordSet ? 'Saved' : ''" autocomplete="new-password">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="smtp-host">Host</label>
+                <input id="smtp-host" v-model="smtpForm.host" class="cds--text-input" type="text">
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="smtp-port">Port</label>
+                <input id="smtp-port" v-model.number="smtpForm.port" class="cds--text-input" type="number" min="1">
+              </div>
+              <div class="cds--form-item checkbox-item">
+                <input id="smtp-secure" v-model="smtpForm.secure" class="cds--checkbox" type="checkbox">
+                <label class="cds--checkbox-label" for="smtp-secure">Use TLS</label>
+              </div>
+              <div class="cds--form-item">
+                <label class="cds--label" for="smtp-from">From address</label>
+                <input id="smtp-from" v-model="smtpForm.from" class="cds--text-input" type="email">
+              </div>
+              <div class="form-actions">
+                <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
+                  Save SMTP
+                </button>
+              </div>
+            </form>
+          </div>
         </section>
       </section>
 

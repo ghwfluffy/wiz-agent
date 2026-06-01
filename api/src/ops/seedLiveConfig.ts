@@ -127,13 +127,20 @@ async function main(): Promise<void> {
       [
         randomUUID(),
         userId,
-        { name: contact.name ?? null, provider: contact.mobileProvider ?? null, has_sms: summary.contact.hasSmsGateway, has_mms: summary.contact.hasMmsGateway },
+        {
+          name: contact.name ?? null,
+          email: contact.email ?? null,
+          mobile: contact.mobile ?? null,
+          provider: contact.mobileProvider ?? null,
+          sms_gateway: contact.smsGateway ?? null,
+          mms_gateway: contact.mmsGateway ?? null
+        },
         randomUUID(),
-        { username: email.username ?? null, imap: email.imap ?? {}, secret_ref: "email.json" },
+        { username: email.username ?? null, imap: { ...email.imap, password: email.password ?? null } },
         randomUUID(),
-        { username: email.username ?? null, smtp: email.smtp ?? {}, secret_ref: "email.json" },
+        { username: email.username ?? null, smtp: { ...email.smtp, password: email.password ?? null } },
         randomUUID(),
-        { base_url: settings.agentOpenaiBaseUrl, secret_ref: "openai.txt" }
+        { base_url: settings.agentOpenaiBaseUrl }
       ]
     );
 

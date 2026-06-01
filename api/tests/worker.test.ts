@@ -1,7 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import { workerTick } from "../src/worker.js";
@@ -33,15 +30,24 @@ describe("worker loop", () => {
       toAddr: "15555550100@sms.example.test",
       bodyText: "hello"
     });
-    const dir = mkdtempSync(join(tmpdir(), "agent-worker-secrets-"));
-    writeFileSync(join(dir, "email.json"), JSON.stringify({
-      username: "sender@example.test",
-      password: "secret",
-      smtp: {
-        host: "smtp.example.test",
-        from: "sender@example.test"
+    await store.upsertConnector({
+      userId: session.user.id,
+      actorType: "system",
+      permissions: ["user", "system"],
+      requestId: "worker-smtp-config",
+      session
+    }, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
       }
-    }), "utf8");
+    });
     const sendMail = vi.fn().mockResolvedValue({ accepted: ["15555550100@sms.example.test"] });
 
     const result = await workerTick({
@@ -49,7 +55,6 @@ describe("worker loop", () => {
       settings: loadSettings({
         APP_ENV: "test",
         AUTH_MODE: "oauth",
-        AGENT_SECRET_DIR: dir,
         AGENT_OUTBOUND_ENABLED: "true"
       }),
       mailTransport: { sendMail }
@@ -86,19 +91,20 @@ describe("worker loop", () => {
         bodyText: `message ${index}`
       });
     }
-    const dir = mkdtempSync(join(tmpdir(), "agent-worker-rate-secrets-"));
-    writeFileSync(join(dir, "email.json"), JSON.stringify({
-      username: "sender@example.test",
-      password: "secret",
-      smtp: { host: "smtp.example.test" }
-    }), "utf8");
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: { host: "smtp.example.test", password: "secret" }
+      }
+    });
     const sendMail = vi.fn().mockResolvedValue({ accepted: ["ok"] });
 
     const result = await workerTick({
       store,
       settings: loadSettings({
         APP_ENV: "test",
-        AGENT_SECRET_DIR: dir,
         AGENT_OUTBOUND_ENABLED: "true"
       }),
       mailTransport: { sendMail }

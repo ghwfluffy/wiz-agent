@@ -40,6 +40,13 @@ queue an outbound message, record an observation, or request an allowed
 cross-app integration action. The host still validates every tool call and
 records the final handling action back on the inbox record.
 
+The worker polls enabled per-user IMAP connector records and processes unread
+mail in bounded batches. IMAP connector settings live in the database and are
+managed from the Settings tab, including the assistant mailbox password. API reads
+redact saved passwords and expose only a `password_set` flag. A user will not
+see new mail in the Inbox unless their IMAP connector is enabled, complete, and
+the worker is running.
+
 The operations UI has an Inbox tab. It lists inbound messages in reverse
 chronological order with sender, source, classification, handling action, and a
 task link when the message was assigned to a task. Following the task link opens
@@ -63,8 +70,8 @@ Controls:
 - spam/rate limits prevent token burn and owner-notification floods.
 
 The current spam guard limits untrusted review notifications per sender within a
-sliding time window. Production connector workers should also add durable
-user-wide rate limits before enabling live polling.
+sliding time window. IMAP polling also uses a bounded per-tick batch size so a
+large unread mailbox cannot process unbounded mail in one worker pass.
 
 ## Outbound
 
@@ -77,13 +84,27 @@ conservative and approval-gated by default.
 The current implementation delivers `pending` and `approved` outbox records
 through SMTP from the worker. SMS and MMS use carrier gateway email addresses
 while still remaining outbox-mediated. Port `465` implies implicit TLS unless
-the secret file explicitly sets `smtp.secure`.
+the user explicitly configures another TLS mode.
 
-Production connector settings are read from ignored mounted files:
+Deployment-owned secrets are limited to platform-level configuration:
 
-- `contact.json`: owner contact and SMS/MMS gateway addresses;
-- `email.json`: IMAP and SMTP host, port, username, password, and sender;
 - `openai.txt`: OpenAI API key when selected by `AGENT_OPENAI_API_KEY_FILE`.
+
+Per-user connector settings are database records editable from the Settings tab:
+
+- owner contact name, email, mobile provider, and SMS/MMS gateway addresses;
+- IMAP username, password, host, port, TLS flag, and mailbox name;
+- SMTP username, password, host, port, TLS flag, and sender address.
+
+Connector passwords are never returned by API reads, never shown back in the UI,
+and must not be included in model prompts, repair payloads, task events, audit
+summaries, or tool results. A blank password update preserves any existing
+saved password so users can edit host/port/sender settings without retyping the
+credential.
+
+Saving owner contact settings also marks the configured email/SMS/MMS gateway
+addresses as `owner` senders. Sender classification must honor those sender
+table rows; owner identity is not limited to environment variables.
 
 The `propose_outbound_message` tool only writes an outbound queue record.
 Deterministic host code owns approval handling, SMTP transport configuration,

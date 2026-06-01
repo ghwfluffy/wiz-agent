@@ -190,6 +190,29 @@ h3 {
   align-items: end;
 }
 
+.connector-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.connector-form {
+  align-content: start;
+  border: 1px solid #e0e0e0;
+  background: #f4f4f4;
+  padding: 16px;
+}
+
+.connector-form h3 {
+  grid-column: 1 / -1;
+}
+
+.checkbox-item {
+  align-self: end;
+  min-height: 40px;
+  justify-content: center;
+}
+
 .form-actions {
   align-self: end;
 }
@@ -357,6 +380,7 @@ h3 {
   .form-grid,
   .sender-form,
   .config-form,
+  .connector-grid,
   .task-detail-grid {
     grid-template-columns: 1fr;
   }

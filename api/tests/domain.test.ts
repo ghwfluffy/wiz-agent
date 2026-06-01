@@ -364,6 +364,70 @@ describe("domain and user ownership APIs", () => {
     });
   });
 
+  it("lets the current user manage connector configuration with redacted credentials", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "connectors-login");
+
+    const update = await app.request("/api/v1/connectors/imap", {
+      method: "PUT",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        status: "enabled",
+        config: {
+          username: "agent@example.test",
+          host: "imap.example.test",
+          port: 993,
+          secure: true,
+          mailbox: "INBOX",
+          password: "user-mailbox-password"
+        }
+      })
+    });
+    expect(update.status).toBe(200);
+
+    const list = await app.request("/api/v1/connectors", {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(list.status).toBe(200);
+    const payload = await list.json() as { connectors: Array<{ kind: string; status: string; config: Record<string, unknown> }> };
+    expect(payload.connectors).toEqual([
+      expect.objectContaining({
+        kind: "imap",
+        status: "enabled",
+        config: expect.objectContaining({
+          username: "agent@example.test",
+          imap: expect.objectContaining({
+            host: "imap.example.test",
+            port: 993,
+            secure: true,
+            mailbox: "INBOX",
+            password_set: true
+          })
+        })
+      })
+    ]);
+    expect(JSON.stringify(payload)).not.toContain("user-mailbox-password");
+
+    const internal = await store.getConnector({
+      userId: session.user.id,
+      actorType: "user",
+      permissions: ["user"],
+      requestId: "connector-internal",
+      session
+    }, "imap");
+    expect((internal?.config.imap as { password?: string }).password).toBe("user-mailbox-password");
+  });
+
   it("returns operational job status for administrators", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
@@ -403,6 +467,10 @@ describe("domain and user ownership APIs", () => {
         }),
         expect.objectContaining({
           name: "outbox"
+        }),
+        expect.objectContaining({
+          name: "inbound-mailbox",
+          status: "disabled"
         })
       ]
     });

@@ -60,6 +60,9 @@ export async function classifySender(
     return "owner";
   }
   const storedStatus = await options.store.getSenderStatus(options.context, from);
+  if (storedStatus === "owner") {
+    return "owner";
+  }
   if (storedStatus === "blocked") {
     return "blocked";
   }

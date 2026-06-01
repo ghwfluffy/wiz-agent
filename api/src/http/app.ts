@@ -5,7 +5,7 @@ import { loadSettings, type Settings } from "../config/settings.js";
 import { clearSessionCookie, writeSessionCookie } from "../auth/session.js";
 import { createPool } from "../db/pool.js";
 import { createMemoryStore, createPostgresStore } from "../domain/store.js";
-import type { AgentStore, RequestContext, SenderStatus } from "../domain/types.js";
+import type { AgentStore, ConnectorKind, ConnectorStatus, RequestContext, SenderStatus } from "../domain/types.js";
 
 export type AppOptions = {
   settings?: Settings;
@@ -29,6 +29,106 @@ function createDefaultStore(settings: Settings): AgentStore {
     return createMemoryStore();
   }
   return createPostgresStore(createPool(settings));
+}
+
+const allowedConnectorKinds = new Set<ConnectorKind>(["owner-contact", "imap", "smtp", "openai"]);
+const allowedConnectorStatuses = new Set<ConnectorStatus>(["enabled", "disabled"]);
+
+function stringValue(input: Record<string, unknown>, key: string): string | undefined {
+  const value = input[key];
+  return typeof value === "string" ? value.trim() || undefined : undefined;
+}
+
+function numberValue(input: Record<string, unknown>, key: string): number | undefined {
+  const value = input[key];
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
+}
+
+function booleanValue(input: Record<string, unknown>, key: string): boolean | undefined {
+  const value = input[key];
+  return typeof value === "boolean" ? value : undefined;
+}
+
+function sanitizeConnectorConfig(
+  kind: ConnectorKind,
+  input: Record<string, unknown>,
+  existing: Record<string, unknown> = {}
+): Record<string, unknown> {
+  if (kind === "owner-contact") {
+    return {
+      name: stringValue(input, "name") ?? null,
+      email: stringValue(input, "email") ?? null,
+      mobile: stringValue(input, "mobile") ?? null,
+      provider: stringValue(input, "provider") ?? null,
+      sms_gateway: stringValue(input, "smsGateway") ?? stringValue(input, "sms_gateway") ?? null,
+      mms_gateway: stringValue(input, "mmsGateway") ?? stringValue(input, "mms_gateway") ?? null
+    };
+  }
+  if (kind === "imap") {
+    const existingImap = typeof existing.imap === "object" && existing.imap !== null ? existing.imap as Record<string, unknown> : {};
+    const password = stringValue(input, "password") ?? stringValue(existingImap, "password");
+    return {
+      username: stringValue(input, "username") ?? null,
+      imap: {
+        host: stringValue(input, "host") ?? null,
+        port: numberValue(input, "port") ?? null,
+        secure: booleanValue(input, "secure") ?? null,
+        mailbox: stringValue(input, "mailbox") ?? "INBOX",
+        password: password ?? null
+      }
+    };
+  }
+  if (kind === "smtp") {
+    const existingSmtp = typeof existing.smtp === "object" && existing.smtp !== null ? existing.smtp as Record<string, unknown> : {};
+    const password = stringValue(input, "password") ?? stringValue(existingSmtp, "password");
+    return {
+      username: stringValue(input, "username") ?? null,
+      smtp: {
+        host: stringValue(input, "host") ?? null,
+        port: numberValue(input, "port") ?? null,
+        secure: booleanValue(input, "secure") ?? null,
+        from: stringValue(input, "from") ?? null,
+        password: password ?? null
+      }
+    };
+  }
+  return {
+    base_url: stringValue(input, "baseUrl") ?? stringValue(input, "base_url") ?? null
+  };
+}
+
+function connectorResponse(connector: {
+  id: string;
+  userId: string;
+  kind: ConnectorKind;
+  status: ConnectorStatus;
+  config: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}) {
+  const config = structuredClone(connector.config);
+  if (connector.kind === "imap") {
+    const imap = typeof config.imap === "object" && config.imap !== null ? config.imap as Record<string, unknown> : {};
+    const passwordSet = typeof imap.password === "string" && imap.password.trim() !== "";
+    delete imap.password;
+    imap.password_set = passwordSet;
+    config.imap = imap;
+  }
+  if (connector.kind === "smtp") {
+    const smtp = typeof config.smtp === "object" && config.smtp !== null ? config.smtp as Record<string, unknown> : {};
+    const passwordSet = typeof smtp.password === "string" && smtp.password.trim() !== "";
+    delete smtp.password;
+    smtp.password_set = passwordSet;
+    config.smtp = smtp;
+  }
+  return { ...connector, config };
 }
 
 export function buildApp(options: AppOptions = {}): Hono {
@@ -350,7 +450,6 @@ export function buildApp(options: AppOptions = {}): Hono {
   for (const [path, key] of [
     ["/api/v1/conversations", "conversations"],
     ["/api/v1/memory", "documents"],
-    ["/api/v1/connectors", "connectors"],
     ["/api/v1/approvals", "approvals"]
   ] as const) {
     app.get(path, async (context) => {
@@ -361,6 +460,52 @@ export function buildApp(options: AppOptions = {}): Hono {
       return context.json({ [key]: [] });
     });
   }
+
+  app.get("/api/v1/connectors", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const connectors = await store.listConnectors(authContext);
+    return context.json({ connectors: connectors.map(connectorResponse) });
+  });
+
+  app.put("/api/v1/connectors/:kind", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const kind = context.req.param("kind") as ConnectorKind;
+    if (!allowedConnectorKinds.has(kind)) {
+      return context.json(errorPayload("validation_error", "Unknown connector kind.", authContext.requestId), 400);
+    }
+    const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
+    if (!payload) {
+      return context.json(errorPayload("validation_error", "Request body is required.", authContext.requestId), 400);
+    }
+    const status = String(payload.status ?? "enabled") as ConnectorStatus;
+    if (!allowedConnectorStatuses.has(status)) {
+      return context.json(errorPayload("validation_error", "Connector status must be enabled or disabled.", authContext.requestId), 400);
+    }
+    const configInput = typeof payload.config === "object" && payload.config !== null
+      ? payload.config as Record<string, unknown>
+      : payload;
+    const existing = await store.getConnector(authContext, kind);
+    const config = sanitizeConnectorConfig(kind, configInput, existing?.config ?? {});
+    const connector = await store.upsertConnector(authContext, {
+      kind,
+      status,
+      config
+    });
+    if (kind === "owner-contact" && status === "enabled") {
+      for (const address of [config.email, config.sms_gateway, config.mms_gateway]) {
+        if (typeof address === "string" && address.trim()) {
+          await store.setSenderStatus(authContext, address, "owner");
+        }
+      }
+    }
+    return context.json(connectorResponse(connector));
+  });
 
   app.get("/api/v1/messages", async (context) => {
     const authContext = await requireContext(context);
@@ -480,10 +625,11 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (authContext instanceof Response) {
       return authContext;
     }
-    const [tasks, outbox, audit] = await Promise.all([
+    const [tasks, outbox, audit, connectors] = await Promise.all([
       store.listTasks(authContext),
       store.listOutboundMessages(authContext),
-      store.listAudit(authContext, true)
+      store.listAudit(authContext, true),
+      store.listConnectors(authContext)
     ]);
     const dueTasks = tasks.filter((task) => {
       if (task.status !== "pending" || !task.dueAt) {
@@ -510,6 +656,13 @@ export function buildApp(options: AppOptions = {}): Hono {
           sendingMessages: countOutbox("sending"),
           failedMessages: countOutbox("failed"),
           lastAuditAt: audit.find((event) => event.action.startsWith("outbound."))?.createdAt ?? null
+        },
+        {
+          name: "inbound-mailbox",
+          status: connectors.find((connector) => connector.kind === "imap" && connector.status === "enabled")
+            ? "configured"
+            : "disabled",
+          lastAuditAt: audit.find((event) => event.action.startsWith("message.inbound"))?.createdAt ?? null
         }
       ]
     });

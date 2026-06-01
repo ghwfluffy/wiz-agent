@@ -131,6 +131,26 @@ export type AiConfig = {
   repairAttemptLimit: number;
 };
 
+export type ConnectorKind = "owner-contact" | "imap" | "smtp" | "openai";
+
+export type ConnectorStatus = "enabled" | "disabled";
+
+export type ConnectorRecord = {
+  id: string;
+  userId: string;
+  kind: ConnectorKind;
+  status: ConnectorStatus;
+  config: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConnectorInput = {
+  kind: ConnectorKind;
+  status: ConnectorStatus;
+  config: Record<string, unknown>;
+};
+
 export type AgentRunRecord = {
   id: string;
   userId: string;
@@ -191,6 +211,9 @@ export type AgentStore = {
   listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]>;
   getAiConfig(): Promise<AiConfig>;
   updateAiConfig(context: RequestContext, config: AiConfig): Promise<AiConfig>;
+  listConnectors(context: RequestContext): Promise<ConnectorRecord[]>;
+  getConnector(context: RequestContext, kind: ConnectorKind): Promise<ConnectorRecord | undefined>;
+  upsertConnector(context: RequestContext, input: ConnectorInput): Promise<ConnectorRecord>;
   createAgentRun(
     context: RequestContext,
     input: {

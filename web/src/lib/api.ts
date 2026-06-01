@@ -109,6 +109,19 @@ export type JobStatus = {
   lastAuditAt?: string | null;
 };
 
+export type ConnectorKind = "owner-contact" | "imap" | "smtp" | "openai";
+
+export type ConnectorStatus = "enabled" | "disabled";
+
+export type Connector = {
+  id: string;
+  kind: ConnectorKind;
+  status: ConnectorStatus;
+  config: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(apiUrl(path), {
     credentials: "include",
@@ -157,10 +170,34 @@ export const api = {
       body: JSON.stringify({ prompt })
     });
   },
+  listTasks(): Promise<{ tasks: Task[] }> {
+    return request<{ tasks: Task[] }>("/tasks");
+  },
+  listInbox(): Promise<{ messages: InboundMessage[] }> {
+    return request<{ messages: InboundMessage[] }>("/messages");
+  },
+  listOutbox(): Promise<{ messages: OutboxMessage[] }> {
+    return request<{ messages: OutboxMessage[] }>("/outbox");
+  },
   updateOutbox(id: string, status: "pending" | "approved" | "cancelled"): Promise<OutboxMessage> {
     return request<OutboxMessage>(`/outbox/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify({ status })
+    });
+  },
+  listAudit(): Promise<{ events: AuditEvent[] }> {
+    return request<{ events: AuditEvent[] }>("/audit");
+  },
+  listSenders(): Promise<{ senders: Sender[] }> {
+    return request<{ senders: Sender[] }>("/senders");
+  },
+  listConnectors(): Promise<{ connectors: Connector[] }> {
+    return request<{ connectors: Connector[] }>("/connectors");
+  },
+  updateConnector(kind: ConnectorKind, status: ConnectorStatus, config: Record<string, unknown>): Promise<Connector> {
+    return request<Connector>(`/connectors/${encodeURIComponent(kind)}`, {
+      method: "PUT",
+      body: JSON.stringify({ status, config })
     });
   },
   setSender(address: string, status: Sender["status"]): Promise<{ senders: Sender[] }> {
@@ -169,11 +206,17 @@ export const api = {
       body: JSON.stringify({ status })
     });
   },
+  getAiConfig(): Promise<AiConfig> {
+    return request<AiConfig>("/admin/ai-config");
+  },
   updateAiConfig(config: AiConfig): Promise<AiConfig> {
     return request<AiConfig>("/admin/ai-config", {
       method: "PUT",
       body: JSON.stringify(config)
     });
+  },
+  listJobs(): Promise<{ jobs: JobStatus[] }> {
+    return request<{ jobs: JobStatus[] }>("/admin/jobs");
   },
   async dashboard(): Promise<{
     tasks: Task[];
@@ -181,17 +224,19 @@ export const api = {
     outbox: OutboxMessage[];
     audit: AuditEvent[];
     senders: Sender[];
+    connectors: Connector[];
     aiConfig: AiConfig | null;
     jobs: JobStatus[];
   }> {
-    const [tasks, inbox, outbox, audit, senders, aiConfig, jobs] = await Promise.all([
-      request<{ tasks: Task[] }>("/tasks"),
-      request<{ messages: InboundMessage[] }>("/messages"),
-      request<{ messages: OutboxMessage[] }>("/outbox"),
-      request<{ events: AuditEvent[] }>("/audit"),
-      request<{ senders: Sender[] }>("/senders"),
-      request<AiConfig>("/admin/ai-config").catch(() => null),
-      request<{ jobs: JobStatus[] }>("/admin/jobs").catch(() => ({ jobs: [] }))
+    const [tasks, inbox, outbox, audit, senders, connectors, aiConfig, jobs] = await Promise.all([
+      api.listTasks(),
+      api.listInbox(),
+      api.listOutbox(),
+      api.listAudit(),
+      api.listSenders(),
+      api.listConnectors(),
+      api.getAiConfig().catch(() => null),
+      api.listJobs().catch(() => ({ jobs: [] }))
     ]);
     return {
       tasks: tasks.tasks,
@@ -199,6 +244,7 @@ export const api = {
       outbox: outbox.messages,
       audit: audit.events,
       senders: senders.senders,
+      connectors: connectors.connectors,
       aiConfig,
       jobs: jobs.jobs
     };

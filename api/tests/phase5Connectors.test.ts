@@ -73,6 +73,30 @@ describe("inbound sender policy", () => {
     });
   });
 
+  it("routes sender-table owner messages to the agent path", async () => {
+    const { context, store } = await testContext();
+    await store.setSenderStatus(context, "owner-sms@example.test", "owner");
+
+    const result = await handleInboundMessage({
+      context,
+      settings: loadSettings({ APP_ENV: "test" }),
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      message: {
+        providerMessageId: "owner-table-1",
+        fromAddr: "owner-sms@example.test",
+        toAddr: "agent@example.test",
+        subject: "status",
+        bodyText: "what is going on?"
+      }
+    });
+
+    expect(result).toMatchObject({
+      classification: "owner",
+      action: "routed_to_agent"
+    });
+  });
+
   it("records owner agent handling links back to inbox and task events", async () => {
     const { context, store } = await testContext();
 
@@ -605,15 +629,18 @@ describe("outbound queue delivery", () => {
 
   it("sends pending SMS gateway messages through SMTP transport", async () => {
     const { context, store } = await testContext();
-    const dir = mkdtempSync(join(tmpdir(), "agent-secrets-"));
-    writeFileSync(join(dir, "email.json"), JSON.stringify({
-      username: "sender@example.test",
-      password: "secret",
-      smtp: {
-        host: "smtp.example.test",
-        from: "sender@example.test"
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
       }
-    }), "utf8");
+    });
     await store.queueOutboundMessage(context, {
       channel: "sms",
       status: "pending",
@@ -627,7 +654,6 @@ describe("outbound queue delivery", () => {
       context,
       settings: loadSettings({
         APP_ENV: "test",
-        AGENT_SECRET_DIR: dir,
         AGENT_OUTBOUND_ENABLED: "true"
       }),
       transport: { sendMail }

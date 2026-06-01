@@ -67,7 +67,8 @@ model calls locally, set `AGENT_OPENAI_API_KEY` in your ignored local env file
 or point `AGENT_OPENAI_API_KEY_FILE` at an ignored file. `AGENT_OPENAI_BASE_URL`
 defaults to `https://api.openai.com/v1`.
 
-Live connector config can be seeded from ignored files with:
+Live connector config can be seeded from ignored files for initial bootstrap or
+repair with:
 
 ```bash
 cd api
@@ -78,12 +79,17 @@ The dry run reports which settings are present without printing secret values.
 The non-dry-run path requires an existing local agent user created by standalone
 or OAuth sign-in.
 
-The seed command reads:
+The seed command reads legacy/bootstrap files:
 
 - `contact.json` for owner email/SMS/MMS gateway addresses;
 - `email.json` for IMAP/SMTP connector metadata;
 - `openai.txt` when `AGENT_OPENAI_API_KEY_FILE` points at the mounted secret
   file.
+
+Normal user setup happens through the web Settings tab. Each user owns their
+contact details, SMS/MMS gateway addresses, assistant mailbox identity, IMAP
+settings, and SMTP settings. The webmaster-owned OpenAI API key remains
+deployment configuration.
 
 Connector and integration tests also avoid live networks. They use deterministic
 sender classification, mock fetch implementations, and outbox records instead of
