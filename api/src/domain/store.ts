@@ -885,6 +885,16 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return result.rows.map(inboundFromRow);
     },
 
+    async getInboundMessage(context, messageId) {
+      const result = await pool.query(
+        `SELECT * FROM messages
+         WHERE id = $1 AND user_id = $2 AND direction = 'inbound'
+         LIMIT 1`,
+        [messageId, context.userId]
+      );
+      return result.rows[0] ? inboundFromRow(result.rows[0]) : undefined;
+    },
+
     async updateInboundMessageHandling(context, messageId, handling) {
       const result = await pool.query(
         `UPDATE messages
@@ -1458,6 +1468,10 @@ export function createMemoryStore(): AgentStore {
           const bDate = b.receivedAt ?? b.createdAt;
           return bDate.localeCompare(aDate) || b.createdAt.localeCompare(a.createdAt);
         });
+    },
+    async getInboundMessage(context, messageId) {
+      const message = inboundMessages.get(messageId);
+      return message && message.userId === context.userId ? message : undefined;
     },
     async updateInboundMessageHandling(context, messageId, handling) {
       const message = inboundMessages.get(messageId);

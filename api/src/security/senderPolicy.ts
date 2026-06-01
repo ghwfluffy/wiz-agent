@@ -4,6 +4,7 @@ import type {
   InboundHandlingResult,
   InboundMessageInput,
   InboundMessageRecord,
+  OutboundMessageRecord,
   RequestContext,
   SenderClassification
 } from "../domain/types.js";
@@ -44,6 +45,55 @@ export function summarizeUntrustedMessage(message: InboundMessageInput): string 
   const subject = message.subject?.trim() || "(no subject)";
   const firstLine = message.bodyText.replace(/\s+/g, " ").trim().slice(0, 240);
   return `Untrusted sender ${normalizeAddress(message.fromAddr)} sent "${subject}". Summary: ${firstLine || "No body text."}`;
+}
+
+function configString(config: Record<string, unknown>, key: string): string | undefined {
+  const value = config[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export async function resolveOwnerReviewTarget(options: {
+  context: RequestContext;
+  settings: Settings;
+  store: AgentStore;
+}): Promise<{ channel: "email" | "sms" | "mms"; toAddr: string; source: "owner-contact" | "settings" } | undefined> {
+  const ownerContact = await options.store.getConnector(options.context, "owner-contact");
+  if (ownerContact?.status === "enabled") {
+    const smsGateway = configString(ownerContact.config, "sms_gateway");
+    if (smsGateway) {
+      return { channel: "sms", toAddr: smsGateway, source: "owner-contact" };
+    }
+    const mmsGateway = configString(ownerContact.config, "mms_gateway");
+    if (mmsGateway) {
+      return { channel: "mms", toAddr: mmsGateway, source: "owner-contact" };
+    }
+    const email = configString(ownerContact.config, "email");
+    if (email) {
+      return { channel: "email", toAddr: email, source: "owner-contact" };
+    }
+  }
+  if (options.settings.agentUntrustedReviewSms.trim()) {
+    return { channel: "sms", toAddr: options.settings.agentUntrustedReviewSms.trim(), source: "settings" };
+  }
+  return undefined;
+}
+
+export async function queueOwnerReviewNotification(options: {
+  context: RequestContext;
+  settings: Settings;
+  store: AgentStore;
+  message: InboundMessageInput;
+}): Promise<OutboundMessageRecord | undefined> {
+  const target = await resolveOwnerReviewTarget(options);
+  if (!target) {
+    return undefined;
+  }
+  return options.store.queueOutboundMessage(options.context, {
+    channel: target.channel,
+    status: "pending",
+    toAddr: target.toAddr,
+    bodyText: summarizeUntrustedMessage(options.message)
+  });
 }
 
 export async function classifySender(
@@ -158,7 +208,13 @@ export async function handleInboundMessage(
       messageId: recorded.id
     };
   }
-  if (!options.settings.agentUntrustedReviewSms) {
+  const outbound = await queueOwnerReviewNotification({
+    context: options.context,
+    settings: options.settings,
+    store: options.store,
+    message: options.message
+  });
+  if (!outbound) {
     await options.store.updateInboundMessageHandling(options.context, recorded.id, {
       action: "queued_owner_review"
     });
@@ -168,12 +224,6 @@ export async function handleInboundMessage(
       messageId: recorded.id
     };
   }
-  const outbound = await options.store.queueOutboundMessage(options.context, {
-    channel: "sms",
-    status: "requires_approval",
-    toAddr: options.settings.agentUntrustedReviewSms,
-    bodyText: summarizeUntrustedMessage(options.message)
-  });
   await options.store.updateInboundMessageHandling(options.context, recorded.id, {
     action: "queued_owner_review",
     outboundMessageId: outbound.id

@@ -55,6 +55,7 @@ Current tests cover:
 - IMAP settings tests with redacted provider errors.
 - worker IMAP failure audit visibility.
 - sender-table owner classification.
+- owner-contact backed untrusted sender review notification queueing.
 - outbox listing, status updates, SMTP queue delivery, and fail-closed outbound
   delivery.
 - operations dashboard rendering.

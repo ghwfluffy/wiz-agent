@@ -364,6 +364,60 @@ describe("domain and user ownership APIs", () => {
     });
   });
 
+  it("queues a missing owner review notification from an inbox row", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "inbox-review-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "inbox-review-test",
+      session
+    };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        sms_gateway: "owner-sms@example.test"
+      }
+    });
+    const recorded = await store.recordInboundMessage(context, {
+      providerMessageId: "inbox-review-provider-1",
+      fromAddr: "unknown@example.test",
+      toAddr: "agent@example.test",
+      subject: "Hello",
+      bodyText: "Can you do something?",
+      source: "email"
+    }, "untrusted");
+    await store.updateInboundMessageHandling(context, recorded.id, {
+      action: "queued_owner_review"
+    });
+
+    const response = await app.request(`/api/v1/messages/${recorded.id}/owner-review`, {
+      method: "POST",
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as {
+      message: { outboundMessageId: string };
+      outbound: { status: string; toAddr: string; bodyText: string };
+    };
+    expect(payload.message.outboundMessageId).toBeTruthy();
+    expect(payload.outbound).toMatchObject({
+      status: "pending",
+      toAddr: "owner-sms@example.test"
+    });
+    expect(payload.outbound.bodyText).toContain("Untrusted sender unknown@example.test");
+  });
+
   it("lets the current user manage connector configuration with redacted credentials", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

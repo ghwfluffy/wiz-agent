@@ -22,7 +22,10 @@ any agent/tool path:
   summarized or ingested, but it is not treated as owner instructions.
 - `untrusted`: every unknown sender. Untrusted content must not trigger tool
   calls. The deterministic host records the message and queues a short
-  conversational owner-review notification instead.
+  conversational owner-review notification instead. Review notifications use
+  the current user's owner-contact connector first, preferring SMS gateway, then
+  MMS gateway, then owner email. The legacy environment review target is only a
+  fallback.
 - `blocked`: ignored except for durable audit/message records.
 
 Untrusted-message review is deliberately outside the agent path. The review text
@@ -57,7 +60,10 @@ The operations UI has an Inbox tab. It lists inbound messages in reverse
 chronological order with sender, source, classification, handling action, and a
 task link when the message was assigned to a task. Following the task link opens
 the task modal and timeline, including `message.inbound.assigned` and related
-agent/tool events.
+agent/tool events. For untrusted messages, the Inbox tab shows whether the
+owner-review notification is pending, sent, failed, or missing. Older messages
+without a linked notification expose a Notify owner action that queues the same
+deterministic review notification after owner contact settings are configured.
 
 ## Prompt-Injection Controls
 
@@ -121,10 +127,12 @@ delivery, status updates, and audit records.
 
 Approval gates delivery only for records with `status = 'requires_approval'`.
 The model tool defaults to requiring approval unless the tool arguments
-explicitly set `approvalRequired: false`; deterministic host code may also queue
-review notifications as `requires_approval`. The delivery worker only attempts
-records with `pending` or `approved` status, so `requires_approval` records stay
-blocked until an operator or future approval mechanism changes the status.
+explicitly set `approvalRequired: false`. Deterministic untrusted-sender review
+notifications are host-generated from bounded message metadata and are queued as
+`pending`, not `requires_approval`, so the owner actually receives the prompt to
+review the sender. The delivery worker only attempts records with `pending` or
+`approved` status, so `requires_approval` records stay blocked until an
+operator or future approval mechanism changes the status.
 
 The current implemented approval mechanism is the operations UI calling
 `PATCH /api/v1/outbox/:id` to change a record to `approved` or `cancelled`.

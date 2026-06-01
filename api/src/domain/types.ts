@@ -252,6 +252,7 @@ export type AgentStore = {
     classification: SenderClassification
   ): Promise<InboundMessageRecord & { duplicate: boolean }>;
   listInboundMessages(context: RequestContext): Promise<InboundMessageRecord[]>;
+  getInboundMessage(context: RequestContext, messageId: string): Promise<InboundMessageRecord | undefined>;
   updateInboundMessageHandling(
     context: RequestContext,
     messageId: string,

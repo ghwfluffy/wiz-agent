@@ -7,6 +7,7 @@ import { testImapConnection } from "../connectors/imapPoller.js";
 import { createPool } from "../db/pool.js";
 import { createMemoryStore, createPostgresStore } from "../domain/store.js";
 import type { AgentStore, ConnectorKind, ConnectorStatus, RequestContext, SenderStatus } from "../domain/types.js";
+import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
 
 export type AppOptions = {
   settings?: Settings;
@@ -534,6 +535,37 @@ export function buildApp(options: AppOptions = {}): Hono {
       return authContext;
     }
     return context.json({ messages: await store.listInboundMessages(authContext) });
+  });
+
+  app.post("/api/v1/messages/:id/owner-review", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const message = await store.getInboundMessage(authContext, context.req.param("id"));
+    if (!message) {
+      return context.json(errorPayload("http_404", "Inbox message not found.", authContext.requestId), 404);
+    }
+    if (message.classification !== "untrusted" || message.handlingAction !== "queued_owner_review") {
+      return context.json(errorPayload("validation_error", "Only queued untrusted reviews can notify the owner.", authContext.requestId), 400);
+    }
+    if (message.outboundMessageId) {
+      return context.json(errorPayload("validation_error", "This inbox message already has a linked owner review notification.", authContext.requestId), 400);
+    }
+    const outbound = await queueOwnerReviewNotification({
+      context: authContext,
+      settings,
+      store,
+      message
+    });
+    if (!outbound) {
+      return context.json(errorPayload("validation_error", "Owner contact SMS, MMS, or email must be configured before sending a review notification.", authContext.requestId), 400);
+    }
+    const updated = await store.updateInboundMessageHandling(authContext, message.id, {
+      action: "queued_owner_review",
+      outboundMessageId: outbound.id
+    });
+    return context.json({ message: updated, outbound });
   });
 
   app.get("/api/v1/audit", async (context) => {

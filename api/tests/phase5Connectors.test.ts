@@ -231,12 +231,18 @@ describe("inbound sender policy", () => {
 
   it("queues only a conversational owner review for untrusted senders", async () => {
     const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        sms_gateway: "owner-sms@example.test"
+      }
+    });
 
     const result = await handleInboundMessage({
       context,
       settings: loadSettings({
-        APP_ENV: "test",
-        AGENT_UNTRUSTED_REVIEW_SMS: "owner-sms@example.test"
+        APP_ENV: "test"
       }),
       store,
       rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
@@ -254,6 +260,13 @@ describe("inbound sender policy", () => {
       action: "queued_owner_review"
     });
     expect(result.outboundMessageId).toBeTruthy();
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        status: "pending",
+        toAddr: "owner-sms@example.test"
+      })
+    ]);
     expect(summarizeUntrustedMessage({
       providerMessageId: "x",
       fromAddr: "unknown@example.test",

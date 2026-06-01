@@ -119,6 +119,7 @@ const taskStatuses = ["pending", "claimed", "running", "completed", "cancelled",
 const activeOutbox = computed(() => outbox.value.filter((message) => ["requires_approval", "pending", "approved", "sending"].includes(message.status)));
 const outboxHistory = computed(() => outbox.value.filter((message) => ["sent", "failed"].includes(message.status)));
 const recentAudit = computed(() => audit.value.slice(0, 12));
+const outboxById = computed(() => new Map(outbox.value.map((message) => [message.id, message])));
 const totalTaskPages = computed(() => Math.max(1, Math.ceil(tasks.value.length / tasksPerPage)));
 const totalInboxPages = computed(() => Math.max(1, Math.ceil(inbox.value.length / inboxPerPage)));
 const totalOutboxPages = computed(() => Math.max(1, Math.ceil(outboxHistory.value.length / outboxPerPage)));
@@ -238,6 +239,33 @@ function statusTagClass(status: string): string {
     return "cds--tag--gray";
   }
   return "cds--tag--warm-gray";
+}
+
+function linkedOutbox(message: InboundMessage): OutboxMessage | undefined {
+  return message.outboundMessageId ? outboxById.value.get(message.outboundMessageId) : undefined;
+}
+
+function inboxActionLabel(message: InboundMessage): string {
+  if (message.handlingAction === "queued_owner_review") {
+    const linked = linkedOutbox(message);
+    if (linked) {
+      return `Owner review ${linked.status}`;
+    }
+    return "Owner review not sent";
+  }
+  if (message.handlingAction === "routed_to_agent") {
+    return "Routed to agent";
+  }
+  if (message.handlingAction === "accepted_newsletter") {
+    return "Accepted newsletter";
+  }
+  if (message.handlingAction === "rate_limited") {
+    return "Rate limited";
+  }
+  if (message.handlingAction === "blocked") {
+    return "Blocked";
+  }
+  return "Recorded";
 }
 
 function formatDetails(details: Record<string, unknown>): string {
@@ -495,6 +523,23 @@ async function updateOutboxStatus(message: OutboxMessage, status: "approved" | "
     await loadDashboard();
   } catch {
     dashboardError.value = "Unable to update the outbound message.";
+  }
+}
+
+async function approveInboxOwnerReview(message: InboundMessage): Promise<void> {
+  const linked = linkedOutbox(message);
+  if (!linked) {
+    return;
+  }
+  await updateOutboxStatus(linked, "approved");
+}
+
+async function queueInboxOwnerReview(message: InboundMessage): Promise<void> {
+  try {
+    await api.queueOwnerReview(message.id);
+    await loadDashboard();
+  } catch {
+    dashboardError.value = "Unable to queue an owner review notification. Check owner contact settings.";
   }
 }
 
@@ -824,7 +869,27 @@ onUnmounted(() => {
                   <td>
                     <span class="cds--tag" :class="statusTagClass(message.classification)">{{ message.classification }}</span>
                   </td>
-                  <td>{{ message.handlingAction || "recorded" }}</td>
+                  <td>
+                    <div class="table-actions">
+                      <span>{{ inboxActionLabel(message) }}</span>
+                      <button
+                        v-if="message.handlingAction === 'queued_owner_review' && !message.outboundMessageId"
+                        class="cds--btn cds--btn--sm cds--btn--primary"
+                        type="button"
+                        @click="queueInboxOwnerReview(message)"
+                      >
+                        Notify owner
+                      </button>
+                      <button
+                        v-if="linkedOutbox(message)?.status === 'requires_approval'"
+                        class="cds--btn cds--btn--sm cds--btn--primary"
+                        type="button"
+                        @click="approveInboxOwnerReview(message)"
+                      >
+                        Approve
+                      </button>
+                    </div>
+                  </td>
                   <td>
                     <button v-if="message.taskId" class="link-button" type="button" @click="openInboxTask(message)">
                       {{ message.taskId }}

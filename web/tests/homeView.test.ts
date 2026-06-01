@@ -62,6 +62,22 @@ describe("home view", () => {
             outboundMessageId: null,
             receivedAt: "",
             createdAt: ""
+          }, {
+            id: "in-2",
+            providerMessageId: "provider-2",
+            fromAddr: "unknown@example.test",
+            toAddr: "agent@example.test",
+            subject: "Unknown sender",
+            bodyText: "hello",
+            source: "email",
+            classification: "untrusted",
+            handlingAction: "queued_owner_review",
+            taskId: null,
+            taskEventId: null,
+            agentRunId: null,
+            outboundMessageId: null,
+            receivedAt: "",
+            createdAt: ""
           }]
         })
       })
@@ -126,6 +142,8 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("AI configuration");
     expect(wrapper.text()).toContain("Account settings");
     expect(wrapper.text()).toContain("please approve");
+    expect(wrapper.text()).toContain("Owner review not sent");
+    expect(wrapper.text()).toContain("Notify owner");
     expect(wrapper.text()).toContain("sent@example.test");
     expect(wrapper.text()).toContain("SMTP error");
   });

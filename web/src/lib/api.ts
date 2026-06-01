@@ -205,6 +205,11 @@ export const api = {
       body: JSON.stringify({ status })
     });
   },
+  queueOwnerReview(id: string): Promise<{ message: InboundMessage; outbound: OutboxMessage }> {
+    return request<{ message: InboundMessage; outbound: OutboxMessage }>(`/messages/${encodeURIComponent(id)}/owner-review`, {
+      method: "POST"
+    });
+  },
   listAudit(): Promise<{ events: AuditEvent[] }> {
     return request<{ events: AuditEvent[] }>("/audit");
   },
