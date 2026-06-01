@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadSettings } from "../src/config/settings.js";
 import { MockModelClient } from "../src/agent/modelClient.js";
+import { buildImapSearchCriteria, isNewerThanLastReceived } from "../src/connectors/imapPoller.js";
 import { processInboundMessage } from "../src/connectors/inboundProcessor.js";
 import { processOutboundQueue, resolveSmtpSecure } from "../src/connectors/smtpSender.js";
 import { createMemoryStore } from "../src/domain/store.js";
@@ -45,6 +46,18 @@ async function testContext(): Promise<{ context: RequestContext; store: ReturnTy
 }
 
 describe("inbound sender policy", () => {
+  it("builds incremental IMAP search criteria from stored mailbox progress", () => {
+    expect(buildImapSearchCriteria({})).toEqual({ seen: false });
+    expect(buildImapSearchCriteria({ lastReceivedAt: "2026-06-01T03:00:00.000Z" })).toEqual({
+      since: new Date("2026-06-01T03:00:00.000Z")
+    });
+    expect(buildImapSearchCriteria({ lastReceivedAt: "2026-06-01T03:00:00.000Z", lastUid: 42 })).toEqual({
+      uid: "43:*"
+    });
+    expect(isNewerThanLastReceived("2026-06-01T03:00:01.000Z", "2026-06-01T03:00:00.000Z")).toBe(true);
+    expect(isNewerThanLastReceived("2026-06-01T03:00:00.000Z", "2026-06-01T03:00:00.000Z")).toBe(false);
+  });
+
   it("routes owner messages to the agent path", async () => {
     const { context, store } = await testContext();
     const settings = loadSettings({

@@ -1,4 +1,4 @@
-import { ImapFlow } from "imapflow";
+import { ImapFlow, type SearchObject } from "imapflow";
 import { simpleParser } from "mailparser";
 import type { AgentModelClient } from "../agent/modelClient.js";
 import type { Settings } from "../config/settings.js";
@@ -15,6 +15,8 @@ type ImapConfig = {
   port?: number;
   secure?: boolean;
   mailbox: string;
+  lastReceivedAt?: string;
+  lastUid?: number;
 };
 
 type FetchMessage = {
@@ -81,6 +83,42 @@ function booleanConfig(primary: unknown, fallback: unknown): boolean | undefined
   return undefined;
 }
 
+function stringFromConfig(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function numberFromConfig(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function validDate(value: string | undefined): Date | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const parsed = new Date(value);
+  return Number.isFinite(parsed.getTime()) ? parsed : undefined;
+}
+
+export function buildImapSearchCriteria(config: Pick<ImapConfig, "lastReceivedAt" | "lastUid">): SearchObject {
+  if (typeof config.lastUid === "number" && Number.isFinite(config.lastUid) && config.lastUid > 0) {
+    return { uid: `${Math.trunc(config.lastUid) + 1}:*` };
+  }
+  const lastReceivedAt = validDate(config.lastReceivedAt);
+  if (lastReceivedAt) {
+    return { since: lastReceivedAt };
+  }
+  return { seen: false };
+}
+
+export function isNewerThanLastReceived(receivedAt: string, lastReceivedAt: string | undefined): boolean {
+  const last = validDate(lastReceivedAt);
+  if (!last) {
+    return true;
+  }
+  const received = validDate(receivedAt);
+  return Boolean(received && received.getTime() > last.getTime());
+}
+
 export function imapErrorDetails(error: unknown): ImapErrorDetails {
   if (!(error instanceof Error)) {
     return { message: String(error) };
@@ -118,7 +156,68 @@ export async function resolveImapConfig(options: {
     host: stringConfig(imapConfig.host, secret.imap?.host),
     port: numberConfig(imapConfig.port, secret.imap?.port),
     secure: booleanConfig(imapConfig.secure, secret.imap?.secure),
-    mailbox: stringConfig(imapConfig.mailbox, secret.imap?.mailbox) ?? "INBOX"
+    mailbox: stringConfig(imapConfig.mailbox, secret.imap?.mailbox) ?? "INBOX",
+    lastReceivedAt: stringFromConfig(imapConfig.last_received_at),
+    lastUid: numberFromConfig(imapConfig.last_uid)
+  };
+}
+
+async function updateImapProgress(options: {
+  store: AgentStore;
+  context: RequestContext;
+  receivedAt?: string;
+  uid?: number;
+}): Promise<void> {
+  const connector = await options.store.getConnector(options.context, "imap");
+  if (!connector) {
+    return;
+  }
+  const currentImap = objectValue(connector.config.imap);
+  const currentReceivedAt = stringFromConfig(currentImap.last_received_at);
+  const currentUid = numberFromConfig(currentImap.last_uid);
+  const receivedAt = options.receivedAt && isNewerThanLastReceived(options.receivedAt, currentReceivedAt)
+    ? options.receivedAt
+    : currentReceivedAt;
+  const uid = typeof options.uid === "number" && Number.isFinite(options.uid)
+    ? Math.max(Math.trunc(options.uid), currentUid ?? 0)
+    : currentUid;
+  await options.store.upsertConnector(options.context, {
+    kind: "imap",
+    status: connector.status,
+    config: {
+      ...connector.config,
+      imap: {
+        ...currentImap,
+        last_received_at: receivedAt ?? null,
+        last_uid: uid ?? null
+      }
+    }
+  });
+}
+
+async function seedImapProgressFromRecordedMessages(options: {
+  store: AgentStore;
+  context: RequestContext;
+  config: ImapConfig;
+}): Promise<ImapConfig> {
+  if (options.config.lastReceivedAt || options.config.lastUid) {
+    return options.config;
+  }
+  const latest = (await options.store.listInboundMessages(options.context))
+    .map((message) => message.receivedAt ?? message.createdAt)
+    .filter((value): value is string => Boolean(validDate(value)))
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0];
+  if (!latest) {
+    return options.config;
+  }
+  await updateImapProgress({
+    store: options.store,
+    context: options.context,
+    receivedAt: latest
+  });
+  return {
+    ...options.config,
+    lastReceivedAt: latest
   };
 }
 
@@ -162,10 +261,15 @@ export async function processImapInbox(options: {
   fetchImpl?: typeof fetch;
   limit?: number;
 }): Promise<{ configured: boolean; attempted: number; recorded: number; failed: number }> {
-  const config = await resolveImapConfig(options);
-  if (!config) {
+  const resolvedConfig = await resolveImapConfig(options);
+  if (!resolvedConfig) {
     return { configured: false, attempted: 0, recorded: 0, failed: 0 };
   }
+  const config = await seedImapProgressFromRecordedMessages({
+    store: options.store,
+    context: options.context,
+    config: resolvedConfig
+  });
   if (!config.host || !config.username || !config.password) {
     return { configured: false, attempted: 0, recorded: 0, failed: 0 };
   }
@@ -192,7 +296,7 @@ export async function processImapInbox(options: {
   try {
     const lock = await client.getMailboxLock(config.mailbox);
     try {
-      const unseen = await client.search({ seen: false }, { uid: true });
+      const unseen = await client.search(buildImapSearchCriteria(config), { uid: true });
       const unseenUids = Array.isArray(unseen) ? unseen.slice(0, options.limit ?? 10) : [];
       if (unseenUids.length === 0) {
         return { configured: true, attempted: 0, recorded: 0, failed: 0 };
@@ -215,6 +319,15 @@ export async function processImapInbox(options: {
             receivedAt: parsed.date?.toISOString() ?? new Date().toISOString(),
             source: sourceForAddress(fromAddr)
           };
+          if (!isNewerThanLastReceived(inbound.receivedAt ?? "", config.lastReceivedAt)) {
+            await updateImapProgress({
+              store: options.store,
+              context: options.context,
+              uid: message.uid
+            });
+            await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true });
+            continue;
+          }
           if (options.modelClient) {
             await processInboundMessage({
               context: options.context,
@@ -236,6 +349,14 @@ export async function processImapInbox(options: {
             });
           }
           await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true });
+          await updateImapProgress({
+            store: options.store,
+            context: options.context,
+            receivedAt: inbound.receivedAt ?? undefined,
+            uid: message.uid
+          });
+          config.lastReceivedAt = inbound.receivedAt ?? config.lastReceivedAt;
+          config.lastUid = typeof config.lastUid === "number" ? Math.max(config.lastUid, message.uid) : message.uid;
           recorded += 1;
         } catch {
           failed += 1;

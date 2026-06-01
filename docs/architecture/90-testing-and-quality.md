@@ -53,6 +53,7 @@ Current tests cover:
 - live config seeding from ignored connector files.
 - user-managed connector configuration with API-redacted credentials.
 - IMAP settings tests with redacted provider errors.
+- incremental IMAP search criteria from stored mailbox progress.
 - worker IMAP failure audit visibility.
 - sender-table owner classification.
 - owner-contact backed untrusted sender review notification queueing.

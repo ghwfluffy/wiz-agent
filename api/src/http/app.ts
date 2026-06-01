@@ -83,7 +83,9 @@ function sanitizeConnectorConfig(
         port: numberValue(input, "port") ?? null,
         secure: booleanValue(input, "secure") ?? null,
         mailbox: stringValue(input, "mailbox") ?? "INBOX",
-        password: password ?? null
+        password: password ?? null,
+        last_received_at: stringValue(existingImap, "last_received_at") ?? null,
+        last_uid: numberValue(existingImap, "last_uid") ?? null
       }
     };
   }

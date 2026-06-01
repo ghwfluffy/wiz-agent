@@ -18,6 +18,13 @@ const INBOUND_BATCH_LIMIT = 10;
 const INBOUND_TIMEOUT_MS = 15_000;
 const inboundRateLimiter = new SlidingWindowRateLimiter(10, 60 * 60 * 1000);
 
+class ImapIdleTimeout extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ImapIdleTimeout";
+  }
+}
+
 function workerSession(user: AuthenticatedUser): Session {
   const now = new Date();
   return {
@@ -100,13 +107,17 @@ export async function workerTick(options: {
       totals.inboundRecorded += inbound.recorded;
       totals.inboundFailed += inbound.failed;
     } catch (error) {
-      totals.inboundFailed += 1;
-      const details = imapErrorDetails(error);
-      await options.store.recordAudit(context, "worker.imap_error", "connector", "imap", details);
-      logWorker("worker_imap_error", {
-        user_id: user.id,
-        ...details
-      });
+      if (error instanceof ImapIdleTimeout) {
+        continue;
+      } else {
+        totals.inboundFailed += 1;
+        const details = imapErrorDetails(error);
+        await options.store.recordAudit(context, "worker.imap_error", "connector", "imap", details);
+        logWorker("worker_imap_error", {
+          user_id: user.id,
+          ...details
+        });
+      }
     }
   }
   return totals;
@@ -115,7 +126,7 @@ export async function workerTick(options: {
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timeout = setTimeout(() => reject(new ImapIdleTimeout(message)), timeoutMs);
   });
   return Promise.race([promise, timeoutPromise]).finally(() => {
     if (timeout) {

@@ -50,14 +50,24 @@ redact saved passwords and expose only a `password_set` flag. A user will not
 see new mail in the Inbox unless their IMAP connector is enabled, complete, and
 the worker is running.
 
+IMAP progress is stored on the per-user IMAP connector. The poller records
+`last_received_at` and `last_uid` after handled messages, then uses that progress
+on the next tick so it searches only newer mailbox entries instead of repeatedly
+walking old unread mail. IMAP `SINCE` is only day-granular, so the poller also
+checks each parsed message timestamp locally and skips messages that are not
+strictly newer than the stored `last_received_at`.
+
 The worker entrypoint must start whether Node receives an absolute or relative
 script path from `npm run worker:start`; otherwise queued outbox records and IMAP
 polling can appear healthy at the container level while no worker ticks occur.
 Worker ticks deliver pending/approved outbox records before polling IMAP. IMAP
 polling has bounded connection/socket timeouts and consumes provider socket error
-events so late transport errors are visible as worker IMAP errors instead of
-crashing the worker process. A mailbox outage must not prevent owner-review
-notifications or other queued outbound messages from being delivered.
+events so late transport errors do not crash the worker process. If an IMAP
+poll times out before any message is attempted, the worker treats it as a quiet
+idle timeout instead of recording or logging it as an actionable connector
+failure. A mailbox outage that fails an attempted poll must still be visible as
+a worker IMAP error. A mailbox outage must not prevent owner-review notifications
+or other queued outbound messages from being delivered.
 
 The Settings tab includes an IMAP test action. The test saves the current IMAP
 form values, connects to the configured mailbox, opens the mailbox, and reports
