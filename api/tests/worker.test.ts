@@ -1,9 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
-import { workerTick } from "../src/worker.js";
+import { isWorkerEntrypoint, workerTick } from "../src/worker.js";
 
 describe("worker loop", () => {
+  it("detects the worker entrypoint when node receives a relative script path", () => {
+    expect(isWorkerEntrypoint(new URL("../src/worker.ts", import.meta.url).href, "src/worker.ts")).toBe(true);
+  });
+
   it("processes approved outbox records for OAuth users without a dashboard session", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

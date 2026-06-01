@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { OpenAIModelClient, type AgentModelClient } from "./agent/modelClient.js";
 import type { AuthenticatedUser, Session } from "./auth/session.js";
 import { loadSettings, type Settings } from "./config/settings.js";
@@ -153,6 +155,13 @@ export function startWorker(): ReturnType<typeof setInterval> {
   }, WORKER_INTERVAL_MS);
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+export function isWorkerEntrypoint(metaUrl: string, argvPath: string | undefined): boolean {
+  if (!argvPath) {
+    return false;
+  }
+  return metaUrl === pathToFileURL(resolve(argvPath)).href;
+}
+
+if (isWorkerEntrypoint(import.meta.url, process.argv[1])) {
   startWorker();
 }
