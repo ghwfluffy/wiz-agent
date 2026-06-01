@@ -7,7 +7,7 @@ import { createPostgresStore } from "./domain/store.js";
 import type { AgentStore, RequestContext } from "./domain/types.js";
 import { daemonOnce as runSchedulerOnce } from "./scheduler/taskQueue.js";
 import type { MailTransport } from "./connectors/smtpSender.js";
-import { processImapInbox } from "./connectors/imapPoller.js";
+import { imapErrorDetails, processImapInbox } from "./connectors/imapPoller.js";
 import { SlidingWindowRateLimiter } from "./security/senderPolicy.js";
 
 const WORKER_INTERVAL_MS = 20_000;
@@ -40,6 +40,7 @@ export async function workerTick(options: {
   settings: Settings;
   modelClient?: AgentModelClient;
   mailTransport?: MailTransport;
+  imapProcessor?: typeof processImapInbox;
   now?: Date;
 }): Promise<{
   users: number;
@@ -67,17 +68,27 @@ export async function workerTick(options: {
   let remainingOutbound = OUTBOUND_BATCH_LIMIT;
   for (const user of users) {
     const context = workerContext(user);
-    const inbound = await processImapInbox({
-      store: options.store,
-      context,
-      settings: options.settings,
-      rateLimiter: inboundRateLimiter,
-      modelClient: options.modelClient,
-      limit: INBOUND_BATCH_LIMIT
-    });
-    totals.inboundAttempted += inbound.attempted;
-    totals.inboundRecorded += inbound.recorded;
-    totals.inboundFailed += inbound.failed;
+    try {
+      const inbound = await (options.imapProcessor ?? processImapInbox)({
+        store: options.store,
+        context,
+        settings: options.settings,
+        rateLimiter: inboundRateLimiter,
+        modelClient: options.modelClient,
+        limit: INBOUND_BATCH_LIMIT
+      });
+      totals.inboundAttempted += inbound.attempted;
+      totals.inboundRecorded += inbound.recorded;
+      totals.inboundFailed += inbound.failed;
+    } catch (error) {
+      totals.inboundFailed += 1;
+      const details = imapErrorDetails(error);
+      await options.store.recordAudit(context, "worker.imap_error", "connector", "imap", details);
+      logWorker("worker_imap_error", {
+        user_id: user.id,
+        ...details
+      });
+    }
 
     const result = await runSchedulerOnce({
       store: options.store,

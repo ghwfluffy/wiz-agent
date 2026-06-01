@@ -76,6 +76,7 @@ export type AuditEvent = {
   action: string;
   entityType: string | null;
   entityId: string | null;
+  details: Record<string, unknown>;
   createdAt: string;
 };
 
@@ -120,6 +121,25 @@ export type Connector = {
   config: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ImapTestResult = {
+  ok: boolean;
+  configured: boolean;
+  host?: string;
+  port?: number;
+  secure?: boolean;
+  mailbox?: string;
+  usernameSet?: boolean;
+  passwordSet?: boolean;
+  unseenCount?: number;
+  error?: {
+    message: string;
+    response?: string;
+    responseStatus?: string;
+    code?: string;
+    command?: string;
+  };
 };
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -199,6 +219,9 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ status, config })
     });
+  },
+  testImap(): Promise<ImapTestResult> {
+    return request<ImapTestResult>("/connectors/imap/test", { method: "POST" });
   },
   setSender(address: string, status: Sender["status"]): Promise<{ senders: Sender[] }> {
     return request<{ senders: Sender[] }>(`/senders/${encodeURIComponent(address)}`, {

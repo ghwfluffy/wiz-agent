@@ -228,6 +228,75 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("SMTP outbox");
   });
 
+  it("shows IMAP test failures from the settings tab", async () => {
+    const connector = {
+      id: "connector-1",
+      kind: "imap",
+      status: "enabled",
+      config: {
+        username: "agent@example.test",
+        imap: { host: "imap.example.test", port: 993, secure: true, mailbox: "INBOX", password_set: true }
+      },
+      createdAt: "",
+      updatedAt: ""
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          authenticated: true,
+          user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
+        })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ events: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ senders: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [connector] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          fastModel: "gpt-5-mini",
+          smartModel: "gpt-5",
+          orchestratorModel: "gpt-5",
+          repairModel: "gpt-5-mini",
+          maxToolCalls: 10,
+          maxRuntimeSec: 120,
+          repairAttemptLimit: 1
+        })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => connector })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [connector] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          ok: false,
+          configured: true,
+          error: { response: "NO IMAP disabled" }
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          events: [{ id: "audit-1", action: "connector.imap_test.failed", entityType: "connector", entityId: "imap", details: { error: { response: "NO IMAP disabled" } }, createdAt: "" }]
+        })
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome("/?tab=settings");
+    await flushPromises();
+
+    const testButton = wrapper.findAll("button").find((button) => button.text() === "Test IMAP");
+    expect(testButton).toBeTruthy();
+    await testButton!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("IMAP test failed");
+    expect(wrapper.text()).toContain("NO IMAP disabled");
+  });
+
   it("polls only the active tab data every ten seconds", async () => {
     vi.useFakeTimers();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");

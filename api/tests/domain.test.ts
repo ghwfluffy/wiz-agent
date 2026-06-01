@@ -428,6 +428,34 @@ describe("domain and user ownership APIs", () => {
     expect((internal?.config.imap as { password?: string }).password).toBe("user-mailbox-password");
   });
 
+  it("reports IMAP test failures without exposing credentials", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "imap-test-login");
+
+    const response = await app.request("/api/v1/connectors/imap/test", {
+      method: "POST",
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+
+    expect(response.status).toBe(200);
+    const payload = await response.json() as { ok: boolean; configured: boolean; error?: { message?: string } };
+    expect(payload).toMatchObject({
+      ok: false,
+      configured: false,
+      error: {
+        message: "IMAP connector is not enabled."
+      }
+    });
+    expect(JSON.stringify(payload)).not.toContain("password");
+  });
+
   it("returns operational job status for administrators", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

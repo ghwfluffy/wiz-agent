@@ -3,6 +3,7 @@ import { getCookie } from "hono/cookie";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { loadSettings, type Settings } from "../config/settings.js";
 import { clearSessionCookie, writeSessionCookie } from "../auth/session.js";
+import { testImapConnection } from "../connectors/imapPoller.js";
 import { createPool } from "../db/pool.js";
 import { createMemoryStore, createPostgresStore } from "../domain/store.js";
 import type { AgentStore, ConnectorKind, ConnectorStatus, RequestContext, SenderStatus } from "../domain/types.js";
@@ -505,6 +506,26 @@ export function buildApp(options: AppOptions = {}): Hono {
       }
     }
     return context.json(connectorResponse(connector));
+  });
+
+  app.post("/api/v1/connectors/imap/test", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const result = await testImapConnection({
+      store,
+      context: authContext,
+      settings
+    });
+    await store.recordAudit(authContext, result.ok ? "connector.imap_test.ok" : "connector.imap_test.failed", "connector", "imap", {
+      host: result.host ?? null,
+      port: result.port ?? null,
+      mailbox: result.mailbox ?? null,
+      unseen_count: result.unseenCount ?? null,
+      error: result.error ?? null
+    });
+    return context.json(result);
   });
 
   app.get("/api/v1/messages", async (context) => {

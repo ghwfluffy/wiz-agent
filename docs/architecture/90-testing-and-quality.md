@@ -52,6 +52,8 @@ Current tests cover:
   creation.
 - live config seeding from ignored connector files.
 - user-managed connector configuration with API-redacted credentials.
+- IMAP settings tests with redacted provider errors.
+- worker IMAP failure audit visibility.
 - sender-table owner classification.
 - outbox listing, status updates, SMTP queue delivery, and fail-closed outbound
   delivery.

@@ -641,6 +641,10 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return result.rows.map(auditFromRow);
     },
 
+    async recordAudit(context, action, entityType, entityId, details = {}) {
+      await recordAudit(pool, context, action, entityType, entityId, details);
+    },
+
     async getAiConfig(): Promise<AiConfig> {
       const result = await pool.query("SELECT config_json FROM admin_ai_config WHERE id = 'default'");
       return {
@@ -1260,6 +1264,9 @@ export function createMemoryStore(): AgentStore {
       return audit.filter((entry) => {
         return includeAllUsers || entry.userId === context.userId;
       });
+    },
+    async recordAudit(context, action, entityType, entityId, details = {}) {
+      pushAudit(context, action, entityType, entityId, details);
     },
     async getAiConfig(): Promise<AiConfig> {
       return aiConfig;

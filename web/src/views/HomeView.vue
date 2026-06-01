@@ -50,7 +50,10 @@ const connectors = ref<Connector[]>([]);
 const aiConfig = ref<AiConfig | null>(null);
 const jobs = ref<JobStatus[]>([]);
 const dashboardError = ref<string | null>(null);
+const imapTestMessage = ref<string | null>(null);
+const imapTestError = ref<string | null>(null);
 const saving = ref(false);
+const testingImap = ref(false);
 const taskPage = ref(1);
 const inboxPage = ref(1);
 const outboxPage = ref(1);
@@ -242,6 +245,18 @@ function formatDetails(details: Record<string, unknown>): string {
     return "";
   }
   return JSON.stringify(details, null, 2);
+}
+
+function compactDetails(details: Record<string, unknown>): string {
+  if (Object.keys(details).length === 0) {
+    return "";
+  }
+  const message = typeof details.message === "string" ? details.message : undefined;
+  const response = typeof details.response === "string" ? details.response : undefined;
+  const error = typeof details.error === "object" && details.error !== null ? details.error as Record<string, unknown> : undefined;
+  const errorMessage = typeof error?.message === "string" ? error.message : undefined;
+  const errorResponse = typeof error?.response === "string" ? error.response : undefined;
+  return response ?? errorResponse ?? message ?? errorMessage ?? JSON.stringify(details);
 }
 
 function setActiveTab(tabId: TabId): void {
@@ -554,6 +569,36 @@ async function saveImapConfig(): Promise<void> {
     dashboardError.value = "Unable to save IMAP configuration.";
   } finally {
     saving.value = false;
+  }
+}
+
+async function testImapConfig(): Promise<void> {
+  testingImap.value = true;
+  imapTestMessage.value = null;
+  imapTestError.value = null;
+  try {
+    await api.updateConnector("imap", imapForm.status, {
+      username: imapForm.username,
+      password: imapForm.password,
+      host: imapForm.host,
+      port: Number(imapForm.port),
+      secure: imapForm.secure,
+      mailbox: imapForm.mailbox
+    });
+    const connectorResponse = await api.listConnectors();
+    applyConnectors(connectorResponse.connectors);
+    const result = await api.testImap();
+    if (result.ok) {
+      imapTestMessage.value = `Connected to ${result.mailbox ?? "INBOX"}. Unread messages: ${result.unseenCount ?? 0}.`;
+    } else {
+      imapTestError.value = result.error?.response ?? result.error?.message ?? "IMAP test failed.";
+    }
+    const auditResponse = await api.listAudit();
+    audit.value = auditResponse.events;
+  } catch {
+    imapTestError.value = "Unable to test IMAP settings.";
+  } finally {
+    testingImap.value = false;
   }
 }
 
@@ -1038,6 +1083,7 @@ onUnmounted(() => {
               <tr>
                 <th>Action</th>
                 <th>Entity</th>
+                <th>Details</th>
                 <th>Created</th>
               </tr>
             </thead>
@@ -1045,6 +1091,9 @@ onUnmounted(() => {
               <tr v-for="event in recentAudit" :key="event.id">
                 <td>{{ event.action }}</td>
                 <td>{{ event.entityType || "none" }} {{ event.entityId || "" }}</td>
+                <td>
+                  <span class="table-copy">{{ compactDetails(event.details ?? {}) || "none" }}</span>
+                </td>
                 <td>{{ formatDate(event.createdAt) }}</td>
               </tr>
             </tbody>
@@ -1135,6 +1184,27 @@ onUnmounted(() => {
                 <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
                   Save IMAP
                 </button>
+                <button class="cds--btn cds--btn--secondary" type="button" :disabled="testingImap" @click="testImapConfig">
+                  Test IMAP
+                </button>
+              </div>
+              <div v-if="imapTestMessage || imapTestError" class="form-wide">
+                <div v-if="imapTestMessage" class="cds--inline-notification cds--inline-notification--success" role="status">
+                  <div class="cds--inline-notification__details">
+                    <div class="cds--inline-notification__text-wrapper">
+                      <p class="cds--inline-notification__title">IMAP test passed</p>
+                      <p class="cds--inline-notification__subtitle">{{ imapTestMessage }}</p>
+                    </div>
+                  </div>
+                </div>
+                <div v-if="imapTestError" class="cds--inline-notification cds--inline-notification--error" role="alert">
+                  <div class="cds--inline-notification__details">
+                    <div class="cds--inline-notification__text-wrapper">
+                      <p class="cds--inline-notification__title">IMAP test failed</p>
+                      <p class="cds--inline-notification__subtitle">{{ imapTestError }}</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </form>
 

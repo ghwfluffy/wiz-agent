@@ -25,6 +25,28 @@ type FetchMessage = {
   source?: Buffer;
 };
 
+export type ImapErrorDetails = {
+  name?: string;
+  message: string;
+  code?: string;
+  response?: string;
+  responseStatus?: string;
+  command?: string;
+};
+
+export type ImapTestResult = {
+  ok: boolean;
+  configured: boolean;
+  host?: string;
+  port?: number;
+  secure?: boolean;
+  mailbox?: string;
+  usernameSet?: boolean;
+  passwordSet?: boolean;
+  unseenCount?: number;
+  error?: ImapErrorDetails;
+};
+
 function objectValue(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
 }
@@ -57,6 +79,26 @@ function booleanConfig(primary: unknown, fallback: unknown): boolean | undefined
     return fallback;
   }
   return undefined;
+}
+
+export function imapErrorDetails(error: unknown): ImapErrorDetails {
+  if (!(error instanceof Error)) {
+    return { message: String(error) };
+  }
+  const details = error as Error & {
+    code?: string;
+    response?: string;
+    responseStatus?: string;
+    command?: string;
+  };
+  return {
+    name: details.name,
+    message: details.message,
+    code: details.code,
+    response: details.response,
+    responseStatus: details.responseStatus,
+    command: details.command
+  };
 }
 
 export async function resolveImapConfig(options: {
@@ -146,7 +188,12 @@ export async function processImapInbox(options: {
   try {
     const lock = await client.getMailboxLock(config.mailbox);
     try {
-      for await (const rawMessage of client.fetch({ seen: false }, { uid: true, envelope: true, source: true })) {
+      const unseen = await client.search({ seen: false }, { uid: true });
+      const unseenUids = Array.isArray(unseen) ? unseen.slice(0, options.limit ?? 10) : [];
+      if (unseenUids.length === 0) {
+        return { configured: true, attempted: 0, recorded: 0, failed: 0 };
+      }
+      for await (const rawMessage of client.fetch(unseenUids, { uid: true, envelope: true, source: true }, { uid: true })) {
         if (attempted >= (options.limit ?? 10)) {
           break;
         }
@@ -198,4 +245,59 @@ export async function processImapInbox(options: {
   }
 
   return { configured: true, attempted, recorded, failed };
+}
+
+export async function testImapConnection(options: {
+  store: AgentStore;
+  context: RequestContext;
+  settings: Settings;
+}): Promise<ImapTestResult> {
+  const config = await resolveImapConfig(options);
+  if (!config) {
+    return { ok: false, configured: false, error: { message: "IMAP connector is not enabled." } };
+  }
+  const base = {
+    configured: Boolean(config.host && config.username && config.password),
+    host: config.host,
+    port: config.port ?? 993,
+    secure: config.secure ?? true,
+    mailbox: config.mailbox,
+    usernameSet: Boolean(config.username),
+    passwordSet: Boolean(config.password)
+  };
+  if (!base.configured || !config.host || !config.username || !config.password) {
+    return { ok: false, ...base, error: { message: "IMAP configuration is incomplete." } };
+  }
+  const client = new ImapFlow({
+    host: config.host,
+    port: config.port ?? 993,
+    secure: config.secure ?? true,
+    auth: {
+      user: config.username,
+      pass: config.password
+    },
+    logger: false
+  });
+  try {
+    await client.connect();
+    const lock = await client.getMailboxLock(config.mailbox);
+    try {
+      const unseen = await client.search({ seen: false }, { uid: true });
+      return {
+        ok: true,
+        ...base,
+        unseenCount: Array.isArray(unseen) ? unseen.length : 0
+      };
+    } finally {
+      lock.release();
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      ...base,
+      error: imapErrorDetails(error)
+    };
+  } finally {
+    await client.logout().catch(() => undefined);
+  }
 }

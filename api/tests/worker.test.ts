@@ -116,4 +116,53 @@ describe("worker loop", () => {
     expect(messages.filter((message) => message.status === "sent")).toHaveLength(1);
     expect(messages.filter((message) => message.status === "approved")).toHaveLength(1);
   });
+
+  it("records IMAP worker failures in user audit logs", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-imap-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-imap-test",
+      session
+    };
+    await store.upsertConnector(context, {
+      kind: "imap",
+      status: "enabled",
+      config: {
+        username: "agent@example.test",
+        imap: {
+          host: "imap.example.test",
+          password: "secret"
+        }
+      }
+    });
+
+    const result = await workerTick({
+      store,
+      settings,
+      imapProcessor: async () => {
+        throw Object.assign(new Error("Command failed"), {
+          response: "NO IMAP disabled"
+        });
+      }
+    });
+
+    expect(result.inboundFailed).toBe(1);
+    const audit = await store.listAudit(context, false);
+    expect(audit[0]).toMatchObject({
+      action: "worker.imap_error",
+      entityType: "connector",
+      entityId: "imap",
+      details: expect.objectContaining({
+        message: "Command failed",
+        response: "NO IMAP disabled"
+      })
+    });
+  });
 });

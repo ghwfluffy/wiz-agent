@@ -209,6 +209,13 @@ export type AgentStore = {
   ): Promise<TaskEventRecord>;
   claimDueTasks(context: RequestContext, limit: number, now?: Date): Promise<TaskRecord[]>;
   listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]>;
+  recordAudit(
+    context: Pick<RequestContext, "userId" | "actorType" | "requestId">,
+    action: string,
+    entityType: string | null,
+    entityId: string | null,
+    details?: Record<string, unknown>
+  ): Promise<void>;
   getAiConfig(): Promise<AiConfig>;
   updateAiConfig(context: RequestContext, config: AiConfig): Promise<AiConfig>;
   listConnectors(context: RequestContext): Promise<ConnectorRecord[]>;

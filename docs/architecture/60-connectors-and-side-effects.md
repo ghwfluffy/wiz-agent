@@ -47,6 +47,12 @@ redact saved passwords and expose only a `password_set` flag. A user will not
 see new mail in the Inbox unless their IMAP connector is enabled, complete, and
 the worker is running.
 
+The Settings tab includes an IMAP test action. The test saves the current IMAP
+form values, connects to the configured mailbox, opens the mailbox, and reports
+the unread count or the provider error text. Test results are audited as
+`connector.imap_test.ok` or `connector.imap_test.failed` without storing or
+returning the mailbox password.
+
 The operations UI has an Inbox tab. It lists inbound messages in reverse
 chronological order with sender, source, classification, handling action, and a
 task link when the message was assigned to a task. Following the task link opens
@@ -72,6 +78,9 @@ Controls:
 The current spam guard limits untrusted review notifications per sender within a
 sliding time window. IMAP polling also uses a bounded per-tick batch size so a
 large unread mailbox cannot process unbounded mail in one worker pass.
+Worker-level IMAP failures are recorded as `worker.imap_error` audit events so
+operators can see connector failures in the Logs tab instead of needing Docker
+logs.
 
 ## Outbound
 
