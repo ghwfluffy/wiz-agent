@@ -22,7 +22,6 @@ type EmailSecret = {
 
 type SeedSummary = {
   dryRun: boolean;
-  tenantId: string;
   userSelector: string;
   contact: {
     hasEmail: boolean;
@@ -82,7 +81,6 @@ async function main(): Promise<void> {
   const userSelector = selector();
   const summary: SeedSummary = {
     dryRun: dryRun(),
-    tenantId: settings.devTenantId,
     userSelector: `${userSelector.kind}:${userSelector.value}`,
     contact: {
       hasEmail: bool(contact.email),
@@ -119,16 +117,15 @@ async function main(): Promise<void> {
     }
 
     await pool.query(
-      `INSERT INTO connectors (id, tenant_id, user_id, kind, status, config_json)
+      `INSERT INTO connectors (id, user_id, kind, status, config_json)
        VALUES
-         ($1, $2, $3, 'owner-contact', 'enabled', $4),
-         ($5, $2, $3, 'imap', 'enabled', $6),
-         ($7, $2, $3, 'smtp', 'enabled', $8),
-         ($9, $2, $3, 'openai', 'enabled', $10)
+         ($1, $2, 'owner-contact', 'enabled', $3),
+         ($4, $2, 'imap', 'enabled', $5),
+         ($6, $2, 'smtp', 'enabled', $7),
+         ($8, $2, 'openai', 'enabled', $9)
        ON CONFLICT DO NOTHING`,
       [
         randomUUID(),
-        settings.devTenantId,
         userId,
         { name: contact.name ?? null, provider: contact.mobileProvider ?? null, has_sms: summary.contact.hasSmsGateway, has_mms: summary.contact.hasMmsGateway },
         randomUUID(),
@@ -142,11 +139,11 @@ async function main(): Promise<void> {
 
     for (const address of [contact.email, contact.smsGateway, contact.mmsGateway].filter(Boolean)) {
       await pool.query(
-        `INSERT INTO senders (id, tenant_id, user_id, address, status)
-         VALUES ($1, $2, $3, lower($4), 'owner')
-         ON CONFLICT (tenant_id, user_id, address) DO UPDATE
+        `INSERT INTO senders (id, user_id, address, status)
+         VALUES ($1, $2, lower($3), 'owner')
+         ON CONFLICT (user_id, address) DO UPDATE
            SET status = 'owner', updated_at = now()`,
-        [randomUUID(), settings.devTenantId, userId, address]
+        [randomUUID(), userId, address]
       );
     }
 

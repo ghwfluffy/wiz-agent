@@ -7,7 +7,7 @@ function cookieHeader(sessionId: string): string {
   return `agent_session=${sessionId}`;
 }
 
-describe("domain and tenancy APIs", () => {
+describe("domain and user ownership APIs", () => {
   it("returns a stable API error envelope for unauthenticated domain requests", async () => {
     const app = buildApp({
       settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" })
@@ -30,19 +30,17 @@ describe("domain and tenancy APIs", () => {
     });
   });
 
-  it("enforces task ownership by tenant and user", async () => {
+  it("enforces task ownership by user", async () => {
     const store = createMemoryStore();
     const ownerSettings = loadSettings({
       APP_ENV: "test",
       AUTH_MODE: "standalone",
-      DEV_TENANT_ID: "tenant-a",
       DEV_USER_ID: "owner",
       DEV_USER_EMAIL: "owner@example.test"
     });
     const otherSettings = loadSettings({
       APP_ENV: "test",
       AUTH_MODE: "standalone",
-      DEV_TENANT_ID: "tenant-a",
       DEV_USER_ID: "other",
       DEV_USER_EMAIL: "other@example.test"
     });
@@ -81,12 +79,11 @@ describe("domain and tenancy APIs", () => {
     expect(otherRead.status).toBe(404);
   });
 
-  it("restricts admin APIs to administrators and lets admins inspect tenant audit", async () => {
+  it("restricts admin APIs to administrators and lets admins inspect all user audit", async () => {
     const store = createMemoryStore();
     const adminSettings = loadSettings({
       APP_ENV: "test",
       AUTH_MODE: "standalone",
-      DEV_TENANT_ID: "tenant-a",
       DEV_USER_ID: "admin",
       DEV_USER_EMAIL: "admin@example.test",
       DEV_USER_IS_ADMIN: "true"
@@ -94,7 +91,6 @@ describe("domain and tenancy APIs", () => {
     const normalSettings = loadSettings({
       APP_ENV: "test",
       AUTH_MODE: "standalone",
-      DEV_TENANT_ID: "tenant-a",
       DEV_USER_ID: "normal",
       DEV_USER_EMAIL: "normal@example.test",
       DEV_USER_IS_ADMIN: "false"
@@ -179,7 +175,6 @@ describe("domain and tenancy APIs", () => {
     const app = buildApp({ settings, store });
     const session = await store.createDevelopmentSession(settings, "outbox-login");
     await store.queueOutboundMessage({
-      tenantId: session.tenant.id,
       userId: session.user.id,
       actorType: "admin",
       permissions: ["user", "admin"],

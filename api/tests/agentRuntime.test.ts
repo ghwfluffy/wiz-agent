@@ -20,7 +20,6 @@ async function testContext(isAdmin = true): Promise<{ context: RequestContext; s
   return {
     store,
     context: {
-      tenantId: session.tenant.id,
       userId: session.user.id,
       actorType: session.user.isAdmin ? "admin" : "user",
       permissions: session.user.isAdmin ? ["user", "admin"] : ["user"],

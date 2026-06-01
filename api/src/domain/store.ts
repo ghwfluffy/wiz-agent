@@ -4,8 +4,7 @@ import {
   createSessionFromSettings,
   hashSessionToken,
   type AuthenticatedUser,
-  type Session,
-  type Tenant
+  type Session
 } from "../auth/session.js";
 import type { Settings } from "../config/settings.js";
 import type {
@@ -46,7 +45,6 @@ function hashOauthState(state: string): string {
 function taskFromRow(row: Record<string, unknown>): TaskRecord {
   return {
     id: String(row.id),
-    tenantId: String(row.tenant_id),
     userId: String(row.user_id),
     status: String(row.status),
     kind: String(row.kind),
@@ -63,7 +61,6 @@ function taskFromRow(row: Record<string, unknown>): TaskRecord {
 function auditFromRow(row: Record<string, unknown>): AuditRecord {
   return {
     id: String(row.id),
-    tenantId: row.tenant_id ? String(row.tenant_id) : null,
     userId: row.user_id ? String(row.user_id) : null,
     actorType: String(row.actor_type),
     action: String(row.action),
@@ -78,7 +75,6 @@ function auditFromRow(row: Record<string, unknown>): AuditRecord {
 function outboundFromRow(row: Record<string, unknown>): OutboundMessageRecord {
   return {
     id: String(row.id),
-    tenantId: String(row.tenant_id),
     userId: String(row.user_id),
     conversationId: row.conversation_id ? String(row.conversation_id) : null,
     approvalId: row.approval_id ? String(row.approval_id) : null,
@@ -97,7 +93,6 @@ function outboundFromRow(row: Record<string, unknown>): OutboundMessageRecord {
 function senderFromRow(row: Record<string, unknown>): SenderRecord {
   return {
     id: String(row.id),
-    tenantId: String(row.tenant_id),
     userId: String(row.user_id),
     address: String(row.address),
     status: row.status as SenderStatus,
@@ -109,7 +104,6 @@ function senderFromRow(row: Record<string, unknown>): SenderRecord {
 function runFromRow(row: Record<string, unknown>): AgentRunRecord {
   return {
     id: String(row.id),
-    tenantId: String(row.tenant_id),
     userId: String(row.user_id),
     taskId: row.task_id ? String(row.task_id) : null,
     status: String(row.status),
@@ -125,7 +119,6 @@ function runFromRow(row: Record<string, unknown>): AgentRunRecord {
 function toolCallFromRow(row: Record<string, unknown>): ToolCallRecord {
   return {
     id: String(row.id),
-    tenantId: String(row.tenant_id),
     userId: String(row.user_id),
     runId: row.run_id ? String(row.run_id) : null,
     toolName: String(row.tool_name),
@@ -144,7 +137,7 @@ function toolCallFromRow(row: Record<string, unknown>): ToolCallRecord {
 
 async function recordAudit(
   pool: Pool,
-  context: Pick<RequestContext, "tenantId" | "userId" | "actorType" | "requestId">,
+  context: Pick<RequestContext, "userId" | "actorType" | "requestId">,
   action: string,
   entityType: string | null,
   entityId: string | null,
@@ -152,9 +145,9 @@ async function recordAudit(
 ): Promise<void> {
   await pool.query(
     `INSERT INTO audit_log
-      (id, tenant_id, user_id, actor_type, action, entity_type, entity_id, details_json, request_id)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-    [randomUUID(), context.tenantId, context.userId, context.actorType, action, entityType, entityId, details, context.requestId]
+      (id, user_id, actor_type, action, entity_type, entity_id, details_json, request_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+    [randomUUID(), context.userId, context.actorType, action, entityType, entityId, details, context.requestId]
   );
 }
 
@@ -162,12 +155,6 @@ export function createPostgresStore(pool: Pool): AgentStore {
   return {
     async createDevelopmentSession(settings: Settings, requestId: string): Promise<Session> {
       const session = createSessionFromSettings(settings);
-      await pool.query(
-        `INSERT INTO tenants (id, name)
-         VALUES ($1, $2)
-         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, updated_at = now()`,
-        [session.tenant.id, session.tenant.name]
-      );
       await pool.query(
         `INSERT INTO users (id, email, display_name, is_admin)
          VALUES ($1, $2, $3, $4)
@@ -179,31 +166,23 @@ export function createPostgresStore(pool: Pool): AgentStore {
         [session.user.id, session.user.email, session.user.displayName, session.user.isAdmin]
       );
       await pool.query(
-        `INSERT INTO tenant_memberships (tenant_id, user_id, role)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, updated_at = now()`,
-        [session.tenant.id, session.user.id, session.user.isAdmin ? "admin" : "member"]
-      );
-      await pool.query(
-        `INSERT INTO identities (id, tenant_id, user_id, kind, value, verified_at, is_primary)
-         VALUES ($1, $2, $3, 'email', $4, now(), true)
+        `INSERT INTO identities (id, user_id, kind, value, verified_at, is_primary)
+         VALUES ($1, $2, 'email', $3, now(), true)
          ON CONFLICT (kind, value) DO UPDATE
-           SET tenant_id = EXCLUDED.tenant_id,
-               user_id = EXCLUDED.user_id,
+           SET user_id = EXCLUDED.user_id,
                verified_at = EXCLUDED.verified_at,
                is_primary = true,
                updated_at = now()`,
-        [randomUUID(), session.tenant.id, session.user.id, session.user.email]
+        [randomUUID(), session.user.id, session.user.email]
       );
       await pool.query(
-        `INSERT INTO sessions (id, token_hash, tenant_id, user_id, expires_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [randomUUID(), hashSessionToken(session.id), session.tenant.id, session.user.id, session.expiresAt]
+        `INSERT INTO sessions (id, token_hash, user_id, expires_at)
+         VALUES ($1, $2, $3, $4)`,
+        [randomUUID(), hashSessionToken(session.id), session.user.id, session.expiresAt]
       );
       await recordAudit(
         pool,
         {
-          tenantId: session.tenant.id,
           userId: session.user.id,
           actorType: "user",
           requestId
@@ -260,14 +239,7 @@ export function createPostgresStore(pool: Pool): AgentStore {
       const now = new Date();
       const expiresAt = new Date(now.getTime() + settings.sessionDurationMinutes * 60_000);
       const sessionId = randomUUID();
-      const tenantId = settings.devTenantId;
       const userId = `oauth:${input.identityProvider}:${input.subject}`;
-      await pool.query(
-        `INSERT INTO tenants (id, name)
-         VALUES ($1, $2)
-         ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, updated_at = now()`,
-        [tenantId, settings.devTenantName]
-      );
       await pool.query(
         `INSERT INTO users (id, email, display_name, is_admin)
          VALUES ($1, lower($2), $3, $4)
@@ -279,31 +251,23 @@ export function createPostgresStore(pool: Pool): AgentStore {
         [userId, input.email, input.displayName, input.isAdmin]
       );
       await pool.query(
-        `INSERT INTO tenant_memberships (tenant_id, user_id, role)
-         VALUES ($1, $2, $3)
-         ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = EXCLUDED.role, updated_at = now()`,
-        [tenantId, userId, input.isAdmin ? "admin" : "member"]
-      );
-      await pool.query(
-        `INSERT INTO identities (id, tenant_id, user_id, kind, value, verified_at, is_primary)
-         VALUES ($1, $2, $3, $4, $5, now(), true)
+        `INSERT INTO identities (id, user_id, kind, value, verified_at, is_primary)
+         VALUES ($1, $2, $3, $4, now(), true)
          ON CONFLICT (kind, value) DO UPDATE
-           SET tenant_id = EXCLUDED.tenant_id,
-               user_id = EXCLUDED.user_id,
+           SET user_id = EXCLUDED.user_id,
                verified_at = now(),
                is_primary = true,
                updated_at = now()`,
-        [randomUUID(), tenantId, userId, input.identityProvider, input.subject]
+        [randomUUID(), userId, input.identityProvider, input.subject]
       );
       await pool.query(
-        `INSERT INTO sessions (id, token_hash, tenant_id, user_id, expires_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [randomUUID(), hashSessionToken(sessionId), tenantId, userId, expiresAt.toISOString()]
+        `INSERT INTO sessions (id, token_hash, user_id, expires_at)
+         VALUES ($1, $2, $3, $4)`,
+        [randomUUID(), hashSessionToken(sessionId), userId, expiresAt.toISOString()]
       );
       await recordAudit(
         pool,
         {
-          tenantId,
           userId,
           actorType: input.isAdmin ? "admin" : "user",
           requestId: input.requestId
@@ -321,10 +285,6 @@ export function createPostgresStore(pool: Pool): AgentStore {
           displayName: input.displayName,
           isAdmin: input.isAdmin
         },
-        tenant: {
-          id: tenantId,
-          name: settings.devTenantName
-        },
         createdAt: now.toISOString(),
         expiresAt: expiresAt.toISOString()
       };
@@ -338,14 +298,11 @@ export function createPostgresStore(pool: Pool): AgentStore {
         `SELECT
            s.created_at,
            s.expires_at,
-           t.id AS tenant_id,
-           t.name AS tenant_name,
            u.id AS user_id,
            u.email,
            u.display_name,
            u.is_admin
          FROM sessions s
-         JOIN tenants t ON t.id = s.tenant_id
          JOIN users u ON u.id = s.user_id
          WHERE s.token_hash = $1
            AND s.revoked_at IS NULL
@@ -365,10 +322,6 @@ export function createPostgresStore(pool: Pool): AgentStore {
           displayName: String(row.display_name),
           isAdmin: Boolean(row.is_admin)
         },
-        tenant: {
-          id: String(row.tenant_id),
-          name: String(row.tenant_name)
-        },
         createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
         expiresAt: row.expires_at instanceof Date ? row.expires_at.toISOString() : String(row.expires_at)
       };
@@ -383,7 +336,6 @@ export function createPostgresStore(pool: Pool): AgentStore {
       await recordAudit(
         pool,
         {
-          tenantId: session.tenant.id,
           userId: session.user.id,
           actorType: session.user.isAdmin ? "admin" : "user",
           requestId
@@ -398,12 +350,11 @@ export function createPostgresStore(pool: Pool): AgentStore {
       const id = randomUUID();
       const result = await pool.query(
         `INSERT INTO tasks
-          (id, tenant_id, user_id, title, prompt, due_at, priority, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          (id, user_id, title, prompt, due_at, priority, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING *`,
         [
           id,
-          context.tenantId,
           context.userId,
           input.title,
           input.prompt,
@@ -413,9 +364,9 @@ export function createPostgresStore(pool: Pool): AgentStore {
         ]
       );
       await pool.query(
-        `INSERT INTO task_events (id, tenant_id, user_id, task_id, event_type, event_json)
-         VALUES ($1, $2, $3, $4, 'task.created', '{}'::jsonb)`,
-        [randomUUID(), context.tenantId, context.userId, id]
+        `INSERT INTO task_events (id, user_id, task_id, event_type, event_json)
+         VALUES ($1, $2, $3, 'task.created', '{}'::jsonb)`,
+        [randomUUID(), context.userId, id]
       );
       await recordAudit(pool, context, "task.create", "task", id);
       return taskFromRow(result.rows[0]);
@@ -424,17 +375,17 @@ export function createPostgresStore(pool: Pool): AgentStore {
     async listTasks(context: RequestContext): Promise<TaskRecord[]> {
       const result = await pool.query(
         `SELECT * FROM tasks
-         WHERE tenant_id = $1 AND user_id = $2
+         WHERE user_id = $1
          ORDER BY created_at DESC`,
-        [context.tenantId, context.userId]
+        [context.userId]
       );
       return result.rows.map(taskFromRow);
     },
 
     async getTask(context: RequestContext, taskId: string): Promise<TaskRecord | undefined> {
       const result = await pool.query(
-        `SELECT * FROM tasks WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
-        [taskId, context.tenantId, context.userId]
+        `SELECT * FROM tasks WHERE id = $1 AND user_id = $2`,
+        [taskId, context.userId]
       );
       return result.rows[0] ? taskFromRow(result.rows[0]) : undefined;
     },
@@ -446,17 +397,16 @@ export function createPostgresStore(pool: Pool): AgentStore {
       }
       const result = await pool.query(
         `UPDATE tasks
-         SET title = $4,
-             prompt = $5,
-             due_at = $6,
-             priority = $7,
-             status = $8,
+         SET title = $3,
+             prompt = $4,
+             due_at = $5,
+             priority = $6,
+             status = $7,
              updated_at = now()
-         WHERE id = $1 AND tenant_id = $2 AND user_id = $3
+         WHERE id = $1 AND user_id = $2
          RETURNING *`,
         [
           taskId,
-          context.tenantId,
           context.userId,
           update.title ?? existing.title,
           update.prompt ?? existing.prompt,
@@ -475,14 +425,13 @@ export function createPostgresStore(pool: Pool): AgentStore {
         await client.query("BEGIN");
         const selected = await client.query(
           `SELECT id FROM tasks
-           WHERE tenant_id = $1
-             AND user_id = $2
+           WHERE user_id = $1
              AND status = 'pending'
-             AND (due_at IS NULL OR due_at <= $3)
+             AND (due_at IS NULL OR due_at <= $2)
            ORDER BY due_at NULLS FIRST, created_at ASC
-           LIMIT $4
+           LIMIT $3
            FOR UPDATE SKIP LOCKED`,
-          [context.tenantId, context.userId, now.toISOString(), limit]
+          [context.userId, now.toISOString(), limit]
         );
         const ids = selected.rows.map((row) => row.id as string);
         if (ids.length === 0) {
@@ -512,9 +461,9 @@ export function createPostgresStore(pool: Pool): AgentStore {
     async listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]> {
       const result = await pool.query(
         includeAllUsers
-          ? `SELECT * FROM audit_log WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 200`
-          : `SELECT * FROM audit_log WHERE tenant_id = $1 AND user_id = $2 ORDER BY created_at DESC LIMIT 200`,
-        includeAllUsers ? [context.tenantId] : [context.tenantId, context.userId]
+          ? `SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200`
+          : `SELECT * FROM audit_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`,
+        includeAllUsers ? [] : [context.userId]
       );
       return result.rows.map(auditFromRow);
     },
@@ -545,12 +494,11 @@ export function createPostgresStore(pool: Pool): AgentStore {
       const id = randomUUID();
       const result = await pool.query(
         `INSERT INTO agent_runs
-          (id, tenant_id, user_id, task_id, status, model_tier, model_id, prompt_version)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+          (id, user_id, task_id, status, model_tier, model_id, prompt_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING *`,
         [
           id,
-          context.tenantId,
           context.userId,
           input.taskId ?? null,
           input.status,
@@ -569,9 +517,9 @@ export function createPostgresStore(pool: Pool): AgentStore {
     async finishAgentRun(context, runId, status, failureMessage = null) {
       await pool.query(
         `UPDATE agent_runs
-         SET status = $4, failure_message = $5, finished_at = now()
-         WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
-        [runId, context.tenantId, context.userId, status, failureMessage]
+         SET status = $3, failure_message = $4, finished_at = now()
+         WHERE id = $1 AND user_id = $2`,
+        [runId, context.userId, status, failureMessage]
       );
       await recordAudit(pool, context, `agent_run.${status}`, "agent_run", runId, {
         failure_message: failureMessage
@@ -581,12 +529,11 @@ export function createPostgresStore(pool: Pool): AgentStore {
     async recordToolCall(context, input) {
       const result = await pool.query(
         `INSERT INTO tool_calls
-          (id, tenant_id, user_id, run_id, tool_name, status, arguments_json, result_json, validation_error, completed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, CASE WHEN $6 IN ('accepted', 'rejected', 'failed') THEN now() ELSE NULL END)
+          (id, user_id, run_id, tool_name, status, arguments_json, result_json, validation_error, completed_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, CASE WHEN $5 IN ('accepted', 'rejected', 'failed') THEN now() ELSE NULL END)
          RETURNING *`,
         [
           randomUUID(),
-          context.tenantId,
           context.userId,
           input.runId ?? null,
           input.toolName,
@@ -606,9 +553,9 @@ export function createPostgresStore(pool: Pool): AgentStore {
     async listSenders(context) {
       const result = await pool.query(
         `SELECT * FROM senders
-         WHERE tenant_id = $1 AND user_id = $2
+         WHERE user_id = $1
          ORDER BY updated_at DESC, address ASC`,
-        [context.tenantId, context.userId]
+        [context.userId]
       );
       return result.rows.map(senderFromRow);
     },
@@ -616,19 +563,19 @@ export function createPostgresStore(pool: Pool): AgentStore {
     async getSenderStatus(context, address) {
       const result = await pool.query(
         `SELECT status FROM senders
-         WHERE tenant_id = $1 AND user_id = $2 AND lower(address) = lower($3)`,
-        [context.tenantId, context.userId, address]
+         WHERE user_id = $1 AND lower(address) = lower($2)`,
+        [context.userId, address]
       );
       return result.rows[0]?.status as SenderStatus | undefined;
     },
 
     async setSenderStatus(context, address, status) {
       await pool.query(
-        `INSERT INTO senders (id, tenant_id, user_id, address, status)
-         VALUES ($1, $2, $3, lower($4), $5)
-         ON CONFLICT (tenant_id, user_id, address) DO UPDATE
+        `INSERT INTO senders (id, user_id, address, status)
+         VALUES ($1, $2, lower($3), $4)
+         ON CONFLICT (user_id, address) DO UPDATE
            SET status = EXCLUDED.status, updated_at = now()`,
-        [randomUUID(), context.tenantId, context.userId, address, status]
+        [randomUUID(), context.userId, address, status]
       );
       await recordAudit(pool, context, "sender.status.set", "sender", address, { status });
     },
@@ -636,8 +583,8 @@ export function createPostgresStore(pool: Pool): AgentStore {
     async recordInboundMessage(context, input: InboundMessageInput, classification: SenderClassification) {
       const existing = await pool.query(
         `SELECT id FROM messages
-         WHERE tenant_id = $1 AND user_id = $2 AND provider_message_id = $3`,
-        [context.tenantId, context.userId, input.providerMessageId]
+         WHERE user_id = $1 AND provider_message_id = $2`,
+        [context.userId, input.providerMessageId]
       );
       if (existing.rows[0]) {
         return { id: existing.rows[0].id as string, duplicate: true };
@@ -645,12 +592,11 @@ export function createPostgresStore(pool: Pool): AgentStore {
       const id = randomUUID();
       await pool.query(
         `INSERT INTO messages
-          (id, tenant_id, user_id, direction, source, provider_message_id, from_addr, to_addr, subject, body_text,
+          (id, user_id, direction, source, provider_message_id, from_addr, to_addr, subject, body_text,
            auth_status, received_at)
-         VALUES ($1, $2, $3, 'inbound', $4, $5, lower($6), lower($7), $8, $9, $10, $11)`,
+         VALUES ($1, $2, 'inbound', $3, $4, lower($5), lower($6), $7, $8, $9, $10)`,
         [
           id,
-          context.tenantId,
           context.userId,
           input.source ?? "imap",
           input.providerMessageId,
@@ -669,12 +615,11 @@ export function createPostgresStore(pool: Pool): AgentStore {
     async queueOutboundMessage(context, input) {
       const result = await pool.query(
         `INSERT INTO outbound_messages
-          (id, tenant_id, user_id, conversation_id, approval_id, channel, status, to_addr, subject, body_text)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, lower($8), $9, $10)
+          (id, user_id, conversation_id, approval_id, channel, status, to_addr, subject, body_text)
+         VALUES ($1, $2, $3, $4, $5, $6, lower($7), $8, $9)
          RETURNING *`,
         [
           randomUUID(),
-          context.tenantId,
           context.userId,
           input.conversationId ?? null,
           input.approvalId ?? null,
@@ -698,12 +643,12 @@ export function createPostgresStore(pool: Pool): AgentStore {
       const result = await pool.query(
         statusFilter
           ? `SELECT * FROM outbound_messages
-             WHERE tenant_id = $1 AND user_id = $2 AND status = ANY($3::text[])
+             WHERE user_id = $1 AND status = ANY($2::text[])
              ORDER BY created_at ASC`
           : `SELECT * FROM outbound_messages
-             WHERE tenant_id = $1 AND user_id = $2
+             WHERE user_id = $1
              ORDER BY created_at DESC`,
-        statusFilter ? [context.tenantId, context.userId, statuses] : [context.tenantId, context.userId]
+        statusFilter ? [context.userId, statuses] : [context.userId]
       );
       return result.rows.map(outboundFromRow);
     },
@@ -711,13 +656,13 @@ export function createPostgresStore(pool: Pool): AgentStore {
     async updateOutboundMessageStatus(context, messageId, status, failureMessage = null) {
       const result = await pool.query(
         `UPDATE outbound_messages
-         SET status = $4,
-             failure_message = $5,
-             sent_at = CASE WHEN $4 = 'sent' THEN now() ELSE sent_at END,
+         SET status = $3,
+             failure_message = $4,
+             sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END,
              updated_at = now()
-         WHERE id = $1 AND tenant_id = $2 AND user_id = $3
+         WHERE id = $1 AND user_id = $2
          RETURNING *`,
-        [messageId, context.tenantId, context.userId, status, failureMessage]
+        [messageId, context.userId, status, failureMessage]
       );
       const record = result.rows[0] ? outboundFromRow(result.rows[0]) : undefined;
       if (record) {
@@ -742,7 +687,7 @@ export function createMemoryStore(): AgentStore {
   let aiConfig = DEFAULT_AI_CONFIG;
 
   function pushAudit(
-    context: Pick<RequestContext, "tenantId" | "userId" | "actorType" | "requestId">,
+    context: Pick<RequestContext, "userId" | "actorType" | "requestId">,
     action: string,
     entityType: string | null,
     entityId: string | null,
@@ -750,7 +695,6 @@ export function createMemoryStore(): AgentStore {
   ): void {
     audit.unshift({
       id: randomUUID(),
-      tenantId: context.tenantId,
       userId: context.userId,
       actorType: context.actorType,
       action,
@@ -768,7 +712,6 @@ export function createMemoryStore(): AgentStore {
       sessions.set(session.id, session);
       pushAudit(
         {
-          tenantId: session.tenant.id,
           userId: session.user.id,
           actorType: session.user.isAdmin ? "admin" : "user",
           requestId
@@ -788,10 +731,6 @@ export function createMemoryStore(): AgentStore {
           email: "",
           displayName: "",
           isAdmin: false
-        },
-        tenant: {
-          id: "",
-          name: ""
         },
         createdAt: nowIso(),
         expiresAt: input.expiresAt
@@ -819,17 +758,12 @@ export function createMemoryStore(): AgentStore {
           displayName: input.displayName,
           isAdmin: input.isAdmin
         },
-        tenant: {
-          id: settings.devTenantId,
-          name: settings.devTenantName
-        },
         createdAt: now.toISOString(),
         expiresAt: expiresAt.toISOString()
       };
       sessions.set(session.id, session);
       pushAudit(
         {
-          tenantId: session.tenant.id,
           userId: session.user.id,
           actorType: session.user.isAdmin ? "admin" : "user",
           requestId: input.requestId
@@ -860,7 +794,6 @@ export function createMemoryStore(): AgentStore {
       if (session) {
         pushAudit(
           {
-            tenantId: session.tenant.id,
             userId: session.user.id,
             actorType: session.user.isAdmin ? "admin" : "user",
             requestId
@@ -875,7 +808,6 @@ export function createMemoryStore(): AgentStore {
       const now = nowIso();
       const task: TaskRecord = {
         id: randomUUID(),
-        tenantId: context.tenantId,
         userId: context.userId,
         status: "pending",
         kind: "manual",
@@ -892,11 +824,11 @@ export function createMemoryStore(): AgentStore {
       return task;
     },
     async listTasks(context: RequestContext): Promise<TaskRecord[]> {
-      return [...tasks.values()].filter((task) => task.tenantId === context.tenantId && task.userId === context.userId);
+      return [...tasks.values()].filter((task) => task.userId === context.userId);
     },
     async getTask(context: RequestContext, taskId: string): Promise<TaskRecord | undefined> {
       const task = tasks.get(taskId);
-      if (!task || task.tenantId !== context.tenantId || task.userId !== context.userId) {
+      if (!task || task.userId !== context.userId) {
         return undefined;
       }
       return task;
@@ -923,7 +855,7 @@ export function createMemoryStore(): AgentStore {
           break;
         }
         const isDue = task.dueAt === null || Date.parse(task.dueAt) <= now.getTime();
-        if (task.tenantId === context.tenantId && task.userId === context.userId && task.status === "pending" && isDue) {
+        if (task.userId === context.userId && task.status === "pending" && isDue) {
           const updated = { ...task, status: "claimed", updatedAt: nowIso() };
           tasks.set(task.id, updated);
           claimed.push(updated);
@@ -934,9 +866,6 @@ export function createMemoryStore(): AgentStore {
     },
     async listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]> {
       return audit.filter((entry) => {
-        if (entry.tenantId !== context.tenantId) {
-          return false;
-        }
         return includeAllUsers || entry.userId === context.userId;
       });
     },
@@ -952,7 +881,6 @@ export function createMemoryStore(): AgentStore {
       const now = nowIso();
       const run: AgentRunRecord = {
         id: randomUUID(),
-        tenantId: context.tenantId,
         userId: context.userId,
         taskId: input.taskId ?? null,
         status: input.status,
@@ -988,7 +916,6 @@ export function createMemoryStore(): AgentStore {
       const now = nowIso();
       const toolCall: ToolCallRecord = {
         id: randomUUID(),
-        tenantId: context.tenantId,
         userId: context.userId,
         runId: input.runId ?? null,
         toolName: input.toolName,
@@ -1008,19 +935,18 @@ export function createMemoryStore(): AgentStore {
     },
     async listSenders(context) {
       return [...senderStatuses.values()]
-        .filter((sender) => sender.tenantId === context.tenantId && sender.userId === context.userId)
+        .filter((sender) => sender.userId === context.userId)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.address.localeCompare(b.address));
     },
     async getSenderStatus(context, address) {
-      return senderStatuses.get(`${context.tenantId}:${context.userId}:${address.toLowerCase()}`)?.status;
+      return senderStatuses.get(`${context.userId}:${address.toLowerCase()}`)?.status;
     },
     async setSenderStatus(context, address, status) {
-      const key = `${context.tenantId}:${context.userId}:${address.toLowerCase()}`;
+      const key = `${context.userId}:${address.toLowerCase()}`;
       const existing = senderStatuses.get(key);
       const now = nowIso();
       senderStatuses.set(key, {
         id: existing?.id ?? randomUUID(),
-        tenantId: context.tenantId,
         userId: context.userId,
         address: address.toLowerCase(),
         status,
@@ -1030,7 +956,7 @@ export function createMemoryStore(): AgentStore {
       pushAudit(context, "sender.status.set", "sender", address, { status });
     },
     async recordInboundMessage(context, input, classification) {
-      const key = `${context.tenantId}:${context.userId}:${input.providerMessageId}`;
+      const key = `${context.userId}:${input.providerMessageId}`;
       const existing = inboundProviderIds.get(key);
       if (existing) {
         return { id: existing, duplicate: true };
@@ -1045,7 +971,6 @@ export function createMemoryStore(): AgentStore {
       const message: OutboundMessageRecord = {
         ...input,
         id: randomUUID(),
-        tenantId: context.tenantId,
         userId: context.userId,
         conversationId: input.conversationId ?? null,
         approvalId: input.approvalId ?? null,
@@ -1064,7 +989,7 @@ export function createMemoryStore(): AgentStore {
     },
     async listOutboundMessages(context, statuses) {
       return [...outboundMessages.values()].filter((message) => {
-        if (message.tenantId !== context.tenantId || message.userId !== context.userId) {
+        if (message.userId !== context.userId) {
           return false;
         }
         return !statuses || statuses.length === 0 || statuses.includes(message.status);
@@ -1072,7 +997,7 @@ export function createMemoryStore(): AgentStore {
     },
     async updateOutboundMessageStatus(context, messageId, status, failureMessage = null) {
       const message = outboundMessages.get(messageId);
-      if (!message || message.tenantId !== context.tenantId || message.userId !== context.userId) {
+      if (!message || message.userId !== context.userId) {
         return undefined;
       }
       const updated = {
