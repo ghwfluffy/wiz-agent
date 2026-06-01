@@ -10,15 +10,9 @@ export type AuthenticatedUser = {
   isAdmin: boolean;
 };
 
-export type Tenant = {
-  id: string;
-  name: string;
-};
-
 export type Session = {
   id: string;
   user: AuthenticatedUser;
-  tenant: Tenant;
   createdAt: string;
   expiresAt: string;
 };
@@ -53,10 +47,6 @@ export function createSessionFromSettings(settings: Settings): Session {
       email: settings.devUserEmail,
       displayName: settings.devUserDisplayName,
       isAdmin: settings.devUserIsAdmin
-    },
-    tenant: {
-      id: settings.devTenantId,
-      name: settings.devTenantName
     },
     createdAt: now.toISOString(),
     expiresAt: expiresAt.toISOString()

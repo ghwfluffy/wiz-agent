@@ -7,15 +7,9 @@ export type AuthUser = {
   isAdmin: boolean;
 };
 
-export type Tenant = {
-  id: string;
-  name: string;
-};
-
 export type AuthMeResponse = {
   authenticated: boolean;
   user: AuthUser | null;
-  tenant: Tenant | null;
   expiresAt?: string;
 };
 

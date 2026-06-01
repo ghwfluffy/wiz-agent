@@ -3,7 +3,6 @@ import type { Session } from "../auth/session.js";
 export type ActorType = "user" | "admin" | "agent" | "system";
 
 export type RequestContext = {
-  tenantId: string;
   userId: string;
   actorType: ActorType;
   permissions: string[];
@@ -13,7 +12,6 @@ export type RequestContext = {
 
 export type TaskRecord = {
   id: string;
-  tenantId: string;
   userId: string;
   status: string;
   kind: string;
@@ -43,7 +41,6 @@ export type SenderClassification = "owner" | "newsletter" | "untrusted" | "block
 
 export type SenderRecord = {
   id: string;
-  tenantId: string;
   userId: string;
   address: string;
   status: SenderStatus;
@@ -73,7 +70,6 @@ export type OutboundMessageInput = {
 
 export type OutboundMessageRecord = OutboundMessageInput & {
   id: string;
-  tenantId: string;
   userId: string;
   createdAt: string;
   updatedAt: string;
@@ -90,7 +86,6 @@ export type InboundHandlingResult = {
 
 export type AuditRecord = {
   id: string;
-  tenantId: string | null;
   userId: string | null;
   actorType: string;
   action: string;
@@ -113,7 +108,6 @@ export type AiConfig = {
 
 export type AgentRunRecord = {
   id: string;
-  tenantId: string;
   userId: string;
   taskId: string | null;
   status: string;
@@ -127,7 +121,6 @@ export type AgentRunRecord = {
 
 export type ToolCallRecord = {
   id: string;
-  tenantId: string;
   userId: string;
   runId: string | null;
   toolName: string;

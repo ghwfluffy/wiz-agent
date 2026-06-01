@@ -1,12 +1,11 @@
 import { defineStore } from "pinia";
-import { api, type AuthUser, type Tenant } from "../lib/api";
+import { api, type AuthUser } from "../lib/api";
 
 type AuthState = {
   loaded: boolean;
   loading: boolean;
   authenticated: boolean;
   user: AuthUser | null;
-  tenant: Tenant | null;
   error: string | null;
 };
 
@@ -34,14 +33,12 @@ export const useAuthStore = defineStore("auth", {
     loading: false,
     authenticated: false,
     user: null,
-    tenant: null,
     error: null
   }),
   actions: {
-    applyAuth(response: { authenticated: boolean; user: AuthUser | null; tenant: Tenant | null }): void {
+    applyAuth(response: { authenticated: boolean; user: AuthUser | null }): void {
       this.authenticated = response.authenticated;
       this.user = response.user;
-      this.tenant = response.tenant;
       this.loaded = true;
       this.error = null;
     },

@@ -74,7 +74,6 @@ export function buildApp(options: AppOptions = {}): Hono {
     }
 
     return {
-      tenantId: session.tenant.id,
       userId: session.user.id,
       actorType: session.user.isAdmin ? "admin" : "user",
       permissions: session.user.isAdmin ? ["user", "admin"] : ["user"],
@@ -110,15 +109,13 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (!session) {
       return context.json({
         authenticated: false,
-        user: null,
-        tenant: null
+        user: null
       });
     }
 
     return context.json({
       authenticated: true,
       user: session.user,
-      tenant: session.tenant,
       expiresAt: session.expiresAt
     });
   });
@@ -141,7 +138,6 @@ export function buildApp(options: AppOptions = {}): Hono {
     return context.json({
       authenticated: true,
       user: session.user,
-      tenant: session.tenant,
       expiresAt: session.expiresAt
     });
   });

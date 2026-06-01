@@ -18,10 +18,6 @@ describe("auth store", () => {
           email: "dev@example.test",
           displayName: "Development User",
           isAdmin: true
-        },
-        tenant: {
-          id: "dev-tenant",
-          name: "Development Tenant"
         }
       })
     });
@@ -39,7 +35,6 @@ describe("auth store", () => {
     );
     expect(auth.authenticated).toBe(true);
     expect(auth.user?.email).toBe("dev@example.test");
-    expect(auth.tenant?.id).toBe("dev-tenant");
   });
 
   it("shows a friendly OAuth error and removes it from the URL", async () => {
@@ -48,8 +43,7 @@ describe("auth store", () => {
       ok: true,
       json: async () => ({
         authenticated: false,
-        user: null,
-        tenant: null
+        user: null
       })
     });
     vi.stubGlobal("fetch", fetchMock);

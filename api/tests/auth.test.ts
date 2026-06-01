@@ -16,8 +16,7 @@ describe("standalone auth", () => {
     const anonymous = await app.request("/api/v1/auth/me");
     await expect(anonymous.json()).resolves.toEqual({
       authenticated: false,
-      user: null,
-      tenant: null
+      user: null
     });
 
     const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
@@ -28,9 +27,6 @@ describe("standalone auth", () => {
         email: "person@example.test",
         displayName: "Local Tester",
         isAdmin: true
-      },
-      tenant: {
-        id: "dev-tenant"
       }
     });
 
@@ -147,12 +143,14 @@ describe("standalone auth", () => {
     const me = await app.request("/api/v1/auth/me", {
       headers: { cookie }
     });
-    await expect(me.json()).resolves.toMatchObject({
+    const mePayload = await me.json() as Record<string, unknown>;
+    expect(mePayload).toMatchObject({
       authenticated: true,
       user: {
         displayName: "GHW",
         isAdmin: true
       }
     });
+    expect(mePayload).not.toHaveProperty("tenant");
   });
 });
