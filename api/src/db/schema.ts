@@ -1,11 +1,4 @@
 export const INITIAL_SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS tenants (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
@@ -16,18 +9,8 @@ CREATE TABLE IF NOT EXISTS users (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS tenant_memberships (
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
-  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  role TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  PRIMARY KEY (tenant_id, user_id)
-);
-
 CREATE TABLE IF NOT EXISTS identities (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,
   value TEXT NOT NULL,
@@ -41,7 +24,6 @@ CREATE TABLE IF NOT EXISTS identities (
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY,
   token_hash TEXT NOT NULL UNIQUE,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   last_seen_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -51,7 +33,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE TABLE IF NOT EXISTS oauth_state_records (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
   state_hash TEXT NOT NULL UNIQUE,
   code_verifier TEXT NOT NULL,
@@ -63,7 +44,6 @@ CREATE TABLE IF NOT EXISTS oauth_state_records (
 
 CREATE TABLE IF NOT EXISTS connectors (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -81,7 +61,6 @@ CREATE TABLE IF NOT EXISTS connector_secret_refs (
 
 CREATE TABLE IF NOT EXISTS conversations (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind TEXT NOT NULL,
   external_thread_key TEXT,
@@ -95,7 +74,6 @@ CREATE TABLE IF NOT EXISTS conversations (
 
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   connector_id TEXT REFERENCES connectors(id) ON DELETE SET NULL,
   conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
@@ -117,7 +95,6 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE TABLE IF NOT EXISTS tasks (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
   parent_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
@@ -141,7 +118,6 @@ CREATE TABLE IF NOT EXISTS tasks (
 
 CREATE TABLE IF NOT EXISTS task_events (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   event_type TEXT NOT NULL,
@@ -151,7 +127,6 @@ CREATE TABLE IF NOT EXISTS task_events (
 
 CREATE TABLE IF NOT EXISTS approvals (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   status TEXT NOT NULL,
   action_type TEXT NOT NULL,
@@ -165,30 +140,27 @@ CREATE TABLE IF NOT EXISTS approvals (
 
 CREATE TABLE IF NOT EXISTS senders (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   address TEXT NOT NULL,
   status TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, user_id, address)
+  UNIQUE (user_id, address)
 );
 
 CREATE TABLE IF NOT EXISTS memory_documents (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   slug TEXT NOT NULL,
   title TEXT NOT NULL,
   body TEXT NOT NULL DEFAULT '',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (tenant_id, user_id, slug)
+  UNIQUE (user_id, slug)
 );
 
 CREATE TABLE IF NOT EXISTS memory_revisions (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   document_id TEXT NOT NULL REFERENCES memory_documents(id) ON DELETE CASCADE,
   status TEXT NOT NULL,
@@ -201,7 +173,6 @@ CREATE TABLE IF NOT EXISTS memory_revisions (
 
 CREATE TABLE IF NOT EXISTS outbound_messages (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
   approval_id TEXT REFERENCES approvals(id) ON DELETE SET NULL,
@@ -218,7 +189,6 @@ CREATE TABLE IF NOT EXISTS outbound_messages (
 
 CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   object_key TEXT NOT NULL,
   content_type TEXT NOT NULL,
@@ -230,7 +200,6 @@ CREATE TABLE IF NOT EXISTS attachments (
 
 CREATE TABLE IF NOT EXISTS links (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   url TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -240,7 +209,6 @@ CREATE TABLE IF NOT EXISTS links (
 
 CREATE TABLE IF NOT EXISTS article_snapshots (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   link_id TEXT NOT NULL REFERENCES links(id) ON DELETE CASCADE,
   title TEXT,
@@ -251,7 +219,6 @@ CREATE TABLE IF NOT EXISTS article_snapshots (
 
 CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
   status TEXT NOT NULL,
@@ -266,7 +233,6 @@ CREATE TABLE IF NOT EXISTS agent_runs (
 
 CREATE TABLE IF NOT EXISTS tool_calls (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   run_id TEXT REFERENCES agent_runs(id) ON DELETE SET NULL,
   tool_name TEXT NOT NULL,
@@ -280,7 +246,6 @@ CREATE TABLE IF NOT EXISTS tool_calls (
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id) ON DELETE SET NULL,
   user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
   actor_type TEXT NOT NULL,
   action TEXT NOT NULL,
@@ -299,8 +264,13 @@ CREATE TABLE IF NOT EXISTS admin_ai_config (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
-CREATE INDEX IF NOT EXISTS idx_tasks_tenant_user_status_due ON tasks(tenant_id, user_id, status, due_at);
-CREATE INDEX IF NOT EXISTS idx_audit_log_tenant_user_created ON audit_log(tenant_id, user_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_runs_tenant_user_started ON agent_runs(tenant_id, user_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_user_status_due ON tasks(user_id, status, due_at);
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_created ON audit_log(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_user_started ON agent_runs(user_id, started_at DESC);
 `;
