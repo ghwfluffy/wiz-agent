@@ -338,6 +338,17 @@ describe("cross-app integration gateway", () => {
     });
 
     expect(resolveIntegrationActionRequest({
+      actionId: "goals.list_notifications",
+      query: { timezone: "America/Chicago" }
+    })).toEqual({
+      ok: true,
+      app: "goals",
+      path: "/notifications?timezone=America%2FChicago",
+      method: "GET",
+      body: undefined
+    });
+
+    expect(resolveIntegrationActionRequest({
       actionId: "budget.get_net_worth_forecast",
       query: { unexpected: "nope" }
     })).toEqual({

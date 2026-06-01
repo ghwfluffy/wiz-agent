@@ -198,7 +198,7 @@ const goalActions: readonly IntegrationActionCapability[] = [
     risk: "low",
     method: "GET",
     pathTemplate: "/notifications",
-    queryParams: ["include_completed"],
+    queryParams: ["include_completed", "timezone"],
     purpose: "Fetch pending or recent goal reminders for the current user.",
     whenToUse: ["The owner asks what they need to do now or which reminders are outstanding."],
     safety: ["Do not mark reminders complete from this read action."],
