@@ -53,6 +53,10 @@ the worker is running.
 The worker entrypoint must start whether Node receives an absolute or relative
 script path from `npm run worker:start`; otherwise queued outbox records and IMAP
 polling can appear healthy at the container level while no worker ticks occur.
+Worker ticks deliver pending/approved outbox records before polling IMAP, and
+IMAP polling has bounded connection/socket timeouts. A mailbox outage must be
+visible as a worker IMAP error, not prevent owner-review notifications or other
+queued outbound messages from being delivered.
 
 The Settings tab includes an IMAP test action. The test saves the current IMAP
 form values, connects to the configured mailbox, opens the mailbox, and reports

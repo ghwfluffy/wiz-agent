@@ -121,6 +121,64 @@ describe("worker loop", () => {
     expect(messages.filter((message) => message.status === "approved")).toHaveLength(1);
   });
 
+  it("delivers outbound messages even when IMAP processing fails", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-outbound-before-imap-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-outbound-before-imap-test",
+      session
+    };
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "pending",
+      toAddr: "owner-sms@example.test",
+      bodyText: "review this sender"
+    });
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: { host: "smtp.example.test", password: "secret" }
+      }
+    });
+    await store.upsertConnector(context, {
+      kind: "imap",
+      status: "enabled",
+      config: {
+        username: "agent@example.test",
+        imap: { host: "imap.example.test", password: "secret" }
+      }
+    });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
+
+    const result = await workerTick({
+      store,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OUTBOUND_ENABLED: "true"
+      }),
+      mailTransport: { sendMail },
+      imapProcessor: async () => {
+        throw new Error("IMAP unavailable");
+      }
+    });
+
+    expect(result).toMatchObject({
+      outboundAttempted: 1,
+      outboundSent: 1,
+      inboundFailed: 1
+    });
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
   it("records IMAP worker failures in user audit logs", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

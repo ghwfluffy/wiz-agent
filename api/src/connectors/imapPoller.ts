@@ -174,6 +174,9 @@ export async function processImapInbox(options: {
     host: config.host,
     port: config.port ?? 993,
     secure: config.secure ?? true,
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
     auth: {
       user: config.username,
       pass: config.password
@@ -272,6 +275,9 @@ export async function testImapConnection(options: {
     host: config.host,
     port: config.port ?? 993,
     secure: config.secure ?? true,
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
     auth: {
       user: config.username,
       pass: config.password
