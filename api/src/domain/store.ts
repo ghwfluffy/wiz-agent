@@ -17,6 +17,7 @@ import type {
   OutboundMessageRecord,
   RequestContext,
   SenderClassification,
+  SenderRecord,
   SenderStatus,
   TaskInput,
   TaskRecord,
@@ -86,6 +87,20 @@ function outboundFromRow(row: Record<string, unknown>): OutboundMessageRecord {
     toAddr: String(row.to_addr),
     subject: row.subject ? String(row.subject) : null,
     bodyText: String(row.body_text),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
+    sentAt: row.sent_at instanceof Date ? row.sent_at.toISOString() : row.sent_at ? String(row.sent_at) : null,
+    failureMessage: row.failure_message ? String(row.failure_message) : null
+  };
+}
+
+function senderFromRow(row: Record<string, unknown>): SenderRecord {
+  return {
+    id: String(row.id),
+    tenantId: String(row.tenant_id),
+    userId: String(row.user_id),
+    address: String(row.address),
+    status: row.status as SenderStatus,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
   };
@@ -588,6 +603,16 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return toolCallFromRow(result.rows[0]);
     },
 
+    async listSenders(context) {
+      const result = await pool.query(
+        `SELECT * FROM senders
+         WHERE tenant_id = $1 AND user_id = $2
+         ORDER BY updated_at DESC, address ASC`,
+        [context.tenantId, context.userId]
+      );
+      return result.rows.map(senderFromRow);
+    },
+
     async getSenderStatus(context, address) {
       const result = await pool.query(
         `SELECT status FROM senders
@@ -710,7 +735,7 @@ export function createMemoryStore(): AgentStore {
   const tasks = new Map<string, TaskRecord>();
   const runs = new Map<string, AgentRunRecord>();
   const toolCalls = new Map<string, ToolCallRecord>();
-  const senderStatuses = new Map<string, SenderStatus>();
+  const senderStatuses = new Map<string, SenderRecord>();
   const inboundProviderIds = new Map<string, string>();
   const outboundMessages = new Map<string, OutboundMessageRecord>();
   const audit: AuditRecord[] = [];
@@ -981,11 +1006,27 @@ export function createMemoryStore(): AgentStore {
       });
       return toolCall;
     },
+    async listSenders(context) {
+      return [...senderStatuses.values()]
+        .filter((sender) => sender.tenantId === context.tenantId && sender.userId === context.userId)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.address.localeCompare(b.address));
+    },
     async getSenderStatus(context, address) {
-      return senderStatuses.get(`${context.tenantId}:${context.userId}:${address.toLowerCase()}`);
+      return senderStatuses.get(`${context.tenantId}:${context.userId}:${address.toLowerCase()}`)?.status;
     },
     async setSenderStatus(context, address, status) {
-      senderStatuses.set(`${context.tenantId}:${context.userId}:${address.toLowerCase()}`, status);
+      const key = `${context.tenantId}:${context.userId}:${address.toLowerCase()}`;
+      const existing = senderStatuses.get(key);
+      const now = nowIso();
+      senderStatuses.set(key, {
+        id: existing?.id ?? randomUUID(),
+        tenantId: context.tenantId,
+        userId: context.userId,
+        address: address.toLowerCase(),
+        status,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      });
       pushAudit(context, "sender.status.set", "sender", address, { status });
     },
     async recordInboundMessage(context, input, classification) {
@@ -1010,7 +1051,9 @@ export function createMemoryStore(): AgentStore {
         approvalId: input.approvalId ?? null,
         subject: input.subject ?? null,
         createdAt: now,
-        updatedAt: now
+        updatedAt: now,
+        sentAt: null,
+        failureMessage: null
       };
       outboundMessages.set(message.id, message);
       pushAudit(context, "outbound.queue", "outbound_message", message.id, {
@@ -1035,7 +1078,9 @@ export function createMemoryStore(): AgentStore {
       const updated = {
         ...message,
         status,
-        updatedAt: nowIso()
+        updatedAt: nowIso(),
+        sentAt: status === "sent" ? nowIso() : message.sentAt,
+        failureMessage
       };
       outboundMessages.set(messageId, updated);
       pushAudit(context, `outbound.${status}`, "outbound_message", messageId, {

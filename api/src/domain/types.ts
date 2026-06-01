@@ -41,6 +41,16 @@ export type SenderStatus = "owner" | "newsletter" | "trusted" | "blocked" | "unt
 
 export type SenderClassification = "owner" | "newsletter" | "untrusted" | "blocked";
 
+export type SenderRecord = {
+  id: string;
+  tenantId: string;
+  userId: string;
+  address: string;
+  status: SenderStatus;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type InboundMessageInput = {
   providerMessageId: string;
   fromAddr: string;
@@ -67,6 +77,8 @@ export type OutboundMessageRecord = OutboundMessageInput & {
   userId: string;
   createdAt: string;
   updatedAt: string;
+  sentAt?: string | null;
+  failureMessage?: string | null;
 };
 
 export type InboundHandlingResult = {
@@ -176,6 +188,7 @@ export type AgentStore = {
       validationError?: string | null;
     }
   ): Promise<ToolCallRecord>;
+  listSenders(context: RequestContext): Promise<SenderRecord[]>;
   getSenderStatus(context: RequestContext, address: string): Promise<SenderStatus | undefined>;
   setSenderStatus(context: RequestContext, address: string, status: SenderStatus): Promise<void>;
   recordInboundMessage(

@@ -5,7 +5,7 @@ import { loadSettings, type Settings } from "../config/settings.js";
 import { clearSessionCookie, writeSessionCookie } from "../auth/session.js";
 import { createPool } from "../db/pool.js";
 import { createMemoryStore, createPostgresStore } from "../domain/store.js";
-import type { AgentStore, RequestContext } from "../domain/types.js";
+import type { AgentStore, RequestContext, SenderStatus } from "../domain/types.js";
 
 export type AppOptions = {
   settings?: Settings;
@@ -361,6 +361,33 @@ export function buildApp(options: AppOptions = {}): Hono {
     return context.json(message);
   });
 
+  app.get("/api/v1/senders", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    return context.json({ senders: await store.listSenders(authContext) });
+  });
+
+  app.put("/api/v1/senders/:address", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const address = decodeURIComponent(context.req.param("address")).trim().toLowerCase();
+    const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
+    const status = payload?.status;
+    const allowedStatuses = new Set(["owner", "newsletter", "trusted", "blocked", "untrusted"]);
+    if (!address || !allowedStatuses.has(String(status))) {
+      return context.json(
+        errorPayload("validation_error", "Sender address and valid status are required.", authContext.requestId),
+        400
+      );
+    }
+    await store.setSenderStatus(authContext, address, status as SenderStatus);
+    return context.json({ senders: await store.listSenders(authContext) });
+  });
+
   app.get("/api/v1/admin/audit", async (context) => {
     const authContext = await requireAdmin(context);
     if (authContext instanceof Response) {
@@ -407,7 +434,39 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (authContext instanceof Response) {
       return authContext;
     }
-    return context.json({ jobs: [] });
+    const [tasks, outbox, audit] = await Promise.all([
+      store.listTasks(authContext),
+      store.listOutboundMessages(authContext),
+      store.listAudit(authContext, true)
+    ]);
+    const dueTasks = tasks.filter((task) => {
+      if (task.status !== "pending" || !task.dueAt) {
+        return false;
+      }
+      return new Date(task.dueAt).getTime() <= Date.now();
+    });
+    const countOutbox = (status: string) => outbox.filter((message) => message.status === status).length;
+    return context.json({
+      generatedAt: new Date().toISOString(),
+      jobs: [
+        {
+          name: "task-runner",
+          status: "configured",
+          pendingTasks: tasks.filter((task) => task.status === "pending").length,
+          dueTasks: dueTasks.length,
+          lastAuditAt: audit.find((event) => event.action.startsWith("agent_run."))?.createdAt ?? null
+        },
+        {
+          name: "outbox",
+          status: "configured",
+          pendingMessages: countOutbox("pending"),
+          approvedMessages: countOutbox("approved"),
+          sendingMessages: countOutbox("sending"),
+          failedMessages: countOutbox("failed"),
+          lastAuditAt: audit.find((event) => event.action.startsWith("outbound."))?.createdAt ?? null
+        }
+      ]
+    });
   });
 
   return app;

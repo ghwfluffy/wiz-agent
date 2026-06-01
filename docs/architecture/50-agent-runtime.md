@@ -21,6 +21,10 @@ The current configuration sources are:
 - environment variables for deploy-time defaults;
 - `admin_ai_config` for admin-managed runtime defaults.
 
+Administrators can inspect and update `admin_ai_config` from the operations UI.
+The API keeps the admin route separate from normal user routes, so non-admin
+sessions cannot change model tier defaults.
+
 The deterministic host chooses the tier before the model call. The first policy
 uses `fast` by default, `smart` for ambiguous/large/retry-prone work,
 `orchestrator` for bounded planning, and `repair` only for schema repair.

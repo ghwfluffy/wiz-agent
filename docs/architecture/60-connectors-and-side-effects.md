@@ -71,6 +71,16 @@ The `propose_outbound_message` tool only writes an outbound queue record.
 Deterministic host code owns approval handling, SMTP transport configuration,
 delivery, status updates, and audit records.
 
+The operations UI lists actionable outbox records, shows delivery failure
+messages, and lets an authenticated operator approve or cancel queued outbound
+messages. Sent records remain auditable through API/history rather than being
+treated as active queue work.
+
+Sender trust is operator-managed. The API and UI can list sender
+classifications and set a sender to `owner`, `newsletter`, `trusted`,
+`blocked`, or `untrusted`. Sender changes write audit events so future inbound
+behavior can be traced back to an operator decision.
+
 ## MMS Images
 
 MMS image handling must:

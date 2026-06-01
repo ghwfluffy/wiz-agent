@@ -20,6 +20,13 @@ available at `http://localhost:18080`. In standalone mode, the
 sign-in button calls `POST /api/v1/auth/dev-login` and creates a session for the
 configured development user.
 
+The home screen is the operational dashboard. It supports creating and updating
+tasks, approving or cancelling outbound messages, managing sender trust,
+inspecting worker queue status, viewing recent audit history, and editing admin
+AI model configuration when the signed-in user is an administrator. OAuth
+callback failures redirect back to the UI with an `oauth_error` token; the web
+store converts that token into a friendly message and removes it from the URL.
+
 API and worker startup run the TypeScript migration runner before serving:
 
 ```bash

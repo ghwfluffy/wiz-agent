@@ -25,11 +25,31 @@ describe("home view", () => {
       })
       .mockResolvedValueOnce({
         ok: true,
-        json: async () => ({ messages: [{ id: "msg-1", channel: "sms", status: "sent", toAddr: "sms@example.test", bodyText: "hi", createdAt: "", updatedAt: "" }] })
+        json: async () => ({ messages: [{ id: "msg-1", channel: "sms", status: "approved", toAddr: "sms@example.test", bodyText: "hi", createdAt: "", updatedAt: "" }] })
       })
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ events: [{ id: "evt-1", action: "task.create", entityType: "task", entityId: "task-1", createdAt: "" }] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ senders: [{ id: "sender-1", address: "owner@example.test", status: "owner", createdAt: "", updatedAt: "" }] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          fastModel: "gpt-5-mini",
+          smartModel: "gpt-5",
+          orchestratorModel: "gpt-5",
+          repairModel: "gpt-5-mini",
+          maxToolCalls: 10,
+          maxRuntimeSec: 120,
+          repairAttemptLimit: 1
+        })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ jobs: [{ name: "outbox", status: "configured", pendingMessages: 1 }] })
       });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -39,5 +59,7 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Check in");
     expect(wrapper.text()).toContain("sms to sms@example.test");
     expect(wrapper.text()).toContain("Audit events");
+    expect(wrapper.text()).toContain("owner@example.test");
+    expect(wrapper.text()).toContain("AI configuration");
   });
 });

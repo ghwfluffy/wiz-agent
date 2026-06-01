@@ -10,6 +10,24 @@ type AuthState = {
   error: string | null;
 };
 
+const oauthErrorMessages: Record<string, string> = {
+  oauth_callback: "Central sign-in could not be completed. Please try again.",
+  oauth_failed: "Central sign-in could not be completed. Please try again.",
+  oauth_not_enabled: "Central sign-in is not enabled for this deployment.",
+  oauth_state: "Central sign-in expired. Please start again."
+};
+
+function consumeOAuthError(): string | null {
+  const url = new URL(window.location.href);
+  const code = url.searchParams.get("oauth_error");
+  if (!code) {
+    return null;
+  }
+  url.searchParams.delete("oauth_error");
+  window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
+  return oauthErrorMessages[code] ?? "Central sign-in could not be completed. Please try again.";
+}
+
 export const useAuthStore = defineStore("auth", {
   state: (): AuthState => ({
     loaded: false,
@@ -29,11 +47,15 @@ export const useAuthStore = defineStore("auth", {
     },
     async restore(): Promise<void> {
       this.loading = true;
+      const oauthError = consumeOAuthError();
       try {
         this.applyAuth(await api.me());
+        if (oauthError && !this.authenticated) {
+          this.error = oauthError;
+        }
       } catch {
         this.loaded = true;
-        this.error = "Unable to restore the current session.";
+        this.error = oauthError ?? "Unable to restore the current session.";
       } finally {
         this.loading = false;
       }

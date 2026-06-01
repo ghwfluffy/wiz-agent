@@ -13,7 +13,7 @@ body {
 }
 
 .home-view {
-  max-width: 960px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 48px 24px;
 }
@@ -63,6 +63,14 @@ h1 {
   align-items: end;
 }
 
+.header-actions,
+.row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
 .dashboard {
   display: grid;
   gap: 24px;
@@ -70,7 +78,7 @@ h1 {
 
 .metric-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1px;
   background: #c6c6c6;
   border: 1px solid #c6c6c6;
@@ -88,6 +96,54 @@ h1 {
   font-weight: 600;
 }
 
+.section-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: center;
+}
+
+.inline-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.inline-form.compact {
+  grid-template-columns: minmax(0, 1fr) 180px auto;
+  align-items: end;
+}
+
+.config-form {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: end;
+}
+
+.inline-form label {
+  display: grid;
+  gap: 6px;
+  color: #525252;
+  font-size: 0.875rem;
+}
+
+.inline-form input,
+.inline-form select,
+.inline-form textarea,
+.activity-section select {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #8d8d8d;
+  background: #ffffff;
+  color: #161616;
+  font: inherit;
+  padding: 10px;
+}
+
+.inline-form textarea {
+  resize: vertical;
+}
+
 .activity-section ul {
   display: grid;
   gap: 1px;
@@ -103,6 +159,16 @@ h1 {
   gap: 16px;
   padding: 12px;
   background: #f4f4f4;
+  align-items: center;
+}
+
+.activity-section li p {
+  margin: 6px 0;
+  color: #393939;
+}
+
+.activity-section small {
+  color: #6f6f6f;
 }
 
 .empty {
@@ -127,7 +193,10 @@ h1 {
   .auth-panel,
   .dashboard-header,
   .metric-grid,
-  .activity-section li {
+  .activity-section li,
+  .inline-form,
+  .inline-form.compact,
+  .config-form {
     grid-template-columns: 1fr;
     align-items: stretch;
   }
@@ -135,5 +204,10 @@ h1 {
   .auth-panel {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .header-actions,
+  .row-actions {
+    justify-content: stretch;
   }
 }

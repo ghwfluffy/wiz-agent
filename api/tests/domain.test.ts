@@ -213,4 +213,92 @@ describe("domain and tenancy APIs", () => {
     expect(update.status).toBe(200);
     await expect(update.json()).resolves.toMatchObject({ status: "approved" });
   });
+
+  it("lets users manage trusted sender classifications", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "sender-login");
+
+    const update = await app.request("/api/v1/senders/newsletter%40example.test", {
+      method: "PUT",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ status: "newsletter" })
+    });
+
+    expect(update.status).toBe(200);
+    await expect(update.json()).resolves.toMatchObject({
+      senders: [
+        expect.objectContaining({
+          address: "newsletter@example.test",
+          status: "newsletter"
+        })
+      ]
+    });
+
+    const list = await app.request("/api/v1/senders", {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({
+      senders: [
+        expect.objectContaining({
+          address: "newsletter@example.test",
+          status: "newsletter"
+        })
+      ]
+    });
+  });
+
+  it("returns operational job status for administrators", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_IS_ADMIN: "true"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "jobs-login");
+
+    await app.request("/api/v1/tasks", {
+      method: "POST",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        title: "Due task",
+        prompt: "Run me.",
+        dueAt: new Date(Date.now() - 60_000).toISOString()
+      })
+    });
+
+    const response = await app.request("/api/v1/admin/jobs", {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      jobs: [
+        expect.objectContaining({
+          name: "task-runner",
+          pendingTasks: 1,
+          dueTasks: 1
+        }),
+        expect.objectContaining({
+          name: "outbox"
+        })
+      ]
+    });
+  });
 });

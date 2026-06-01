@@ -41,4 +41,23 @@ describe("auth store", () => {
     expect(auth.user?.email).toBe("dev@example.test");
     expect(auth.tenant?.id).toBe("dev-tenant");
   });
+
+  it("shows a friendly OAuth error and removes it from the URL", async () => {
+    window.history.replaceState({}, "", "/agent/?oauth_error=oauth_state");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        authenticated: false,
+        user: null,
+        tenant: null
+      })
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const auth = useAuthStore();
+    await auth.restore();
+
+    expect(auth.error).toBe("Central sign-in expired. Please start again.");
+    expect(window.location.search).toBe("");
+  });
 });
