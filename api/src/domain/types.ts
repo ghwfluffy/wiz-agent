@@ -35,6 +35,16 @@ export type TaskUpdate = Partial<TaskInput> & {
   status?: string;
 };
 
+export type TaskEventRecord = {
+  id: string;
+  userId: string;
+  taskId: string;
+  eventType: string;
+  summary: string;
+  details: Record<string, unknown>;
+  createdAt: string;
+};
+
 export type SenderStatus = "owner" | "newsletter" | "trusted" | "blocked" | "untrusted";
 
 export type SenderClassification = "owner" | "newsletter" | "untrusted" | "blocked";
@@ -155,6 +165,13 @@ export type AgentStore = {
   listTasks(context: RequestContext): Promise<TaskRecord[]>;
   getTask(context: RequestContext, taskId: string): Promise<TaskRecord | undefined>;
   updateTask(context: RequestContext, taskId: string, update: TaskUpdate): Promise<TaskRecord | undefined>;
+  listTaskEvents(context: RequestContext, taskId: string): Promise<TaskEventRecord[]>;
+  recordTaskEvent(
+    context: Pick<RequestContext, "userId">,
+    taskId: string,
+    eventType: string,
+    details?: Record<string, unknown>
+  ): Promise<TaskEventRecord>;
   claimDueTasks(context: RequestContext, limit: number, now?: Date): Promise<TaskRecord[]>;
   listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]>;
   getAiConfig(): Promise<AiConfig>;

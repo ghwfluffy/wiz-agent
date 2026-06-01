@@ -30,7 +30,7 @@ behavior without revisiting ownership boundaries. Only a subset is actively used
 by the current API:
 
 - standalone user/session creation;
-- task CRUD;
+- task CRUD, task event listing, and follow-up prompts;
 - audit listing;
 - admin AI config.
 
@@ -58,3 +58,14 @@ new explicit design. Do not reintroduce generic tenant fields ad hoc.
 Source records such as messages, tasks, approvals, memory revisions, tool calls,
 and audit logs should be preserved. Summaries, dashboards, and cached activity
 views should be rebuildable from source records where practical.
+
+## Task Events
+
+`task_events` is the user-visible timeline for a task. It records task creation,
+status changes, worker claims, agent prompt/response summaries, agent run
+completion/failure, tool-call outcomes, and user follow-up prompts. The API
+returns only events for tasks owned by the signed-in user.
+
+Adding a follow-up prompt appends the new instruction to the task prompt, returns
+the task to `pending`, and records a `task.prompt_added` event so the user can
+see why the task re-entered the queue.

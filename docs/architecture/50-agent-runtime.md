@@ -110,6 +110,12 @@ Every proposed tool call records:
 Audit events are written for run creation, run completion/failure, and tool-call
 acceptance/rejection.
 
+Task events are also written for user-facing traceability when a task is tied to
+the run. The task timeline should show when the agent was prompted, a bounded
+summary of the model response, run completion or failure, and accepted or
+rejected tool-call outcomes. These task events are for the owner-facing task
+modal; audit logs remain the broader operational record.
+
 ## Host-Owned Controls
 
 The host owns:

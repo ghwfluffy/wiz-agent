@@ -40,6 +40,7 @@ Current tests cover:
 - sender classification and untrusted-message handling.
 - untrusted sender rate limiting.
 - due task claiming.
+- task event listing and follow-up prompt handoff.
 - safe URL rejection.
 - MMS image sanitization policy.
 - cross-app integration token enforcement.
@@ -53,6 +54,7 @@ Current tests cover:
 - outbox listing, status updates, SMTP queue delivery, and fail-closed outbound
   delivery.
 - operations dashboard rendering.
+- tabbed Carbon dashboard rendering.
 
 Future phases should add migration, user ownership, authorization, worker,
 tool-call, connector, and admin UI tests alongside the feature work. Tenant

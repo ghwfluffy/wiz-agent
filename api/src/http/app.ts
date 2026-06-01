@@ -291,6 +291,9 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (!payload) {
       return context.json(errorPayload("validation_error", "Request body is required.", authContext.requestId), 400);
     }
+    if (payload.status !== undefined && !["pending", "claimed", "running", "completed", "cancelled", "failed"].includes(String(payload.status))) {
+      return context.json(errorPayload("validation_error", "A valid task status is required.", authContext.requestId), 400);
+    }
     const task = await store.updateTask(authContext, context.req.param("id"), {
       title: typeof payload.title === "string" ? payload.title : undefined,
       prompt: typeof payload.prompt === "string" ? payload.prompt : undefined,
@@ -302,6 +305,46 @@ export function buildApp(options: AppOptions = {}): Hono {
       return context.json(errorPayload("http_404", "Task not found.", authContext.requestId), 404);
     }
     return context.json(task);
+  });
+
+  app.get("/api/v1/tasks/:id/events", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const task = await store.getTask(authContext, context.req.param("id"));
+    if (!task) {
+      return context.json(errorPayload("http_404", "Task not found.", authContext.requestId), 404);
+    }
+    return context.json({ events: await store.listTaskEvents(authContext, task.id) });
+  });
+
+  app.post("/api/v1/tasks/:id/prompts", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
+    const prompt = typeof payload?.prompt === "string" ? payload.prompt.trim() : "";
+    if (!prompt) {
+      return context.json(errorPayload("validation_error", "Prompt text is required.", authContext.requestId), 400);
+    }
+    const task = await store.getTask(authContext, context.req.param("id"));
+    if (!task) {
+      return context.json(errorPayload("http_404", "Task not found.", authContext.requestId), 404);
+    }
+    const updated = await store.updateTask(authContext, task.id, {
+      prompt: `${task.prompt}\n\nFollow-up prompt:\n${prompt}`,
+      status: "pending"
+    });
+    await store.recordTaskEvent(authContext, task.id, "task.prompt_added", {
+      prompt,
+      summary: "Follow-up prompt added and task returned to pending."
+    });
+    return context.json({
+      task: updated,
+      events: await store.listTaskEvents(authContext, task.id)
+    });
   });
 
   for (const [path, key] of [

@@ -7,7 +7,8 @@ import {
   type JobStatus,
   type OutboxMessage,
   type Sender,
-  type Task
+  type Task,
+  type TaskEvent
 } from "../lib/api";
 import { apiUrl } from "../lib/basePath";
 import { useAuthStore } from "../stores/auth";
@@ -15,6 +16,17 @@ import { useAuthStore } from "../stores/auth";
 const auth = useAuthStore();
 const authMode = import.meta.env.VITE_AUTH_MODE || "standalone";
 const signInLabel = computed(() => (authMode === "standalone" ? "Sign in" : "Continue with central sign-in"));
+const tabs = [
+  { id: "overview", label: "Overview" },
+  { id: "tasks", label: "Tasks" },
+  { id: "senders", label: "Senders" },
+  { id: "workers", label: "Workers" },
+  { id: "logs", label: "Logs" },
+  { id: "admin", label: "Admin" }
+] as const;
+type TabId = typeof tabs[number]["id"];
+const activeTab = ref<TabId>("overview");
+
 const tasks = ref<Task[]>([]);
 const outbox = ref<OutboxMessage[]>([]);
 const audit = ref<AuditEvent[]>([]);
@@ -23,6 +35,14 @@ const aiConfig = ref<AiConfig | null>(null);
 const jobs = ref<JobStatus[]>([]);
 const dashboardError = ref<string | null>(null);
 const saving = ref(false);
+const taskPage = ref(1);
+const tasksPerPage = 10;
+const selectedTask = ref<Task | null>(null);
+const selectedTaskEvents = ref<TaskEvent[]>([]);
+const taskStatusDraft = ref("");
+const taskFollowUpPrompt = ref("");
+const taskModalError = ref<string | null>(null);
+
 const taskForm = reactive({
   title: "",
   prompt: "",
@@ -43,8 +63,17 @@ const configForm = reactive<AiConfig>({
   repairAttemptLimit: 1
 });
 
+const taskStatuses = ["pending", "claimed", "running", "completed", "cancelled", "failed"];
 const pendingOutbox = computed(() => outbox.value.filter((message) => ["requires_approval", "pending", "approved", "failed"].includes(message.status)));
 const recentAudit = computed(() => audit.value.slice(0, 12));
+const totalTaskPages = computed(() => Math.max(1, Math.ceil(tasks.value.length / tasksPerPage)));
+const paginatedTasks = computed(() => {
+  const page = Math.min(taskPage.value, totalTaskPages.value);
+  const offset = (page - 1) * tasksPerPage;
+  return tasks.value.slice(offset, offset + tasksPerPage);
+});
+const selectedTaskOpen = computed(() => selectedTask.value !== null);
+const taskModalTitle = computed(() => selectedTask.value?.title ?? "Task details");
 
 function applyAiConfig(config: AiConfig | null): void {
   aiConfig.value = config;
@@ -52,6 +81,52 @@ function applyAiConfig(config: AiConfig | null): void {
     return;
   }
   Object.assign(configForm, config);
+}
+
+function formatDate(value: string | null | undefined): string {
+  if (!value) {
+    return "Not set";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString();
+}
+
+function statusTagClass(status: string): string {
+  if (["completed", "sent", "approved", "configured", "owner", "trusted"].includes(status)) {
+    return "cds--tag--green";
+  }
+  if (["failed", "blocked"].includes(status)) {
+    return "cds--tag--red";
+  }
+  if (["running", "claimed", "sending", "newsletter"].includes(status)) {
+    return "cds--tag--blue";
+  }
+  if (["cancelled", "untrusted"].includes(status)) {
+    return "cds--tag--gray";
+  }
+  return "cds--tag--warm-gray";
+}
+
+function formatDetails(details: Record<string, unknown>): string {
+  if (Object.keys(details).length === 0) {
+    return "";
+  }
+  return JSON.stringify(details, null, 2);
+}
+
+function setActiveTab(tabId: TabId): void {
+  activeTab.value = tabId;
+}
+
+function previousTaskPage(): void {
+  taskPage.value = Math.max(1, taskPage.value - 1);
+}
+
+function nextTaskPage(): void {
+  taskPage.value = Math.min(totalTaskPages.value, taskPage.value + 1);
 }
 
 async function loadDashboard(): Promise<void> {
@@ -66,6 +141,7 @@ async function loadDashboard(): Promise<void> {
     senders.value = data.senders;
     jobs.value = data.jobs;
     applyAiConfig(data.aiConfig);
+    taskPage.value = Math.min(taskPage.value, totalTaskPages.value);
     dashboardError.value = null;
   } catch {
     dashboardError.value = "Unable to load agent activity.";
@@ -85,6 +161,7 @@ async function createTask(): Promise<void> {
     taskForm.prompt = "";
     taskForm.dueAt = "";
     taskForm.priority = 0;
+    taskPage.value = 1;
     await loadDashboard();
   } catch {
     dashboardError.value = "Unable to save the task.";
@@ -93,18 +170,64 @@ async function createTask(): Promise<void> {
   }
 }
 
-async function updateTaskStatus(task: Task, status: string): Promise<void> {
+async function openTask(task: Task): Promise<void> {
+  selectedTask.value = task;
+  taskStatusDraft.value = task.status;
+  taskFollowUpPrompt.value = "";
+  taskModalError.value = null;
   try {
-    await api.updateTask(task.id, { status });
-    await loadDashboard();
+    const response = await api.listTaskEvents(task.id);
+    selectedTaskEvents.value = response.events;
   } catch {
-    dashboardError.value = "Unable to update the task.";
+    selectedTaskEvents.value = [];
+    taskModalError.value = "Unable to load task events.";
   }
 }
 
-function updateTaskFromEvent(task: Task, event: Event): void {
-  const target = event.target as HTMLSelectElement;
-  void updateTaskStatus(task, target.value);
+function closeTask(): void {
+  selectedTask.value = null;
+  selectedTaskEvents.value = [];
+  taskFollowUpPrompt.value = "";
+  taskModalError.value = null;
+}
+
+async function saveTaskStatus(): Promise<void> {
+  if (!selectedTask.value) {
+    return;
+  }
+  saving.value = true;
+  try {
+    const task = await api.updateTask(selectedTask.value.id, { status: taskStatusDraft.value });
+    selectedTask.value = task;
+    await loadDashboard();
+    const response = await api.listTaskEvents(task.id);
+    selectedTaskEvents.value = response.events;
+    taskModalError.value = null;
+  } catch {
+    taskModalError.value = "Unable to update task status.";
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function addFollowUpPrompt(): Promise<void> {
+  if (!selectedTask.value || !taskFollowUpPrompt.value.trim()) {
+    return;
+  }
+  saving.value = true;
+  try {
+    const response = await api.addTaskPrompt(selectedTask.value.id, taskFollowUpPrompt.value);
+    selectedTask.value = response.task;
+    selectedTaskEvents.value = response.events;
+    taskStatusDraft.value = response.task.status;
+    taskFollowUpPrompt.value = "";
+    await loadDashboard();
+    taskModalError.value = null;
+  } catch {
+    taskModalError.value = "Unable to add the follow-up prompt.";
+  } finally {
+    saving.value = false;
+  }
 }
 
 async function updateOutboxStatus(message: OutboxMessage, status: "approved" | "cancelled"): Promise<void> {
@@ -176,8 +299,13 @@ watch(() => auth.authenticated, (authenticated) => {
       <h1>Tasks, messages, and agent operations</h1>
     </header>
 
-    <div v-if="auth.error" class="status status-error" role="alert">
-      {{ auth.error }}
+    <div v-if="auth.error" class="cds--inline-notification cds--inline-notification--error" role="alert">
+      <div class="cds--inline-notification__details">
+        <div class="cds--inline-notification__text-wrapper">
+          <p class="cds--inline-notification__title">Sign-in error</p>
+          <p class="cds--inline-notification__subtitle">{{ auth.error }}</p>
+        </div>
+      </div>
     </div>
 
     <section v-if="!auth.authenticated" class="auth-panel" aria-label="Sign in">
@@ -203,189 +331,414 @@ watch(() => auth.authenticated, (authenticated) => {
         </div>
       </header>
 
-      <div v-if="dashboardError" class="status status-error" role="alert">
-        {{ dashboardError }}
-      </div>
-
-      <div class="metric-grid" aria-label="Operational summary">
-        <section>
-          <p class="label">Tasks</p>
-          <p class="value">{{ tasks.length }}</p>
-        </section>
-        <section>
-          <p class="label">Outbox</p>
-          <p class="value">{{ outbox.length }}</p>
-        </section>
-        <section>
-          <p class="label">Senders</p>
-          <p class="value">{{ senders.length }}</p>
-        </section>
-        <section>
-          <p class="label">Audit events</p>
-          <p class="value">{{ audit.length }}</p>
-        </section>
-      </div>
-
-      <section class="activity-section" aria-label="Scheduled tasks">
-        <div class="section-heading">
-          <h2>Scheduled tasks</h2>
+      <div v-if="dashboardError" class="cds--inline-notification cds--inline-notification--error" role="alert">
+        <div class="cds--inline-notification__details">
+          <div class="cds--inline-notification__text-wrapper">
+            <p class="cds--inline-notification__title">Dashboard error</p>
+            <p class="cds--inline-notification__subtitle">{{ dashboardError }}</p>
+          </div>
         </div>
-        <form class="inline-form" @submit.prevent="createTask">
-          <label>
-            <span>Title</span>
-            <input v-model="taskForm.title" required type="text">
-          </label>
-          <label>
-            <span>Prompt</span>
-            <textarea v-model="taskForm.prompt" required rows="3" />
-          </label>
-          <label>
-            <span>Due</span>
-            <input v-model="taskForm.dueAt" type="datetime-local">
-          </label>
-          <label>
-            <span>Priority</span>
-            <input v-model.number="taskForm.priority" type="number" min="0" step="1">
-          </label>
-          <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
-            Add task
+      </div>
+
+      <nav class="cds--tabs" aria-label="Assistant sections">
+        <div class="cds--tab--list" role="tablist">
+          <button
+            v-for="tab in tabs"
+            :id="`tab-${tab.id}`"
+            :key="tab.id"
+            class="cds--tabs__nav-link"
+            :class="{ 'cds--tabs__nav-item--selected': activeTab === tab.id }"
+            type="button"
+            role="tab"
+            :aria-selected="activeTab === tab.id"
+            :aria-controls="`panel-${tab.id}`"
+            @click="setActiveTab(tab.id)"
+          >
+            {{ tab.label }}
           </button>
-        </form>
-        <p v-if="tasks.length === 0" class="empty">No tasks scheduled.</p>
-        <ul v-else>
-          <li v-for="task in tasks" :key="task.id">
-            <div>
-              <strong>{{ task.title }}</strong>
-              <p>{{ task.prompt }}</p>
-              <small>{{ task.dueAt || "No due date" }}</small>
-            </div>
-            <select :value="task.status" @change="updateTaskFromEvent(task, $event)">
-              <option value="pending">pending</option>
-              <option value="running">running</option>
-              <option value="completed">completed</option>
-              <option value="cancelled">cancelled</option>
-              <option value="failed">failed</option>
-            </select>
-          </li>
-        </ul>
+        </div>
+      </nav>
+
+      <section v-show="activeTab === 'overview'" id="panel-overview" class="tab-panel" role="tabpanel" aria-labelledby="tab-overview">
+        <div class="metric-grid" aria-label="Operational summary">
+          <section class="metric-card">
+            <p class="label">Tasks</p>
+            <p class="metric-value">{{ tasks.length }}</p>
+          </section>
+          <section class="metric-card">
+            <p class="label">Outbox</p>
+            <p class="metric-value">{{ outbox.length }}</p>
+          </section>
+          <section class="metric-card">
+            <p class="label">Senders</p>
+            <p class="metric-value">{{ senders.length }}</p>
+          </section>
+          <section class="metric-card">
+            <p class="label">Audit events</p>
+            <p class="metric-value">{{ audit.length }}</p>
+          </section>
+        </div>
+
+        <section class="activity-section" aria-label="Outbound queue">
+          <div class="section-heading">
+            <h2>Outbound queue</h2>
+          </div>
+          <p v-if="pendingOutbox.length === 0" class="empty">No queued messages.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra">
+            <thead>
+              <tr>
+                <th>Channel</th>
+                <th>Recipient</th>
+                <th>Status</th>
+                <th>Message</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="message in pendingOutbox" :key="message.id">
+                <td>{{ message.channel }}</td>
+                <td>{{ message.toAddr }}</td>
+                <td>
+                  <span class="cds--tag" :class="statusTagClass(message.status)">{{ message.status }}</span>
+                </td>
+                <td>
+                  <span class="table-copy">{{ message.failureMessage ? `Failure: ${message.failureMessage}` : message.bodyText }}</span>
+                </td>
+                <td>
+                  <div class="table-actions">
+                    <button class="cds--btn cds--btn--sm cds--btn--primary" type="button" :disabled="message.status === 'sent'" @click="updateOutboxStatus(message, 'approved')">
+                      Approve
+                    </button>
+                    <button class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="updateOutboxStatus(message, 'cancelled')">
+                      Cancel
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
       </section>
 
-      <section class="activity-section" aria-label="Outbound queue">
-        <h2>Outbound queue</h2>
-        <p v-if="pendingOutbox.length === 0" class="empty">No queued messages.</p>
-        <ul v-else>
-          <li v-for="message in pendingOutbox" :key="message.id">
-            <div>
-              <strong>{{ message.channel }} to {{ message.toAddr }}</strong>
-              <p>{{ message.bodyText }}</p>
-              <small v-if="message.failureMessage">Failure: {{ message.failureMessage }}</small>
-              <small v-else>{{ message.status }}</small>
+      <section v-show="activeTab === 'tasks'" id="panel-tasks" class="tab-panel" role="tabpanel" aria-labelledby="tab-tasks">
+        <section class="activity-section" aria-label="Create task">
+          <div class="section-heading">
+            <h2>Add task</h2>
+          </div>
+          <form class="form-grid" @submit.prevent="createTask">
+            <div class="cds--form-item">
+              <label class="cds--label" for="task-title">Title</label>
+              <input id="task-title" v-model="taskForm.title" class="cds--text-input" required type="text">
             </div>
-            <div class="row-actions">
-              <button class="cds--btn cds--btn--primary" type="button" :disabled="message.status === 'sent'" @click="updateOutboxStatus(message, 'approved')">
-                Approve
+            <div class="cds--form-item form-wide">
+              <label class="cds--label" for="task-prompt">Prompt</label>
+              <textarea id="task-prompt" v-model="taskForm.prompt" class="cds--text-area" required rows="4" />
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="task-due">Due</label>
+              <input id="task-due" v-model="taskForm.dueAt" class="cds--text-input" type="datetime-local">
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="task-priority">Priority</label>
+              <input id="task-priority" v-model.number="taskForm.priority" class="cds--text-input" type="number" min="0" step="1">
+            </div>
+            <div class="form-actions">
+              <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
+                Add task
               </button>
-              <button class="cds--btn cds--btn--secondary" type="button" @click="updateOutboxStatus(message, 'cancelled')">
-                Cancel
+            </div>
+          </form>
+        </section>
+
+        <section class="activity-section" aria-label="Tasks">
+          <div class="section-heading">
+            <h2>Tasks</h2>
+            <p class="label">{{ tasks.length }} total</p>
+          </div>
+          <p v-if="tasks.length === 0" class="empty">No tasks scheduled.</p>
+          <template v-else>
+            <table class="cds--data-table cds--data-table--zebra">
+              <thead>
+                <tr>
+                  <th>Title</th>
+                  <th>Status</th>
+                  <th>Due</th>
+                  <th>Priority</th>
+                  <th>Updated</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="task in paginatedTasks" :key="task.id">
+                  <td>
+                    <button class="link-button" type="button" @click="openTask(task)">
+                      {{ task.title }}
+                    </button>
+                  </td>
+                  <td>
+                    <span class="cds--tag" :class="statusTagClass(task.status)">{{ task.status }}</span>
+                  </td>
+                  <td>{{ formatDate(task.dueAt) }}</td>
+                  <td>{{ task.priority }}</td>
+                  <td>{{ formatDate(task.updatedAt) }}</td>
+                  <td>
+                    <button class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="openTask(task)">
+                      View
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="cds--pagination pagination-bar">
+              <div class="cds--pagination__left">
+                Page {{ taskPage }} of {{ totalTaskPages }}
+              </div>
+              <div class="cds--pagination__right">
+                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="taskPage === 1" @click="previousTaskPage">
+                  Previous
+                </button>
+                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="taskPage === totalTaskPages" @click="nextTaskPage">
+                  Next
+                </button>
+              </div>
+            </div>
+          </template>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'senders'" id="panel-senders" class="tab-panel" role="tabpanel" aria-labelledby="tab-senders">
+        <section class="activity-section" aria-label="Sender trust">
+          <div class="section-heading">
+            <h2>Sender trust</h2>
+          </div>
+          <form class="form-grid sender-form" @submit.prevent="saveSender">
+            <div class="cds--form-item">
+              <label class="cds--label" for="sender-address">Address</label>
+              <input id="sender-address" v-model="senderForm.address" class="cds--text-input" required type="email">
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="sender-status">Status</label>
+              <select id="sender-status" v-model="senderForm.status" class="cds--select-input">
+                <option value="owner">owner</option>
+                <option value="newsletter">newsletter</option>
+                <option value="trusted">trusted</option>
+                <option value="blocked">blocked</option>
+                <option value="untrusted">untrusted</option>
+              </select>
+            </div>
+            <div class="form-actions">
+              <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
+                Save sender
               </button>
             </div>
-          </li>
-        </ul>
+          </form>
+          <p v-if="senders.length === 0" class="empty">No senders configured.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra">
+            <thead>
+              <tr>
+                <th>Address</th>
+                <th>Status</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="sender in senders" :key="sender.id">
+                <td>{{ sender.address }}</td>
+                <td>
+                  <span class="cds--tag" :class="statusTagClass(sender.status)">{{ sender.status }}</span>
+                </td>
+                <td>{{ formatDate(sender.updatedAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
       </section>
 
-      <section class="activity-section" aria-label="Sender trust">
-        <h2>Sender trust</h2>
-        <form class="inline-form compact" @submit.prevent="saveSender">
-          <label>
-            <span>Address</span>
-            <input v-model="senderForm.address" required type="email">
-          </label>
-          <label>
-            <span>Status</span>
-            <select v-model="senderForm.status">
-              <option value="owner">owner</option>
-              <option value="newsletter">newsletter</option>
-              <option value="trusted">trusted</option>
-              <option value="blocked">blocked</option>
-              <option value="untrusted">untrusted</option>
-            </select>
-          </label>
-          <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
-            Save sender
-          </button>
-        </form>
-        <p v-if="senders.length === 0" class="empty">No senders configured.</p>
-        <ul v-else>
-          <li v-for="sender in senders" :key="sender.id">
-            <span>{{ sender.address }}</span>
-            <strong>{{ sender.status }}</strong>
-          </li>
-        </ul>
+      <section v-show="activeTab === 'workers'" id="panel-workers" class="tab-panel" role="tabpanel" aria-labelledby="tab-workers">
+        <section class="activity-section" aria-label="Worker jobs">
+          <div class="section-heading">
+            <h2>Worker jobs</h2>
+          </div>
+          <p v-if="jobs.length === 0" class="empty">No worker status available.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Pending</th>
+                <th>Due</th>
+                <th>Failed</th>
+                <th>Last audit</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="job in jobs" :key="job.name">
+                <td>{{ job.name }}</td>
+                <td>
+                  <span class="cds--tag" :class="statusTagClass(job.status)">{{ job.status }}</span>
+                </td>
+                <td>{{ job.pendingTasks ?? job.pendingMessages ?? 0 }}</td>
+                <td>{{ job.dueTasks ?? 0 }}</td>
+                <td>{{ job.failedMessages ?? 0 }}</td>
+                <td>{{ formatDate(job.lastAuditAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
       </section>
 
-      <section class="activity-section" aria-label="Worker jobs">
-        <h2>Worker jobs</h2>
-        <p v-if="jobs.length === 0" class="empty">No worker status available.</p>
-        <ul v-else>
-          <li v-for="job in jobs" :key="job.name">
-            <div>
-              <strong>{{ job.name }}</strong>
-              <p>{{ job.status }}</p>
+      <section v-show="activeTab === 'logs'" id="panel-logs" class="tab-panel" role="tabpanel" aria-labelledby="tab-logs">
+        <section class="activity-section" aria-label="Audit history">
+          <div class="section-heading">
+            <h2>Audit history</h2>
+          </div>
+          <p v-if="recentAudit.length === 0" class="empty">No audit events.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra">
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Entity</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="event in recentAudit" :key="event.id">
+                <td>{{ event.action }}</td>
+                <td>{{ event.entityType || "none" }} {{ event.entityId || "" }}</td>
+                <td>{{ formatDate(event.createdAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'admin'" id="panel-admin" class="tab-panel" role="tabpanel" aria-labelledby="tab-admin">
+        <section v-if="aiConfig" class="activity-section" aria-label="AI configuration">
+          <div class="section-heading">
+            <h2>AI configuration</h2>
+          </div>
+          <form class="form-grid config-form" @submit.prevent="saveAiConfig">
+            <div class="cds--form-item">
+              <label class="cds--label" for="fast-model">Fast model</label>
+              <input id="fast-model" v-model="configForm.fastModel" class="cds--text-input" required type="text">
             </div>
-            <span>
-              {{ job.pendingTasks ?? job.pendingMessages ?? 0 }} pending
-            </span>
-          </li>
-        </ul>
-      </section>
-
-      <section v-if="aiConfig" class="activity-section" aria-label="AI configuration">
-        <h2>AI configuration</h2>
-        <form class="inline-form config-form" @submit.prevent="saveAiConfig">
-          <label>
-            <span>Fast model</span>
-            <input v-model="configForm.fastModel" required type="text">
-          </label>
-          <label>
-            <span>Smart model</span>
-            <input v-model="configForm.smartModel" required type="text">
-          </label>
-          <label>
-            <span>Orchestrator model</span>
-            <input v-model="configForm.orchestratorModel" required type="text">
-          </label>
-          <label>
-            <span>Repair model</span>
-            <input v-model="configForm.repairModel" required type="text">
-          </label>
-          <label>
-            <span>Max tool calls</span>
-            <input v-model.number="configForm.maxToolCalls" required type="number" min="1">
-          </label>
-          <label>
-            <span>Max runtime sec</span>
-            <input v-model.number="configForm.maxRuntimeSec" required type="number" min="1">
-          </label>
-          <label>
-            <span>Repair attempts</span>
-            <input v-model.number="configForm.repairAttemptLimit" required type="number" min="0">
-          </label>
-          <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
-            Save config
-          </button>
-        </form>
-      </section>
-
-      <section class="activity-section" aria-label="Audit history">
-        <h2>Audit history</h2>
-        <p v-if="recentAudit.length === 0" class="empty">No audit events.</p>
-        <ul v-else>
-          <li v-for="event in recentAudit" :key="event.id">
-            <span>{{ event.action }}</span>
-            <small>{{ event.createdAt }}</small>
-          </li>
-        </ul>
+            <div class="cds--form-item">
+              <label class="cds--label" for="smart-model">Smart model</label>
+              <input id="smart-model" v-model="configForm.smartModel" class="cds--text-input" required type="text">
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="orchestrator-model">Orchestrator model</label>
+              <input id="orchestrator-model" v-model="configForm.orchestratorModel" class="cds--text-input" required type="text">
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="repair-model">Repair model</label>
+              <input id="repair-model" v-model="configForm.repairModel" class="cds--text-input" required type="text">
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="max-tool-calls">Max tool calls</label>
+              <input id="max-tool-calls" v-model.number="configForm.maxToolCalls" class="cds--text-input" required type="number" min="1">
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="max-runtime-sec">Max runtime sec</label>
+              <input id="max-runtime-sec" v-model.number="configForm.maxRuntimeSec" class="cds--text-input" required type="number" min="1">
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="repair-attempts">Repair attempts</label>
+              <input id="repair-attempts" v-model.number="configForm.repairAttemptLimit" class="cds--text-input" required type="number" min="0">
+            </div>
+            <div class="form-actions">
+              <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
+                Save config
+              </button>
+            </div>
+          </form>
+        </section>
       </section>
     </section>
+
+    <div v-if="selectedTaskOpen" class="cds--modal is-visible task-modal" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
+      <div class="cds--modal-container">
+        <div class="cds--modal-header">
+          <p class="cds--modal-header__label">Task</p>
+          <h2 id="task-modal-title" class="cds--modal-header__heading">{{ taskModalTitle }}</h2>
+          <button class="cds--modal-close" type="button" aria-label="Close" @click="closeTask">
+            <span aria-hidden="true">x</span>
+          </button>
+        </div>
+        <div class="cds--modal-content">
+          <div v-if="taskModalError" class="cds--inline-notification cds--inline-notification--error" role="alert">
+            <div class="cds--inline-notification__details">
+              <div class="cds--inline-notification__text-wrapper">
+                <p class="cds--inline-notification__title">Task error</p>
+                <p class="cds--inline-notification__subtitle">{{ taskModalError }}</p>
+              </div>
+            </div>
+          </div>
+
+          <dl class="task-detail-grid">
+            <div>
+              <dt>Status</dt>
+              <dd><span class="cds--tag" :class="statusTagClass(selectedTask?.status || '')">{{ selectedTask?.status }}</span></dd>
+            </div>
+            <div>
+              <dt>Due</dt>
+              <dd>{{ formatDate(selectedTask?.dueAt) }}</dd>
+            </div>
+            <div>
+              <dt>Priority</dt>
+              <dd>{{ selectedTask?.priority }}</dd>
+            </div>
+          </dl>
+
+          <section class="modal-section">
+            <h3>Prompt</h3>
+            <p class="prompt-copy">{{ selectedTask?.prompt }}</p>
+          </section>
+
+          <section class="modal-section">
+            <h3>Status</h3>
+            <div class="modal-control-row">
+              <select v-model="taskStatusDraft" class="cds--select-input" aria-label="Task status">
+                <option v-for="status in taskStatuses" :key="status" :value="status">{{ status }}</option>
+              </select>
+              <button class="cds--btn cds--btn--primary" type="button" :disabled="saving" @click="saveTaskStatus">
+                Save status
+              </button>
+            </div>
+          </section>
+
+          <section class="modal-section">
+            <h3>Continue task</h3>
+            <label class="cds--label" for="follow-up-prompt">Follow-up prompt</label>
+            <textarea id="follow-up-prompt" v-model="taskFollowUpPrompt" class="cds--text-area" rows="4" />
+            <div class="modal-actions">
+              <button class="cds--btn cds--btn--primary" type="button" :disabled="saving || !taskFollowUpPrompt.trim()" @click="addFollowUpPrompt">
+                Add prompt
+              </button>
+            </div>
+          </section>
+
+          <section class="modal-section">
+            <h3>Events</h3>
+            <p v-if="selectedTaskEvents.length === 0" class="empty">No events recorded.</p>
+            <ol v-else class="event-list">
+              <li v-for="event in selectedTaskEvents" :key="event.id">
+                <div class="event-heading">
+                  <span class="cds--tag cds--tag--blue">{{ event.eventType }}</span>
+                  <time>{{ formatDate(event.createdAt) }}</time>
+                </div>
+                <p>{{ event.summary }}</p>
+                <pre v-if="formatDetails(event.details)">{{ formatDetails(event.details) }}</pre>
+              </li>
+            </ol>
+          </section>
+        </div>
+        <div class="cds--modal-footer">
+          <button class="cds--btn cds--btn--secondary" type="button" @click="closeTask">
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>

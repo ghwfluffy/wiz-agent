@@ -53,6 +53,16 @@ export async function runAgentTask(options: {
       prompt: buildAgentPrompt(options.request.prompt),
       tools: modelToolDescriptors()
     });
+    if (options.request.taskId) {
+      const responseSummary = typeof modelOutput === "string" ? modelOutput : JSON.stringify(modelOutput);
+      await options.store.recordTaskEvent(options.context, options.request.taskId, "agent.prompted", {
+        model_id: modelId,
+        model_tier: tier,
+        prompt_excerpt: options.request.prompt.slice(0, 500),
+        response_summary: responseSummary.slice(0, 500),
+        summary: "Agent was prompted and returned a response."
+      });
+    }
     const proposal = parseToolProposal(modelOutput);
     if (!proposal) {
       await options.store.finishAgentRun(options.context, run.id, "completed");

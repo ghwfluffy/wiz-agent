@@ -18,6 +18,7 @@ import type {
   SenderClassification,
   SenderRecord,
   SenderStatus,
+  TaskEventRecord,
   TaskInput,
   TaskRecord,
   TaskUpdate,
@@ -55,6 +56,57 @@ function taskFromRow(row: Record<string, unknown>): TaskRecord {
     createdBy: String(row.created_by),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
+  };
+}
+
+function taskEventSummary(eventType: string, details: Record<string, unknown>): string {
+  if (typeof details.summary === "string" && details.summary.trim()) {
+    return details.summary;
+  }
+  if (eventType === "task.created") {
+    return "Task created.";
+  }
+  if (eventType === "task.updated" && typeof details.status === "object" && details.status !== null) {
+    const status = details.status as { from?: unknown; to?: unknown };
+    return `Status changed from ${String(status.from ?? "unknown")} to ${String(status.to ?? "unknown")}.`;
+  }
+  if (eventType === "task.prompt_added") {
+    return "A follow-up prompt was added to the task.";
+  }
+  if (eventType === "task.claim") {
+    return "Worker claimed the task for processing.";
+  }
+  if (eventType === "agent_run.create") {
+    return "Agent run started.";
+  }
+  if (eventType.startsWith("agent_run.")) {
+    return `Agent run ${eventType.replace("agent_run.", "")}.`;
+  }
+  if (eventType.startsWith("tool_call.")) {
+    return `Tool call ${eventType.replace("tool_call.", "")}.`;
+  }
+  if (eventType === "message.inbound.record") {
+    return "Inbound message recorded.";
+  }
+  if (eventType === "outbound.queue") {
+    return "Outbound message queued.";
+  }
+  if (eventType.startsWith("outbound.")) {
+    return `Outbound message ${eventType.replace("outbound.", "")}.`;
+  }
+  return eventType;
+}
+
+function taskEventFromRow(row: Record<string, unknown>): TaskEventRecord {
+  const details = (row.event_json as Record<string, unknown> | null) ?? {};
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    taskId: String(row.task_id),
+    eventType: String(row.event_type),
+    summary: taskEventSummary(String(row.event_type), details),
+    details,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
   };
 }
 
@@ -149,6 +201,31 @@ async function recordAudit(
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
     [randomUUID(), context.userId, context.actorType, action, entityType, entityId, details, context.requestId]
   );
+}
+
+async function insertTaskEvent(
+  pool: Pool,
+  context: Pick<RequestContext, "userId">,
+  taskId: string,
+  eventType: string,
+  details: Record<string, unknown> = {}
+): Promise<TaskEventRecord> {
+  const result = await pool.query(
+    `INSERT INTO task_events (id, user_id, task_id, event_type, event_json)
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [randomUUID(), context.userId, taskId, eventType, details]
+  );
+  return taskEventFromRow(result.rows[0]);
+}
+
+async function taskIdForRun(pool: Pool, context: Pick<RequestContext, "userId">, runId: string): Promise<string | null> {
+  const result = await pool.query(
+    `SELECT task_id FROM agent_runs WHERE id = $1 AND user_id = $2`,
+    [runId, context.userId]
+  );
+  const taskId = result.rows[0]?.task_id;
+  return taskId ? String(taskId) : null;
 }
 
 export function createPostgresStore(pool: Pool): AgentStore {
@@ -363,11 +440,12 @@ export function createPostgresStore(pool: Pool): AgentStore {
           context.actorType
         ]
       );
-      await pool.query(
-        `INSERT INTO task_events (id, user_id, task_id, event_type, event_json)
-         VALUES ($1, $2, $3, 'task.created', '{}'::jsonb)`,
-        [randomUUID(), context.userId, id]
-      );
+      await insertTaskEvent(pool, context, id, "task.created", {
+        summary: "Task created.",
+        title: input.title,
+        due_at: input.dueAt ?? null,
+        priority: input.priority ?? 0
+      });
       await recordAudit(pool, context, "task.create", "task", id);
       return taskFromRow(result.rows[0]);
     },
@@ -395,6 +473,13 @@ export function createPostgresStore(pool: Pool): AgentStore {
       if (!existing) {
         return undefined;
       }
+      const next = {
+        title: update.title ?? existing.title,
+        prompt: update.prompt ?? existing.prompt,
+        dueAt: update.dueAt === undefined ? existing.dueAt : update.dueAt,
+        priority: update.priority ?? existing.priority,
+        status: update.status ?? existing.status
+      };
       const result = await pool.query(
         `UPDATE tasks
          SET title = $3,
@@ -408,15 +493,50 @@ export function createPostgresStore(pool: Pool): AgentStore {
         [
           taskId,
           context.userId,
-          update.title ?? existing.title,
-          update.prompt ?? existing.prompt,
-          update.dueAt ?? existing.dueAt,
-          update.priority ?? existing.priority,
-          update.status ?? existing.status
+          next.title,
+          next.prompt,
+          next.dueAt,
+          next.priority,
+          next.status
         ]
       );
+      const changes: Record<string, unknown> = {};
+      if (existing.status !== next.status) {
+        changes.status = { from: existing.status, to: next.status };
+      }
+      if (existing.title !== next.title) {
+        changes.title = { from: existing.title, to: next.title };
+      }
+      if (existing.prompt !== next.prompt) {
+        changes.prompt = { changed: true };
+      }
+      if (existing.dueAt !== next.dueAt) {
+        changes.due_at = { from: existing.dueAt, to: next.dueAt };
+      }
+      if (existing.priority !== next.priority) {
+        changes.priority = { from: existing.priority, to: next.priority };
+      }
+      await insertTaskEvent(pool, context, taskId, "task.updated", changes);
       await recordAudit(pool, context, "task.update", "task", taskId);
       return result.rows[0] ? taskFromRow(result.rows[0]) : undefined;
+    },
+
+    async listTaskEvents(context, taskId) {
+      const result = await pool.query(
+        `SELECT te.*
+         FROM task_events te
+         JOIN tasks t ON t.id = te.task_id
+         WHERE te.task_id = $1
+           AND te.user_id = $2
+           AND t.user_id = $2
+         ORDER BY te.created_at DESC`,
+        [taskId, context.userId]
+      );
+      return result.rows.map(taskEventFromRow);
+    },
+
+    async recordTaskEvent(context, taskId, eventType, details = {}) {
+      return insertTaskEvent(pool, context, taskId, eventType, details);
     },
 
     async claimDueTasks(context: RequestContext, limit: number, now = new Date()): Promise<TaskRecord[]> {
@@ -448,6 +568,9 @@ export function createPostgresStore(pool: Pool): AgentStore {
         await client.query("COMMIT");
         for (const id of ids) {
           await recordAudit(pool, context, "task.claim", "task", id);
+          await insertTaskEvent(pool, context, id, "task.claim", {
+            summary: "Worker claimed the task for processing."
+          });
         }
         return updated.rows.map(taskFromRow);
       } catch (error) {
@@ -511,10 +634,18 @@ export function createPostgresStore(pool: Pool): AgentStore {
         model_tier: input.modelTier,
         model_id: input.modelId
       });
+      if (input.taskId) {
+        await insertTaskEvent(pool, context, input.taskId, "agent_run.create", {
+          model_tier: input.modelTier,
+          model_id: input.modelId,
+          summary: `Agent run started with ${input.modelId}.`
+        });
+      }
       return runFromRow(result.rows[0]);
     },
 
     async finishAgentRun(context, runId, status, failureMessage = null) {
+      const taskId = await taskIdForRun(pool, context, runId);
       await pool.query(
         `UPDATE agent_runs
          SET status = $3, failure_message = $4, finished_at = now()
@@ -524,6 +655,13 @@ export function createPostgresStore(pool: Pool): AgentStore {
       await recordAudit(pool, context, `agent_run.${status}`, "agent_run", runId, {
         failure_message: failureMessage
       });
+      if (taskId) {
+        await insertTaskEvent(pool, context, taskId, `agent_run.${status}`, {
+          run_id: runId,
+          failure_message: failureMessage,
+          summary: failureMessage ? `Agent run ${status}: ${failureMessage}` : `Agent run ${status}.`
+        });
+      }
     },
 
     async recordToolCall(context, input) {
@@ -547,6 +685,20 @@ export function createPostgresStore(pool: Pool): AgentStore {
         tool_name: input.toolName,
         validation_error: input.validationError ?? null
       });
+      if (input.runId) {
+        const taskId = await taskIdForRun(pool, context, input.runId);
+        if (taskId) {
+          await insertTaskEvent(pool, context, taskId, `tool_call.${input.status}`, {
+            run_id: input.runId,
+            tool_name: input.toolName,
+            validation_error: input.validationError ?? null,
+            result: input.result ?? {},
+            summary: input.validationError
+              ? `${input.toolName} failed validation: ${input.validationError}`
+              : `${input.toolName} tool call ${input.status}.`
+          });
+        }
+      }
       return toolCallFromRow(result.rows[0]);
     },
 
@@ -678,6 +830,7 @@ export function createPostgresStore(pool: Pool): AgentStore {
 export function createMemoryStore(): AgentStore {
   const sessions = new Map<string, Session>();
   const tasks = new Map<string, TaskRecord>();
+  const taskEvents = new Map<string, TaskEventRecord[]>();
   const runs = new Map<string, AgentRunRecord>();
   const toolCalls = new Map<string, ToolCallRecord>();
   const senderStatuses = new Map<string, SenderRecord>();
@@ -704,6 +857,25 @@ export function createMemoryStore(): AgentStore {
       requestId: context.requestId,
       createdAt: nowIso()
     });
+  }
+
+  function pushTaskEvent(
+    context: Pick<RequestContext, "userId">,
+    taskId: string,
+    eventType: string,
+    details: Record<string, unknown> = {}
+  ): TaskEventRecord {
+    const event: TaskEventRecord = {
+      id: randomUUID(),
+      userId: context.userId,
+      taskId,
+      eventType,
+      summary: taskEventSummary(eventType, details),
+      details,
+      createdAt: nowIso()
+    };
+    taskEvents.set(taskId, [event, ...(taskEvents.get(taskId) ?? [])]);
+    return event;
   }
 
   return {
@@ -820,6 +992,12 @@ export function createMemoryStore(): AgentStore {
         updatedAt: now
       };
       tasks.set(task.id, task);
+      pushTaskEvent(context, task.id, "task.created", {
+        summary: "Task created.",
+        title: task.title,
+        due_at: task.dueAt,
+        priority: task.priority
+      });
       pushAudit(context, "task.create", "task", task.id);
       return task;
     },
@@ -838,6 +1016,7 @@ export function createMemoryStore(): AgentStore {
       if (!task) {
         return undefined;
       }
+      const previous = task;
       const updated = {
         ...task,
         ...update,
@@ -845,8 +1024,35 @@ export function createMemoryStore(): AgentStore {
         updatedAt: nowIso()
       };
       tasks.set(taskId, updated);
+      const changes: Record<string, unknown> = {};
+      if (previous.status !== updated.status) {
+        changes.status = { from: previous.status, to: updated.status };
+      }
+      if (previous.title !== updated.title) {
+        changes.title = { from: previous.title, to: updated.title };
+      }
+      if (previous.prompt !== updated.prompt) {
+        changes.prompt = { changed: true };
+      }
+      if (previous.dueAt !== updated.dueAt) {
+        changes.due_at = { from: previous.dueAt, to: updated.dueAt };
+      }
+      if (previous.priority !== updated.priority) {
+        changes.priority = { from: previous.priority, to: updated.priority };
+      }
+      pushTaskEvent(context, taskId, "task.updated", changes);
       pushAudit(context, "task.update", "task", taskId);
       return updated;
+    },
+    async listTaskEvents(context: RequestContext, taskId: string): Promise<TaskEventRecord[]> {
+      const task = await this.getTask(context, taskId);
+      if (!task) {
+        return [];
+      }
+      return taskEvents.get(taskId) ?? [];
+    },
+    async recordTaskEvent(context, taskId, eventType, details = {}) {
+      return pushTaskEvent(context, taskId, eventType, details);
     },
     async claimDueTasks(context: RequestContext, limit: number, now = new Date()): Promise<TaskRecord[]> {
       const claimed: TaskRecord[] = [];
@@ -859,6 +1065,9 @@ export function createMemoryStore(): AgentStore {
           const updated = { ...task, status: "claimed", updatedAt: nowIso() };
           tasks.set(task.id, updated);
           claimed.push(updated);
+          pushTaskEvent(context, task.id, "task.claim", {
+            summary: "Worker claimed the task for processing."
+          });
           pushAudit(context, "task.claim", "task", task.id);
         }
       }
@@ -896,6 +1105,13 @@ export function createMemoryStore(): AgentStore {
         model_tier: input.modelTier,
         model_id: input.modelId
       });
+      if (run.taskId) {
+        pushTaskEvent(context, run.taskId, "agent_run.create", {
+          model_tier: input.modelTier,
+          model_id: input.modelId,
+          summary: `Agent run started with ${input.modelId}.`
+        });
+      }
       return run;
     },
     async finishAgentRun(context, runId, status, failureMessage = null) {
@@ -907,6 +1123,13 @@ export function createMemoryStore(): AgentStore {
           finishedAt: nowIso(),
           failureMessage
         });
+        if (run.taskId) {
+          pushTaskEvent(context, run.taskId, `agent_run.${status}`, {
+            run_id: runId,
+            failure_message: failureMessage,
+            summary: failureMessage ? `Agent run ${status}: ${failureMessage}` : `Agent run ${status}.`
+          });
+        }
       }
       pushAudit(context, `agent_run.${status}`, "agent_run", runId, {
         failure_message: failureMessage
@@ -931,6 +1154,18 @@ export function createMemoryStore(): AgentStore {
         tool_name: input.toolName,
         validation_error: input.validationError ?? null
       });
+      const run = input.runId ? runs.get(input.runId) : undefined;
+      if (run?.taskId) {
+        pushTaskEvent(context, run.taskId, `tool_call.${input.status}`, {
+          run_id: input.runId ?? null,
+          tool_name: input.toolName,
+          validation_error: input.validationError ?? null,
+          result: input.result ?? {},
+          summary: input.validationError
+            ? `${input.toolName} failed validation: ${input.validationError}`
+            : `${input.toolName} tool call ${input.status}.`
+        });
+      }
       return toolCall;
     },
     async listSenders(context) {

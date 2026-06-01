@@ -56,7 +56,10 @@ describe("home view", () => {
     await flushPromises();
 
     expect(wrapper.text()).toContain("Check in");
-    expect(wrapper.text()).toContain("sms to sms@example.test");
+    expect(wrapper.text()).toContain("sms");
+    expect(wrapper.text()).toContain("sms@example.test");
+    expect(wrapper.text()).toContain("Overview");
+    expect(wrapper.text()).toContain("Tasks");
     expect(wrapper.text()).toContain("Audit events");
     expect(wrapper.text()).toContain("owner@example.test");
     expect(wrapper.text()).toContain("AI configuration");

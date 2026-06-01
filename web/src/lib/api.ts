@@ -20,6 +20,8 @@ export type Task = {
   prompt: string;
   dueAt: string | null;
   priority: number;
+  createdAt?: string;
+  updatedAt?: string;
 };
 
 export type TaskInput = {
@@ -27,6 +29,15 @@ export type TaskInput = {
   prompt: string;
   dueAt?: string | null;
   priority?: number;
+};
+
+export type TaskEvent = {
+  id: string;
+  taskId: string;
+  eventType: string;
+  summary: string;
+  details: Record<string, unknown>;
+  createdAt: string;
 };
 
 export type OutboxMessage = {
@@ -117,6 +128,15 @@ export const api = {
     return request<Task>(`/tasks/${encodeURIComponent(id)}`, {
       method: "PATCH",
       body: JSON.stringify(input)
+    });
+  },
+  listTaskEvents(id: string): Promise<{ events: TaskEvent[] }> {
+    return request<{ events: TaskEvent[] }>(`/tasks/${encodeURIComponent(id)}/events`);
+  },
+  addTaskPrompt(id: string, prompt: string): Promise<{ task: Task; events: TaskEvent[] }> {
+    return request<{ task: Task; events: TaskEvent[] }>(`/tasks/${encodeURIComponent(id)}/prompts`, {
+      method: "POST",
+      body: JSON.stringify({ prompt })
     });
   },
   updateOutbox(id: string, status: "pending" | "approved" | "cancelled"): Promise<OutboxMessage> {

@@ -79,6 +79,69 @@ describe("domain and user ownership APIs", () => {
     expect(otherRead.status).toBe(404);
   });
 
+  it("records task events and accepts follow-up prompts for the current user", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "task-events-login");
+
+    const createResponse = await app.request("/api/v1/tasks", {
+      method: "POST",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        title: "Investigate inbox",
+        prompt: "Read the latest owner message."
+      })
+    });
+    const task = await createResponse.json() as { id: string };
+
+    const promptResponse = await app.request(`/api/v1/tasks/${task.id}/prompts`, {
+      method: "POST",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: "Also draft the reply but do not send it yet."
+      })
+    });
+
+    expect(promptResponse.status).toBe(200);
+    await expect(promptResponse.json()).resolves.toMatchObject({
+      task: {
+        status: "pending",
+        prompt: expect.stringContaining("Also draft the reply")
+      },
+      events: expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "task.prompt_added",
+          summary: "Follow-up prompt added and task returned to pending."
+        }),
+        expect.objectContaining({
+          eventType: "task.created"
+        })
+      ])
+    });
+
+    const eventsResponse = await app.request(`/api/v1/tasks/${task.id}/events`, {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(eventsResponse.status).toBe(200);
+    await expect(eventsResponse.json()).resolves.toMatchObject({
+      events: expect.arrayContaining([
+        expect.objectContaining({ eventType: "task.prompt_added" })
+      ])
+    });
+  });
+
   it("restricts admin APIs to administrators and lets admins inspect all user audit", async () => {
     const store = createMemoryStore();
     const adminSettings = loadSettings({
