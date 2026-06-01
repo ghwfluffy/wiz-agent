@@ -15,8 +15,7 @@ describe("home view", () => {
         ok: true,
         json: async () => ({
           authenticated: true,
-          user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true },
-          tenant: { id: "t1", name: "Tenant" }
+          user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
         })
       })
       .mockResolvedValueOnce({

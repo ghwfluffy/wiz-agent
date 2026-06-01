@@ -193,10 +193,6 @@ watch(() => auth.authenticated, (authenticated) => {
           <p class="label">Signed in as</p>
           <p class="value">{{ auth.user?.displayName }}</p>
         </div>
-        <div>
-          <p class="label">Tenant</p>
-          <p class="value">{{ auth.tenant?.name }}</p>
-        </div>
         <div class="header-actions">
           <button class="cds--btn cds--btn--secondary" type="button" :disabled="saving" @click="loadDashboard">
             Refresh

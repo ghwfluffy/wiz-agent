@@ -73,8 +73,7 @@ export async function callIntegrationApi(options: {
     headers: {
       authorization: `Bearer ${token}`,
       "content-type": "application/json",
-      "x-agent-user-id": options.context.userId,
-      "x-agent-tenant-id": options.context.tenantId
+      "x-agent-user-id": options.context.userId
     },
     body: options.body === undefined ? undefined : JSON.stringify(options.body)
   });

@@ -33,7 +33,6 @@ async function testContext(): Promise<{ context: RequestContext; store: ReturnTy
   return {
     store,
     context: {
-      tenantId: session.tenant.id,
       userId: session.user.id,
       actorType: "admin",
       permissions: ["user", "admin"],

@@ -152,7 +152,7 @@ const goalActions: readonly IntegrationActionCapability[] = [
       "The owner asks about tracked measurements or available metric names.",
       "The agent needs the metric id before recording a new entry."
     ],
-    safety: ["Use only within the current user's tenant/user context."],
+    safety: ["Use only within the current user's context."],
     responseUse: "Summarize metric names, types, latest values, and reminder times when useful."
   },
   {
@@ -376,7 +376,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     userValue: "Helps the owner define goals, record progress, review risk/status, and respond to reminders.",
     dataSensitivity: "private",
     baseUrlSetting: "GOALS_API_BASE_URL",
-    authRequirement: "Requires a current-user scoped integration token and tenant/user headers.",
+    authRequirement: "Requires a current-user scoped integration token and user context header.",
     modelGuidance: [
       "Use Goals when the owner asks about objectives, habits, measurements, progress, reminders, or what to work on next.",
       "Fetch goals or metrics before mutating them when names are ambiguous.",
@@ -391,7 +391,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     userValue: "Helps the owner understand current finances, forecast future net worth, and record owner-provided account updates.",
     dataSensitivity: "highly_private",
     baseUrlSetting: "BUDGET_API_BASE_URL",
-    authRequirement: "Requires a current-user scoped integration token and tenant/user headers.",
+    authRequirement: "Requires a current-user scoped integration token and user context header.",
     modelGuidance: [
       "Use Fluffynomics when the owner asks about accounts, balances, net worth, forecasts, bills, expenses, investments, transfers, or financial history.",
       "Prefer read-only actions for questions. Use write actions only after explicit owner instruction.",
