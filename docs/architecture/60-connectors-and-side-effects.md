@@ -157,6 +157,13 @@ sender-table owner address. Legacy queued SMS/MMS records containing only the
 owner mobile number are mapped to the configured carrier gateway before SMTP
 delivery; non-owner raw numbers or email addresses are not delivered.
 
+Long SMS bodies must not be sent through a carrier SMS email gateway when the
+user has an MMS gateway configured. SMS gateway delivery can truncate bodies
+without reporting an SMTP failure. The SMTP delivery resolver therefore prefers
+the configured MMS gateway for SMS-channel owner replies whose body is over the
+safe SMS text length. Short SMS replies still use the SMS gateway, and email
+replies are unchanged.
+
 Approval gates delivery only for records with `status = 'requires_approval'`.
 The owner-reply model tool defaults to immediate queued delivery because sender
 policy has already classified the inbound sender as owner and host code controls

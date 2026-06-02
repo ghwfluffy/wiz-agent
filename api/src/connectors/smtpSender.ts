@@ -85,6 +85,12 @@ function ownerConfigValue(config: Record<string, unknown>, key: string): string 
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+const SMS_GATEWAY_SAFE_TEXT_LENGTH = 140;
+
+function shouldPreferMmsGateway(message: OutboundMessageRecord): boolean {
+  return message.channel === "sms" && message.bodyText.length > SMS_GATEWAY_SAFE_TEXT_LENGTH;
+}
+
 export type SmtpDeliveryConfig = {
   username?: string;
   password?: string;
@@ -121,15 +127,19 @@ async function resolveOwnerRecipient(options: {
   const requested = options.message.toAddr.trim();
   const ownerContact = await options.store.getConnector(options.context, "owner-contact");
   const ownerConfig = ownerContact?.status === "enabled" ? ownerContact.config : {};
+  const mmsGateway = ownerConfigValue(ownerConfig, "mms_gateway");
   const configured = [
     ownerConfigValue(ownerConfig, "email"),
     ownerConfigValue(ownerConfig, "sms_gateway"),
-    ownerConfigValue(ownerConfig, "mms_gateway")
+    mmsGateway
   ].filter((value): value is string => Boolean(value));
 
   if (requested.includes("@")) {
     const senderStatus = await options.store.getSenderStatus(options.context, requested);
     if (senderStatus === "owner" || configured.some((address) => address.toLowerCase() === requested.toLowerCase())) {
+      if (mmsGateway && shouldPreferMmsGateway(options.message)) {
+        return mmsGateway;
+      }
       return requested;
     }
     return undefined;
@@ -143,8 +153,10 @@ async function resolveOwnerRecipient(options: {
     return undefined;
   }
   const gateway = options.message.channel === "mms"
-    ? ownerConfigValue(ownerConfig, "mms_gateway") ?? ownerConfigValue(ownerConfig, "sms_gateway")
-    : ownerConfigValue(ownerConfig, "sms_gateway") ?? ownerConfigValue(ownerConfig, "mms_gateway");
+    ? mmsGateway ?? ownerConfigValue(ownerConfig, "sms_gateway")
+    : shouldPreferMmsGateway(options.message)
+      ? mmsGateway ?? ownerConfigValue(ownerConfig, "sms_gateway")
+      : ownerConfigValue(ownerConfig, "sms_gateway") ?? mmsGateway;
   return gateway;
 }
 

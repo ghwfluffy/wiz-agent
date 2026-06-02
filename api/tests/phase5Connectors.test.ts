@@ -750,6 +750,101 @@ describe("outbound queue delivery", () => {
     }));
   });
 
+  it("routes long SMS replies through the configured MMS gateway to avoid carrier truncation", async () => {
+    const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        mobile: "15555550100",
+        sms_gateway: "15555550100@sms.example.test",
+        mms_gateway: "15555550100@mms.example.test"
+      }
+    });
+    await store.setSenderStatus(context, "15555550100@sms.example.test", "owner");
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
+      }
+    });
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "pending",
+      toAddr: "15555550100@sms.example.test",
+      bodyText: "This is a long SMS reply. ".repeat(8)
+    });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["15555550100@mms.example.test"] });
+
+    const result = await processOutboundQueue({
+      store,
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OUTBOUND_ENABLED: "true"
+      }),
+      transport: { sendMail }
+    });
+
+    expect(result).toEqual({ attempted: 1, sent: 1, failed: 0 });
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "15555550100@mms.example.test"
+    }));
+  });
+
+  it("routes long legacy raw owner SMS numbers through the configured MMS gateway", async () => {
+    const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        mobile: "15555550100",
+        sms_gateway: "15555550100@sms.example.test",
+        mms_gateway: "15555550100@mms.example.test"
+      }
+    });
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
+      }
+    });
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "pending",
+      toAddr: "15555550100",
+      bodyText: "This is a long SMS reply. ".repeat(8)
+    });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["15555550100@mms.example.test"] });
+
+    const result = await processOutboundQueue({
+      store,
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OUTBOUND_ENABLED: "true"
+      }),
+      transport: { sendMail }
+    });
+
+    expect(result).toEqual({ attempted: 1, sent: 1, failed: 0 });
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "15555550100@mms.example.test"
+    }));
+  });
+
   it("fails closed instead of delivering to non-owner outbound recipients", async () => {
     const { context, store } = await testContext();
     await store.upsertConnector(context, {
