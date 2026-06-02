@@ -101,7 +101,7 @@ export type OutboundMessageRecord = OutboundMessageInput & {
 
 export type InboundHandlingResult = {
   classification: SenderClassification;
-  action: "routed_to_agent" | "queued_owner_review" | "accepted_newsletter" | "blocked" | "rate_limited";
+  action: "routed_to_agent" | "queued_owner_review" | "accepted_newsletter" | "blocked" | "rate_limited" | "sender_reviewed";
   messageId?: string;
   taskId?: string;
   taskEventId?: string;
@@ -149,6 +149,16 @@ export type ConnectorInput = {
   kind: ConnectorKind;
   status: ConnectorStatus;
   config: Record<string, unknown>;
+};
+
+export type MemoryDocumentRecord = {
+  id: string;
+  userId: string;
+  slug: string;
+  title: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type AgentRunRecord = {
@@ -218,6 +228,13 @@ export type AgentStore = {
   ): Promise<void>;
   getAiConfig(): Promise<AiConfig>;
   updateAiConfig(context: RequestContext, config: AiConfig): Promise<AiConfig>;
+  listMemoryDocuments(context: RequestContext): Promise<MemoryDocumentRecord[]>;
+  getMemoryDocument(context: RequestContext, slug: string): Promise<MemoryDocumentRecord | undefined>;
+  upsertMemoryDocument(context: RequestContext, input: {
+    slug: string;
+    title: string;
+    body: string;
+  }): Promise<MemoryDocumentRecord>;
   listConnectors(context: RequestContext): Promise<ConnectorRecord[]>;
   getConnector(context: RequestContext, kind: ConnectorKind): Promise<ConnectorRecord | undefined>;
   upsertConnector(context: RequestContext, input: ConnectorInput): Promise<ConnectorRecord>;

@@ -123,6 +123,12 @@ describe("home view", () => {
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({ jobs: [{ name: "outbox", status: "configured", pendingMessages: 1 }] })
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          documents: [{ id: "mem-1", slug: "newsletter-preferences", title: "Newsletter Preferences", body: "# Newsletter Preferences\n\n- Useful security writeups.", createdAt: "", updatedAt: "" }]
+        })
       });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -136,6 +142,7 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Inbox");
     expect(wrapper.text()).toContain("Outbox");
     expect(wrapper.text()).toContain("Tasks");
+    expect(wrapper.text()).toContain("Memory");
     expect(wrapper.text()).toContain("Settings");
     expect(wrapper.text()).toContain("Audit events");
     expect(wrapper.text()).toContain("owner@example.test");
@@ -146,6 +153,7 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Notify owner");
     expect(wrapper.text()).toContain("sent@example.test");
     expect(wrapper.text()).toContain("SMTP error");
+    expect(wrapper.text()).toContain("Newsletter Preferences");
   });
 
   it("keeps the active dashboard tab in the route query", async () => {
@@ -176,6 +184,7 @@ describe("home view", () => {
         })
       })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) });
     vi.stubGlobal("fetch", fetchMock);
 
@@ -226,6 +235,7 @@ describe("home view", () => {
         })
       })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [] }) })
       .mockResolvedValueOnce({
         ok: true,
         json: async () => ({
@@ -244,6 +254,55 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Owner contact");
     expect(wrapper.text()).toContain("IMAP inbox");
     expect(wrapper.text()).toContain("SMTP outbox");
+  });
+
+  it("shows a searchable memory browser tab", async () => {
+    const document = {
+      id: "mem-1",
+      slug: "newsletter-preferences",
+      title: "Newsletter Preferences",
+      body: "# Newsletter Preferences\n\n- Useful security writeups.\n- Weird infrastructure failures.",
+      createdAt: "",
+      updatedAt: ""
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          authenticated: true,
+          user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
+        })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ events: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ senders: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [] }) })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          fastModel: "gpt-5-mini",
+          smartModel: "gpt-5",
+          orchestratorModel: "gpt-5",
+          repairModel: "gpt-5-mini",
+          maxToolCalls: 10,
+          maxRuntimeSec: 120,
+          repairAttemptLimit: 1
+        })
+      })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [document] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [document] }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome("/?tab=memory");
+    await flushPromises();
+
+    expect(wrapper.get("#tab-memory").attributes("aria-selected")).toBe("true");
+    expect(wrapper.text()).toContain("Newsletter Preferences");
+    expect(wrapper.text()).toContain("newsletter-preferences");
+    expect(wrapper.text()).toContain("Useful security writeups");
   });
 
   it("shows IMAP test failures from the settings tab", async () => {
@@ -285,6 +344,7 @@ describe("home view", () => {
         })
       })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => connector })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [connector] }) })
       .mockResolvedValueOnce({
@@ -344,7 +404,8 @@ describe("home view", () => {
           repairAttemptLimit: 1
         })
       })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) });
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [] }) });
     vi.stubGlobal("fetch", fetchMock);
 
     const { wrapper } = await mountHome("/?tab=outbox");

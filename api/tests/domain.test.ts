@@ -316,6 +316,55 @@ describe("domain and user ownership APIs", () => {
     });
   });
 
+  it("lists and reads memory documents for the current user", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "memory-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "memory-test",
+      session
+    };
+    await store.upsertMemoryDocument(context, {
+      slug: "newsletter-preferences",
+      title: "Newsletter Preferences",
+      body: "# Newsletter Preferences\n\n- I like useful security writeups."
+    });
+
+    const list = await app.request("/api/v1/memory", {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(list.status).toBe(200);
+    await expect(list.json()).resolves.toMatchObject({
+      documents: [
+        expect.objectContaining({
+          slug: "newsletter-preferences",
+          title: "Newsletter Preferences"
+        })
+      ]
+    });
+
+    const detail = await app.request("/api/v1/memory/newsletter-preferences", {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(detail.status).toBe(200);
+    await expect(detail.json()).resolves.toMatchObject({
+      document: {
+        body: expect.stringContaining("security writeups")
+      }
+    });
+  });
+
   it("lists inbound inbox messages for the current user", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

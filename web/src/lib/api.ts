@@ -123,6 +123,15 @@ export type Connector = {
   updatedAt: string;
 };
 
+export type MemoryDocument = {
+  id: string;
+  slug: string;
+  title: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ImapTestResult = {
   ok: boolean;
   configured: boolean;
@@ -213,6 +222,12 @@ export const api = {
   listAudit(): Promise<{ events: AuditEvent[] }> {
     return request<{ events: AuditEvent[] }>("/audit");
   },
+  listMemory(): Promise<{ documents: MemoryDocument[] }> {
+    return request<{ documents: MemoryDocument[] }>("/memory");
+  },
+  getMemory(slug: string): Promise<{ document: MemoryDocument }> {
+    return request<{ document: MemoryDocument }>(`/memory/${encodeURIComponent(slug)}`);
+  },
   listSenders(): Promise<{ senders: Sender[] }> {
     return request<{ senders: Sender[] }>("/senders");
   },
@@ -255,8 +270,9 @@ export const api = {
     connectors: Connector[];
     aiConfig: AiConfig | null;
     jobs: JobStatus[];
+    memory: MemoryDocument[];
   }> {
-    const [tasks, inbox, outbox, audit, senders, connectors, aiConfig, jobs] = await Promise.all([
+    const [tasks, inbox, outbox, audit, senders, connectors, aiConfig, jobs, memory] = await Promise.all([
       api.listTasks(),
       api.listInbox(),
       api.listOutbox(),
@@ -264,7 +280,8 @@ export const api = {
       api.listSenders(),
       api.listConnectors(),
       api.getAiConfig().catch(() => null),
-      api.listJobs().catch(() => ({ jobs: [] }))
+      api.listJobs().catch(() => ({ jobs: [] })),
+      api.listMemory().catch(() => ({ documents: [] }))
     ]);
     return {
       tasks: tasks.tasks,
@@ -274,7 +291,8 @@ export const api = {
       senders: senders.senders,
       connectors: connectors.connectors,
       aiConfig,
-      jobs: jobs.jobs
+      jobs: jobs.jobs,
+      memory: memory.documents
     };
   }
 };

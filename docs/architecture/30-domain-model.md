@@ -32,6 +32,7 @@ by the current API:
 - standalone user/session creation;
 - inbound message recording/listing;
 - task CRUD, task event listing, and follow-up prompts;
+- memory document listing/detail and explicit preference writes;
 - audit listing;
 - admin AI config.
 
@@ -83,9 +84,23 @@ Inbound email/SMS/MMS records are source records in `messages` with
 `direction = 'inbound'`. They are listed chronologically through
 `GET /api/v1/messages` for the signed-in user. Sender classification is stored
 in `auth_status`; derived handling state such as `routed_to_agent`,
-`queued_owner_review`, `accepted_newsletter`, `blocked`, and `rate_limited` is
-stored in `auth_json`.
+`queued_owner_review`, `accepted_newsletter`, `sender_reviewed`, `blocked`, and
+`rate_limited` is stored in `auth_json`.
 
 Inbox entries are not command history by themselves. Only messages classified as
 `owner` may be handed to the agent path. Newsletter, untrusted, and blocked
 messages remain durable data for review/audit and must not trigger tool calls.
+
+Newsletter sender review is represented as source inbox records plus derived
+handling state. Unknown newsletter-like senders start as `untrusted` and queue
+owner review. Owner replies can mark the sender as `newsletter` or `blocked`, and
+accepted newsletters link to the digest task they created.
+
+## Memory Documents
+
+Memory documents are user-owned markdown-like records in `memory_documents`.
+They are readable from the operations UI and API. Writes should remain explicit
+host-owned workflows with audit records; newsletter content must not directly
+modify memory. The `newsletter-preferences` document stores owner-stated
+newsletter interests and style preferences that are injected into later
+newsletter digest tasks.

@@ -8,8 +8,9 @@ import type {
   RequestContext,
   SenderClassification
 } from "../domain/types.js";
+import { handleOwnerNewsletterReply, queueNewsletterDigestTask } from "./newsletterPolicy.js";
 
-function normalizeAddress(value: string): string {
+export function normalizeAddress(value: string): string {
   const trimmed = value.trim().toLowerCase();
   const match = trimmed.match(/<([^>]+)>/);
   return match?.[1]?.trim().toLowerCase() ?? trimmed;
@@ -44,7 +45,11 @@ export class SlidingWindowRateLimiter implements InboundRateLimiter {
 export function summarizeUntrustedMessage(message: InboundMessageInput): string {
   const subject = message.subject?.trim() || "(no subject)";
   const firstLine = message.bodyText.replace(/\s+/g, " ").trim().slice(0, 240);
-  return `Untrusted sender ${normalizeAddress(message.fromAddr)} sent "${subject}". Summary: ${firstLine || "No body text."}`;
+  return [
+    `Untrusted sender ${normalizeAddress(message.fromAddr)} sent "${subject}".`,
+    `Summary: ${firstLine || "No body text."}`,
+    "Reply YES to trust as a newsletter, NO to block, or ONCE to review only this message."
+  ].join(" ");
 }
 
 function configString(config: Record<string, unknown>, key: string): string | undefined {
@@ -161,6 +166,14 @@ export async function handleInboundMessage(
     };
   }
   if (classification === "owner") {
+    const newsletterReply = await handleOwnerNewsletterReply({
+      store: options.store,
+      context: options.context,
+      message: recorded
+    });
+    if (newsletterReply) {
+      return newsletterReply;
+    }
     const agentResult = await options.ownerAgentRunner?.(recorded);
     let taskEventId = agentResult?.taskEventId;
     if (agentResult?.taskId) {
@@ -189,13 +202,21 @@ export async function handleInboundMessage(
     };
   }
   if (classification === "newsletter") {
+    const task = await queueNewsletterDigestTask({
+      store: options.store,
+      context: options.context,
+      message: recorded,
+      reason: "trusted_newsletter"
+    });
     await options.store.updateInboundMessageHandling(options.context, recorded.id, {
-      action: "accepted_newsletter"
+      action: "accepted_newsletter",
+      taskId: task.id
     });
     return {
       classification,
       action: "accepted_newsletter",
-      messageId: recorded.id
+      messageId: recorded.id,
+      taskId: task.id
     };
   }
   if (!options.rateLimiter.allow(options.message.fromAddr)) {

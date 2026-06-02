@@ -369,6 +369,77 @@ h3 {
   white-space: pre-wrap;
 }
 
+.memory-browser {
+  display: grid;
+  grid-template-columns: minmax(220px, 320px) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 420px;
+}
+
+.memory-list {
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  border: 1px solid #e0e0e0;
+  background: #e0e0e0;
+}
+
+.memory-list-item {
+  display: grid;
+  gap: 4px;
+  border: 0;
+  border-left: 4px solid transparent;
+  background: #ffffff;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  padding: 12px;
+  text-align: left;
+}
+
+.memory-list-item:hover,
+.memory-list-item:focus,
+.memory-list-item.is-selected {
+  border-left-color: #0f62fe;
+  background: #edf5ff;
+}
+
+.memory-title {
+  font-weight: 600;
+}
+
+.memory-document {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  min-width: 0;
+  border: 1px solid #e0e0e0;
+  background: #ffffff;
+  padding: 16px;
+}
+
+.memory-document-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+
+.memory-outline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.memory-body {
+  overflow: auto;
+  max-height: 560px;
+  margin: 0;
+  background: #f4f4f4;
+  padding: 16px;
+  white-space: pre-wrap;
+}
+
 .cds--inline-notification {
   max-width: none;
   margin-bottom: 16px;
@@ -381,6 +452,7 @@ h3 {
   .sender-form,
   .config-form,
   .connector-grid,
+  .memory-browser,
   .task-detail-grid {
     grid-template-columns: 1fr;
   }

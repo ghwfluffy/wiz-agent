@@ -10,6 +10,7 @@ import {
   type ConnectorStatus,
   type InboundMessage,
   type JobStatus,
+  type MemoryDocument,
   type OutboxMessage,
   type Sender,
   type Task,
@@ -28,6 +29,7 @@ const tabs = [
   { id: "inbox", label: "Inbox" },
   { id: "outbox", label: "Outbox" },
   { id: "tasks", label: "Tasks" },
+  { id: "memory", label: "Memory" },
   { id: "senders", label: "Senders" },
   { id: "workers", label: "Workers" },
   { id: "logs", label: "Logs" },
@@ -47,6 +49,7 @@ const outbox = ref<OutboxMessage[]>([]);
 const audit = ref<AuditEvent[]>([]);
 const senders = ref<Sender[]>([]);
 const connectors = ref<Connector[]>([]);
+const memoryDocuments = ref<MemoryDocument[]>([]);
 const aiConfig = ref<AiConfig | null>(null);
 const jobs = ref<JobStatus[]>([]);
 const dashboardError = ref<string | null>(null);
@@ -62,6 +65,8 @@ const inboxPerPage = 10;
 const outboxPerPage = 10;
 const selectedTask = ref<Task | null>(null);
 const selectedTaskEvents = ref<TaskEvent[]>([]);
+const selectedMemorySlug = ref("");
+const memorySearch = ref("");
 const taskStatusDraft = ref("");
 const taskFollowUpPrompt = ref("");
 const taskModalError = ref<string | null>(null);
@@ -140,6 +145,26 @@ const paginatedOutbox = computed(() => {
 });
 const selectedTaskOpen = computed(() => selectedTask.value !== null);
 const taskModalTitle = computed(() => selectedTask.value?.title ?? "Task details");
+const selectedMemoryDocument = computed(() =>
+  memoryDocuments.value.find((document) => document.slug === selectedMemorySlug.value) ?? memoryDocuments.value[0] ?? null
+);
+const filteredMemoryDocuments = computed(() => {
+  const query = memorySearch.value.trim().toLowerCase();
+  if (!query) {
+    return memoryDocuments.value;
+  }
+  return memoryDocuments.value.filter((document) =>
+    [document.title, document.slug, document.body].some((value) => value.toLowerCase().includes(query))
+  );
+});
+const memoryHeadings = computed(() => {
+  const body = selectedMemoryDocument.value?.body ?? "";
+  return body
+    .split("\n")
+    .filter((line) => /^#{1,3}\s+\S/.test(line))
+    .map((line) => line.replace(/^#{1,3}\s+/, "").trim())
+    .slice(0, 12);
+});
 
 function tabFromRoute(value: unknown): TabId {
   const tab = Array.isArray(value) ? value[0] : value;
@@ -259,6 +284,9 @@ function inboxActionLabel(message: InboundMessage): string {
   if (message.handlingAction === "accepted_newsletter") {
     return "Accepted newsletter";
   }
+  if (message.handlingAction === "sender_reviewed") {
+    return "Sender reviewed";
+  }
   if (message.handlingAction === "rate_limited") {
     return "Rate limited";
   }
@@ -296,6 +324,12 @@ function clampPages(): void {
   taskPage.value = Math.min(taskPage.value, totalTaskPages.value);
   inboxPage.value = Math.min(inboxPage.value, totalInboxPages.value);
   outboxPage.value = Math.min(outboxPage.value, totalOutboxPages.value);
+  if (!selectedMemorySlug.value && memoryDocuments.value.length > 0) {
+    selectedMemorySlug.value = memoryDocuments.value[0]?.slug ?? "";
+  }
+  if (selectedMemorySlug.value && !memoryDocuments.value.some((document) => document.slug === selectedMemorySlug.value)) {
+    selectedMemorySlug.value = memoryDocuments.value[0]?.slug ?? "";
+  }
 }
 
 function previousTaskPage(): void {
@@ -333,6 +367,7 @@ async function loadDashboard(): Promise<void> {
     outbox.value = data.outbox;
     audit.value = data.audit;
     senders.value = data.senders;
+    memoryDocuments.value = data.memory ?? [];
     jobs.value = data.jobs;
     applyConnectors(data.connectors);
     applyAiConfig(data.aiConfig);
@@ -367,6 +402,11 @@ async function loadActiveTab(): Promise<void> {
       case "tasks": {
         const response = await api.listTasks();
         tasks.value = response.tasks;
+        break;
+      }
+      case "memory": {
+        const response = await api.listMemory();
+        memoryDocuments.value = response.documents;
         break;
       }
       case "senders": {
@@ -1053,6 +1093,50 @@ onUnmounted(() => {
               </div>
             </div>
           </template>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'memory'" id="panel-memory" class="tab-panel" role="tabpanel" aria-labelledby="tab-memory">
+        <section class="activity-section" aria-label="Agent memory">
+          <div class="section-heading">
+            <h2>Memory</h2>
+            <p class="label">{{ memoryDocuments.length }} documents</p>
+          </div>
+          <div class="cds--form-item">
+            <label class="cds--label" for="memory-search">Search memory</label>
+            <input id="memory-search" v-model="memorySearch" class="cds--text-input" type="search" placeholder="Search titles, slugs, and body text">
+          </div>
+          <p v-if="memoryDocuments.length === 0" class="empty">No memory documents yet.</p>
+          <div v-else class="memory-browser">
+            <aside class="memory-list" aria-label="Memory documents">
+              <button
+                v-for="document in filteredMemoryDocuments"
+                :key="document.id"
+                class="memory-list-item"
+                :class="{ 'is-selected': selectedMemoryDocument?.slug === document.slug }"
+                type="button"
+                @click="selectedMemorySlug = document.slug"
+              >
+                <span class="memory-title">{{ document.title }}</span>
+                <span class="label">{{ document.slug }}</span>
+                <span class="label">Updated {{ formatDate(document.updatedAt) }}</span>
+              </button>
+              <p v-if="filteredMemoryDocuments.length === 0" class="empty">No matching memory documents.</p>
+            </aside>
+            <article v-if="selectedMemoryDocument" class="memory-document">
+              <header class="memory-document-header">
+                <div>
+                  <p class="label">{{ selectedMemoryDocument.slug }}</p>
+                  <h3>{{ selectedMemoryDocument.title }}</h3>
+                </div>
+                <p class="label">Updated {{ formatDate(selectedMemoryDocument.updatedAt) }}</p>
+              </header>
+              <div v-if="memoryHeadings.length > 0" class="memory-outline" aria-label="Document outline">
+                <span v-for="heading in memoryHeadings" :key="heading" class="cds--tag cds--tag--blue">{{ heading }}</span>
+              </div>
+              <pre class="memory-body">{{ selectedMemoryDocument.body }}</pre>
+            </article>
+          </div>
         </section>
       </section>
 

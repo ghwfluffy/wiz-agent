@@ -18,6 +18,7 @@ import type {
   AuditRecord,
   InboundMessageInput,
   InboundMessageRecord,
+  MemoryDocumentRecord,
   OutboundMessageRecord,
   RequestContext,
   SenderClassification,
@@ -189,6 +190,18 @@ function senderFromRow(row: Record<string, unknown>): SenderRecord {
     userId: String(row.user_id),
     address: String(row.address),
     status: row.status as SenderStatus,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
+  };
+}
+
+function memoryDocumentFromRow(row: Record<string, unknown>): MemoryDocumentRecord {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    slug: String(row.slug),
+    title: String(row.title),
+    body: String(row.body ?? ""),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
   };
@@ -667,6 +680,46 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return config;
     },
 
+    async listMemoryDocuments(context) {
+      const result = await pool.query(
+        `SELECT *
+         FROM memory_documents
+         WHERE user_id = $1
+         ORDER BY updated_at DESC, slug ASC`,
+        [context.userId]
+      );
+      return result.rows.map(memoryDocumentFromRow);
+    },
+
+    async getMemoryDocument(context, slug) {
+      const result = await pool.query(
+        `SELECT *
+         FROM memory_documents
+         WHERE user_id = $1 AND slug = $2
+         LIMIT 1`,
+        [context.userId, slug]
+      );
+      return result.rows[0] ? memoryDocumentFromRow(result.rows[0]) : undefined;
+    },
+
+    async upsertMemoryDocument(context, input) {
+      const result = await pool.query(
+        `INSERT INTO memory_documents (id, user_id, slug, title, body)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (user_id, slug) DO UPDATE
+           SET title = EXCLUDED.title,
+               body = EXCLUDED.body,
+               updated_at = now()
+         RETURNING *`,
+        [randomUUID(), context.userId, input.slug, input.title, input.body]
+      );
+      const record = memoryDocumentFromRow(result.rows[0]);
+      await recordAudit(pool, context, "memory.upsert", "memory_document", record.id, {
+        slug: record.slug
+      });
+      return record;
+    },
+
     async listConnectors(context: RequestContext): Promise<ConnectorRecord[]> {
       const result = await pool.query(
         `SELECT DISTINCT ON (kind) *
@@ -1027,6 +1080,7 @@ export function createMemoryStore(): AgentStore {
   const runs = new Map<string, AgentRunRecord>();
   const toolCalls = new Map<string, ToolCallRecord>();
   const senderStatuses = new Map<string, SenderRecord>();
+  const memoryDocuments = new Map<string, MemoryDocumentRecord>();
   const connectors = new Map<string, ConnectorRecord>();
   const inboundProviderIds = new Map<string, string>();
   const inboundMessages = new Map<string, InboundMessageRecord>();
@@ -1285,6 +1339,33 @@ export function createMemoryStore(): AgentStore {
       aiConfig = config;
       pushAudit(context, "admin.ai_config.update", "admin_ai_config", "default");
       return aiConfig;
+    },
+    async listMemoryDocuments(context) {
+      return [...memoryDocuments.values()]
+        .filter((document) => document.userId === context.userId)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.slug.localeCompare(b.slug));
+    },
+    async getMemoryDocument(context, slug) {
+      return memoryDocuments.get(`${context.userId}:${slug}`);
+    },
+    async upsertMemoryDocument(context, input) {
+      const key = `${context.userId}:${input.slug}`;
+      const existing = memoryDocuments.get(key);
+      const now = nowIso();
+      const record: MemoryDocumentRecord = {
+        id: existing?.id ?? randomUUID(),
+        userId: context.userId,
+        slug: input.slug,
+        title: input.title,
+        body: input.body,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now
+      };
+      memoryDocuments.set(key, record);
+      pushAudit(context, "memory.upsert", "memory_document", record.id, {
+        slug: record.slug
+      });
+      return record;
     },
     async listConnectors(context: RequestContext): Promise<ConnectorRecord[]> {
       return [...connectors.values()]

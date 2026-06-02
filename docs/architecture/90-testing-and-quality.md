@@ -57,6 +57,11 @@ Current tests cover:
 - worker IMAP failure audit visibility.
 - sender-table owner classification.
 - owner-contact backed untrusted sender review notification queueing.
+- owner SMS sender-review replies for newsletter trust, one-time review, and
+  blocking.
+- trusted newsletter digest task queueing with owner preference memory.
+- newsletter preference memory writes from explicit owner messages.
+- memory document API and Memory tab rendering.
 - owner reply tool contract without model-selected recipients.
 - outbound fail-closed recipient checks and raw owner mobile gateway mapping.
 - outbox listing, status updates, SMTP queue delivery, and fail-closed outbound

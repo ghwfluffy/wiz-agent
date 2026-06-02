@@ -453,7 +453,6 @@ export function buildApp(options: AppOptions = {}): Hono {
 
   for (const [path, key] of [
     ["/api/v1/conversations", "conversations"],
-    ["/api/v1/memory", "documents"],
     ["/api/v1/approvals", "approvals"]
   ] as const) {
     app.get(path, async (context) => {
@@ -464,6 +463,26 @@ export function buildApp(options: AppOptions = {}): Hono {
       return context.json({ [key]: [] });
     });
   }
+
+  app.get("/api/v1/memory", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    return context.json({ documents: await store.listMemoryDocuments(authContext) });
+  });
+
+  app.get("/api/v1/memory/:slug", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const document = await store.getMemoryDocument(authContext, context.req.param("slug"));
+    if (!document) {
+      return context.json(errorPayload("http_404", "Memory document not found.", authContext.requestId), 404);
+    }
+    return context.json({ document });
+  });
 
   app.get("/api/v1/connectors", async (context) => {
     const authContext = await requireContext(context);
