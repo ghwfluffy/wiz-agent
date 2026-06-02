@@ -43,6 +43,16 @@ queue an outbound message, record an observation, or request an allowed
 cross-app integration action. The host still validates every tool call and
 records the final handling action back on the inbox record.
 
+Owner SMS/MMS follow-ups often refer to older messages or completed tasks in a
+conversational way. The owner inbound prompt therefore includes bounded recent
+memory: active tasks, recently completed/cancelled/failed tasks, recent prior
+owner messages, and recent outbound messages. This context is excerpted and
+owner-scoped so the agent can recognize continuations without loading arbitrary
+mailbox history. A read-only `list_recent_context` tool exposes the same style
+of bounded lookup when the model explicitly needs more context. If an owner
+message refers to completed work, the agent should append to that task and move
+it back to active work instead of creating a duplicate task.
+
 The worker polls enabled per-user IMAP connector records and processes unread
 mail in bounded batches. IMAP connector settings live in the database and are
 managed from the Settings tab, including the assistant mailbox password. API reads

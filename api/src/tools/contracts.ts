@@ -12,6 +12,11 @@ export const ListOngoingTasksToolSchema = z.object({
   reason: z.string().min(1).optional()
 });
 
+export const ListRecentContextToolSchema = z.object({
+  reason: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(20).default(8)
+});
+
 export const AppendTaskPromptToolSchema = z.object({
   taskId: z.string().min(1),
   prompt: z.string().min(1),
@@ -42,6 +47,7 @@ export const IntegrationActionToolSchema = z.object({
 export const ToolContracts = {
   create_task: CreateTaskToolSchema,
   list_ongoing_tasks: ListOngoingTasksToolSchema,
+  list_recent_context: ListRecentContextToolSchema,
   append_task_prompt: AppendTaskPromptToolSchema,
   propose_outbound_message: ProposeOutboundMessageToolSchema,
   record_observation: RecordObservationToolSchema,

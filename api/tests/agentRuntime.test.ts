@@ -236,7 +236,7 @@ describe("agent task execution", () => {
 
     const prompt = await buildOwnerInboundPrompt({ context, store, message });
     expect(prompt).toContain(task.id);
-    expect(prompt).toContain("If it belongs to an active task, use append_task_prompt");
+    expect(prompt).toContain("If it belongs to an active or completed task, use append_task_prompt");
 
     const result = await runOwnerInboundAgent({
       context,
@@ -265,6 +265,101 @@ describe("agent task execution", () => {
       status: "pending",
       prompt: expect.stringContaining("Owner added a morning preference.")
     });
+  });
+
+  it("includes bounded recent owner context so short SMS follow-ups can refer to completed work", async () => {
+    const { context, store } = await testContext();
+    const task = await store.createTask(context, {
+      title: "Send the atom joke",
+      prompt: "Tell the owner the atom joke."
+    });
+    await store.updateTask(context, task.id, { status: "completed" });
+    const prior = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-memory-prior",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Your joke got cut off.",
+      source: "sms"
+    }, "owner");
+    await store.updateInboundMessageHandling(context, prior.id, {
+      action: "routed_to_agent",
+      taskId: task.id
+    });
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "sent",
+      toAddr: "owner-sms@example.test",
+      bodyText: "Why don't scientists trust atoms? Because they make up everything."
+    });
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-memory-current",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "send the full joke",
+      source: "sms"
+    }, "owner");
+
+    const prompt = await buildOwnerInboundPrompt({ context, store, message });
+
+    expect(prompt).toContain("Recent memory/context:");
+    expect(prompt).toContain("Send the atom joke");
+    expect(prompt).toContain(task.id);
+    expect(prompt).toContain("Your joke got cut off.");
+    expect(prompt).toContain("Why don't scientists trust atoms?");
+    expect(prompt).not.toContain("providerMessageId");
+  });
+
+  it("exposes a read-only recent context lookup tool", async () => {
+    const { context, store } = await testContext();
+    const task = await store.createTask(context, {
+      title: "Remember this task",
+      prompt: "Context to remember."
+    });
+    await store.updateTask(context, task.id, { status: "completed" });
+    await store.recordInboundMessage(context, {
+      providerMessageId: "owner-context-tool",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "This is useful history.",
+      source: "sms"
+    }, "owner");
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "list_recent_context",
+            arguments: {
+              reason: "Check whether the new SMS relates to old work.",
+              limit: 5
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Look up recent context."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "list_recent_context",
+      sideEffect: "none"
+    });
+    expect(result.executionResult?.tasks).toEqual([
+      expect.objectContaining({
+        task_id: task.id,
+        title: "Remember this task",
+        status: "completed"
+      })
+    ]);
+    expect(result.executionResult?.inbound).toEqual([
+      expect.objectContaining({
+        body_excerpt: "This is useful history."
+      })
+    ]);
   });
 
   it("queues owner replies to the inbound SMS gateway without model-selected recipients", async () => {

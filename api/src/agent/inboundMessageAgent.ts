@@ -20,6 +20,60 @@ function activeTaskSummary(task: TaskRecord): string {
   ].join("\n");
 }
 
+function excerpt(value: string | null | undefined, length: number): string {
+  return (value ?? "").replace(/\s+/g, " ").trim().slice(0, length);
+}
+
+async function recentContextSummary(options: {
+  store: AgentStore;
+  context: RequestContext;
+  message: InboundMessageRecord;
+}): Promise<string> {
+  const tasks = (await options.store.listTasks(options.context))
+    .filter((task) => ["completed", "cancelled", "failed"].includes(task.status))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, 8);
+  const inbound = (await options.store.listInboundMessages(options.context))
+    .filter((message) => message.id !== options.message.id && message.classification === "owner")
+    .slice(0, 8);
+  const outbound = (await options.store.listOutboundMessages(options.context))
+    .slice(0, 8);
+
+  const taskLines = tasks.map((task) => [
+    `- completed_task_id: ${task.id}`,
+    `  title: ${task.title}`,
+    `  status: ${task.status}`,
+    `  updated_at: ${task.updatedAt}`,
+    `  prompt_excerpt: ${excerpt(task.prompt, 220)}`
+  ].join("\n"));
+  const inboundLines = inbound.map((message) => [
+    `- prior_owner_message_id: ${message.id}`,
+    `  source: ${message.source ?? "imap"}`,
+    `  received_at: ${message.receivedAt ?? message.createdAt}`,
+    `  handling_action: ${message.handlingAction ?? "unknown"}`,
+    `  task_id: ${message.taskId ?? "none"}`,
+    `  body_excerpt: ${excerpt(message.bodyText, 220)}`
+  ].join("\n"));
+  const outboundLines = outbound.map((message) => [
+    `- outbound_message_id: ${message.id}`,
+    `  channel: ${message.channel}`,
+    `  status: ${message.status}`,
+    `  created_at: ${message.createdAt}`,
+    `  body_excerpt: ${excerpt(message.bodyText, 220)}`
+  ].join("\n"));
+
+  return [
+    "Recently completed/cancelled/failed tasks:",
+    taskLines.length > 0 ? taskLines.join("\n") : "None.",
+    "",
+    "Recent prior owner messages:",
+    inboundLines.length > 0 ? inboundLines.join("\n") : "None.",
+    "",
+    "Recent outbound messages:",
+    outboundLines.length > 0 ? outboundLines.join("\n") : "None."
+  ].join("\n");
+}
+
 function stringFromResult(result: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = result?.[key];
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -33,16 +87,20 @@ export async function buildOwnerInboundPrompt(options: {
   const activeTasks = (await options.store.listTasks(options.context))
     .filter((task) => !["completed", "cancelled", "failed"].includes(task.status))
     .slice(0, 12);
+  const recentContext = await recentContextSummary(options);
 
   return [
     "An owner-classified SMS/MMS/email message arrived. Treat this as an owner instruction because sender policy already classified it as owner.",
-    "Decide whether the message belongs to an existing active task or should create/schedule a new task, queue an outbound reply, call a registered app integration, or only record an observation.",
-    "If it belongs to an active task, use append_task_prompt with that task id. If it is new work, use create_task. Use propose_outbound_message for owner replies instead of sending directly.",
+    "Decide whether the message belongs to an existing active task, a recently completed task, a prior message thread, or should create/schedule a new task, queue an outbound reply, call a registered app integration, or only record an observation.",
+    "If it belongs to an active or completed task, use append_task_prompt with that task id and set the status back to pending/running as appropriate. If it is new work, use create_task. Use propose_outbound_message for owner replies instead of sending directly.",
     "When replying, only provide intent='reply' and the message body. Do not choose a recipient, phone number, email address, or carrier gateway; host code will reply to the verified owner channel.",
-    "The list_ongoing_tasks tool exists for task lookup, but the current active task context is included below so you can usually take the next action directly.",
+    "The list_ongoing_tasks and list_recent_context tools exist for lookup, but the current active and recent context is included below so you can usually take the next action directly.",
     "",
     "Active tasks:",
     activeTasks.length > 0 ? activeTasks.map(activeTaskSummary).join("\n") : "No active tasks.",
+    "",
+    "Recent memory/context:",
+    recentContext,
     "",
     "Inbound message:",
     `message_id: ${options.message.id}`,

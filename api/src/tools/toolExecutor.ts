@@ -61,6 +61,48 @@ export async function executeToolCall(options: {
         result: { tasks }
       };
     }
+    case "list_recent_context": {
+      const limit = typeof options.args.limit === "number" ? options.args.limit : 8;
+      const tasks = (await options.store.listTasks(options.context))
+        .slice(0, limit)
+        .map((task) => ({
+          task_id: task.id,
+          title: task.title,
+          status: task.status,
+          due_at: task.dueAt,
+          priority: task.priority,
+          prompt_excerpt: excerpt(task.prompt, 240),
+          updated_at: task.updatedAt
+        }));
+      const inbound = (await options.store.listInboundMessages(options.context))
+        .filter((message) => message.classification === "owner")
+        .slice(0, limit)
+        .map((message) => ({
+          message_id: message.id,
+          source: message.source ?? "imap",
+          received_at: message.receivedAt ?? message.createdAt,
+          subject: message.subject,
+          body_excerpt: excerpt(message.bodyText, 240),
+          handling_action: message.handlingAction,
+          task_id: message.taskId
+        }));
+      const outbound = (await options.store.listOutboundMessages(options.context))
+        .slice(0, limit)
+        .map((message) => ({
+          outbound_message_id: message.id,
+          channel: message.channel,
+          status: message.status,
+          subject: message.subject,
+          body_excerpt: excerpt(message.bodyText, 240),
+          created_at: message.createdAt,
+          sent_at: message.sentAt ?? null
+        }));
+      return {
+        executed: true,
+        sideEffect: "none",
+        result: { tasks, inbound, outbound }
+      };
+    }
     case "append_task_prompt": {
       const taskId = String(options.args.taskId);
       const task = await options.store.getTask(options.context, taskId);
@@ -168,6 +210,10 @@ export async function executeToolCall(options: {
         result: { reason: "unsupported_tool" }
       };
   }
+}
+
+function excerpt(value: string | null | undefined, length: number): string {
+  return (value ?? "").replace(/\s+/g, " ").trim().slice(0, length);
 }
 
 function configString(config: Record<string, unknown>, key: string): string | undefined {
