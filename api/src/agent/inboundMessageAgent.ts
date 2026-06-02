@@ -37,7 +37,8 @@ export async function buildOwnerInboundPrompt(options: {
   return [
     "An owner-classified SMS/MMS/email message arrived. Treat this as an owner instruction because sender policy already classified it as owner.",
     "Decide whether the message belongs to an existing active task or should create/schedule a new task, queue an outbound reply, call a registered app integration, or only record an observation.",
-    "If it belongs to an active task, use append_task_prompt with that task id. If it is new work, use create_task. Use propose_outbound_message for replies instead of sending directly.",
+    "If it belongs to an active task, use append_task_prompt with that task id. If it is new work, use create_task. Use propose_outbound_message for owner replies instead of sending directly.",
+    "When replying, only provide intent='reply' and the message body. Do not choose a recipient, phone number, email address, or carrier gateway; host code will reply to the verified owner channel.",
     "The list_ongoing_tasks tool exists for task lookup, but the current active task context is included below so you can usually take the next action directly.",
     "",
     "Active tasks:",
@@ -75,7 +76,8 @@ export async function runOwnerInboundAgent(options: {
     modelClient: options.modelClient,
     request: {
       prompt,
-      complexity: { ambiguous: true }
+      complexity: { ambiguous: true },
+      replyToMessage: options.message
     },
     settings: options.settings,
     integrationTokenProvider: options.integrationTokenProvider,

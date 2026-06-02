@@ -7,7 +7,7 @@ import {
 } from "./modelTiers.js";
 import { buildAgentPrompt, modelToolDescriptors } from "./promptContext.js";
 import type { Settings } from "../config/settings.js";
-import type { AgentStore, RequestContext } from "../domain/types.js";
+import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain/types.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { executeToolCall } from "../tools/toolExecutor.js";
 import { parseToolProposal, validateOrRepairToolCall } from "../tools/validator.js";
@@ -16,6 +16,7 @@ export type AgentTaskRequest = {
   prompt: string;
   taskId?: string | null;
   complexity?: AgentTaskComplexity;
+  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
 };
 
 export type AgentTaskResult = {
@@ -110,7 +111,8 @@ export async function runAgentTask(options: {
       args: validated.arguments,
       settings: options.settings,
       integrationTokenProvider: options.integrationTokenProvider,
-      fetchImpl: options.fetchImpl
+      fetchImpl: options.fetchImpl,
+      replyToMessage: options.request.replyToMessage
     });
 
     await options.store.recordToolCall(options.context, {

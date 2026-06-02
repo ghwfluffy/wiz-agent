@@ -140,13 +140,28 @@ Saving owner contact settings also marks the configured email/SMS/MMS gateway
 addresses as `owner` senders. Sender classification must honor those sender
 table rows; owner identity is not limited to environment variables.
 
-The `propose_outbound_message` tool only writes an outbound queue record.
-Deterministic host code owns approval handling, SMTP transport configuration,
-delivery, status updates, and audit records.
+The model-facing `propose_outbound_message` tool is intentionally narrow. The
+model can only request `intent = reply`, optional subject text, body text, and
+whether approval is required. It must not provide a recipient, phone number,
+email address, or carrier gateway. Deterministic host code owns recipient
+resolution, approval handling, SMTP transport configuration, delivery, status
+updates, and audit records.
+
+Owner replies are resolved by host code. For owner-classified inbound
+SMS/MMS/email, the reply goes back to the verified inbound owner address and
+uses the inbound source to select SMS, MMS, or email. For proactive messages
+without an inbound message context, the host uses the current user's
+owner-contact connector, preferring SMS gateway, then MMS gateway, then email.
+SMTP delivery fails closed unless the final recipient is a configured or
+sender-table owner address. Legacy queued SMS/MMS records containing only the
+owner mobile number are mapped to the configured carrier gateway before SMTP
+delivery; non-owner raw numbers or email addresses are not delivered.
 
 Approval gates delivery only for records with `status = 'requires_approval'`.
-The model tool defaults to requiring approval unless the tool arguments
-explicitly set `approvalRequired: false`. Deterministic untrusted-sender review
+The owner-reply model tool defaults to immediate queued delivery because sender
+policy has already classified the inbound sender as owner and host code controls
+the recipient. The model may explicitly request approval for sensitive replies.
+Deterministic untrusted-sender review
 notifications are host-generated from bounded message metadata and are queued as
 `pending`, not `requires_approval`, so the owner actually receives the prompt to
 review the sender. The delivery worker only attempts records with `pending` or

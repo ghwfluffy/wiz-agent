@@ -267,6 +267,71 @@ describe("agent task execution", () => {
     });
   });
 
+  it("queues owner replies to the inbound SMS gateway without model-selected recipients", async () => {
+    const { context, store } = await testContext();
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-reply-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Are you online?",
+      source: "sms"
+    }, "owner");
+
+    const result = await runOwnerInboundAgent({
+      context,
+      store,
+      message,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "propose_outbound_message",
+            arguments: {
+              intent: "reply",
+              body: "Yes, I am online."
+            }
+          }
+        ]
+      })
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "propose_outbound_message"
+    });
+    const outbox = await store.listOutboundMessages(context);
+    expect(outbox).toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        status: "pending",
+        toAddr: "owner-sms@example.test",
+        bodyText: "Yes, I am online."
+      })
+    ]);
+  });
+
+  it("rejects model-selected outbound recipients", async () => {
+    const result = await validateOrRepairToolCall(
+      {
+        toolName: "propose_outbound_message",
+        arguments: {
+          channel: "sms",
+          to: "15555550100",
+          body: "This should not validate."
+        }
+      },
+      {
+        modelClient: new MockModelClient(),
+        repairModel: "repair-model",
+        repairAttemptLimit: 0
+      }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.validationErrors.join(" ")).toContain("Unrecognized");
+    }
+  });
+
   it("repairs a malformed tool call before accepting it", async () => {
     const { context, store } = await testContext();
 

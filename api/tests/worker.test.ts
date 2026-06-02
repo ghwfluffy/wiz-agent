@@ -22,6 +22,13 @@ describe("worker loop", () => {
       identityProvider: "central-oauth",
       requestId: "worker-login"
     });
+    await store.setSenderStatus({
+      userId: session.user.id,
+      actorType: "system",
+      permissions: ["user", "system"],
+      requestId: "worker-owner-recipient",
+      session
+    }, "15555550100@sms.example.test", "owner");
     await store.queueOutboundMessage({
       userId: session.user.id,
       actorType: "system",
@@ -87,6 +94,8 @@ describe("worker loop", () => {
       requestId: "worker-rate-test",
       session
     };
+    await store.setSenderStatus(context, "1@sms.example.test", "owner");
+    await store.setSenderStatus(context, "2@sms.example.test", "owner");
     for (const index of [1, 2]) {
       await store.queueOutboundMessage(context, {
         channel: "sms",
@@ -135,6 +144,7 @@ describe("worker loop", () => {
       requestId: "worker-outbound-before-imap-test",
       session
     };
+    await store.setSenderStatus(context, "owner-sms@example.test", "owner");
     await store.queueOutboundMessage(context, {
       channel: "sms",
       status: "pending",

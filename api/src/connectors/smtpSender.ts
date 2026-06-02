@@ -76,6 +76,15 @@ function booleanConfig(primary: unknown, fallback: unknown): boolean | undefined
   return undefined;
 }
 
+function digitsOnly(value: string): string {
+  return value.replace(/\D+/g, "");
+}
+
+function ownerConfigValue(config: Record<string, unknown>, key: string): string | undefined {
+  const value = config[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 export type SmtpDeliveryConfig = {
   username?: string;
   password?: string;
@@ -102,6 +111,41 @@ export async function resolveSmtpDeliveryConfig(options: {
     secure: booleanConfig(smtpConfig.secure, secret.smtp?.secure),
     from: stringConfig(smtpConfig.from, secret.smtp?.from)
   };
+}
+
+async function resolveOwnerRecipient(options: {
+  store: AgentStore;
+  context: RequestContext;
+  message: OutboundMessageRecord;
+}): Promise<string | undefined> {
+  const requested = options.message.toAddr.trim();
+  const ownerContact = await options.store.getConnector(options.context, "owner-contact");
+  const ownerConfig = ownerContact?.status === "enabled" ? ownerContact.config : {};
+  const configured = [
+    ownerConfigValue(ownerConfig, "email"),
+    ownerConfigValue(ownerConfig, "sms_gateway"),
+    ownerConfigValue(ownerConfig, "mms_gateway")
+  ].filter((value): value is string => Boolean(value));
+
+  if (requested.includes("@")) {
+    const senderStatus = await options.store.getSenderStatus(options.context, requested);
+    if (senderStatus === "owner" || configured.some((address) => address.toLowerCase() === requested.toLowerCase())) {
+      return requested;
+    }
+    return undefined;
+  }
+
+  if (!["sms", "mms"].includes(options.message.channel)) {
+    return undefined;
+  }
+  const mobile = ownerConfigValue(ownerConfig, "mobile");
+  if (!mobile || digitsOnly(mobile) !== digitsOnly(requested)) {
+    return undefined;
+  }
+  const gateway = options.message.channel === "mms"
+    ? ownerConfigValue(ownerConfig, "mms_gateway") ?? ownerConfigValue(ownerConfig, "sms_gateway")
+    : ownerConfigValue(ownerConfig, "sms_gateway") ?? ownerConfigValue(ownerConfig, "mms_gateway");
+  return gateway;
 }
 
 export function createSmtpTransport(settings: Settings): MailTransport {
@@ -155,11 +199,20 @@ export async function sendOutboundMessage(options: {
       pass: delivery.password
     }
   });
+  const to = await resolveOwnerRecipient(options);
+  if (!to) {
+    return options.store.updateOutboundMessageStatus(
+      options.context,
+      options.message.id,
+      "failed",
+      "Outbound recipient is not a configured owner address."
+    );
+  }
   await options.store.updateOutboundMessageStatus(options.context, options.message.id, "sending");
   try {
     await transport.sendMail({
       from,
-      to: options.message.toAddr,
+      to,
       subject: options.message.subject ?? undefined,
       text: options.message.bodyText
     });

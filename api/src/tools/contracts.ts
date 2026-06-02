@@ -19,12 +19,11 @@ export const AppendTaskPromptToolSchema = z.object({
 });
 
 export const ProposeOutboundMessageToolSchema = z.object({
-  channel: z.enum(["email", "sms", "mms"]),
-  to: z.string().min(1),
+  intent: z.enum(["reply"]).default("reply"),
   subject: z.string().optional(),
   body: z.string().min(1),
-  approvalRequired: z.boolean().default(true)
-});
+  approvalRequired: z.boolean().default(false)
+}).strict();
 
 export const RecordObservationToolSchema = z.object({
   summary: z.string().min(1),
