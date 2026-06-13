@@ -2099,6 +2099,65 @@ describe("agent task execution", () => {
     expect(response.status).toBe(401);
   });
 
+  it("passes signed integration tokens to read-only app tools selected from web prompts", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "oauth:central-oauth:owner-subject",
+      GOALS_API_BASE_URL: "https://goals.example.test/api/v1",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const store = createMemoryStore();
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://goals.example.test/api/v1/goals?include_archived=false");
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      expect(authorization).toMatch(/^Bearer agent-v1\./);
+      const payload = JSON.parse(Buffer.from(authorization.split(".")[1] ?? "", "base64url").toString("utf8"));
+      expect(payload).toMatchObject({
+        aud: "goals",
+        scope: "goals.list_goals",
+        sub: "owner-subject"
+      });
+      return Response.json([{ id: "goal-1", title: "Ship the deployment" }]);
+    });
+    const app = buildApp({
+      settings,
+      store,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "list_goals",
+            arguments: {}
+          }
+        ]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ prompt: "List my goals." })
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      selectedAction: "list_goals",
+      toolStatus: "accepted",
+      toolResult: {
+        status: 200,
+        data: [{ id: "goal-1", title: "Ship the deployment" }]
+      }
+    });
+  });
+
   it("limits web-created MCP sessions to read-only memory tools", async () => {
     const settings = loadSettings({
       APP_ENV: "test",

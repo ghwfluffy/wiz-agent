@@ -24,15 +24,18 @@ import type {
   TaskRecord,
   ToolCallRecord
 } from "../domain/types.js";
+import { SignedIntegrationTokenProvider } from "../integrations/tokenProvider.js";
 import { decideApproval, editApproval } from "../security/approvalPolicy.js";
 import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
 import { runtimeSafetyPolicy } from "../security/safetyPolicy.js";
+import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 
 export type AppOptions = {
   settings?: Settings;
   store?: AgentStore;
   fetchImpl?: typeof fetch;
   modelClient?: AgentModelClient;
+  integrationTokenProvider?: IntegrationTokenProvider;
 };
 
 function errorPayload(code: string, message: string, requestId: string, fieldErrors: unknown[] = []) {
@@ -298,6 +301,7 @@ export function buildApp(options: AppOptions = {}): Hono {
   const store = options.store ?? createDefaultStore(settings);
   const fetcher = options.fetchImpl ?? fetch;
   const modelClient = options.modelClient ?? OpenAIModelClient.fromSettings(settings, { fetchImpl: fetcher });
+  const integrationTokenProvider = options.integrationTokenProvider ?? new SignedIntegrationTokenProvider(settings);
   const app = new Hono();
 
   function appRedirect(path: string, error?: string): string {
@@ -1160,6 +1164,7 @@ export function buildApp(options: AppOptions = {}): Hono {
       mode: mode as "normal" | "quick_reply" | "planning",
       modelClient,
       settings,
+      integrationTokenProvider,
       fetchImpl: fetcher
     });
     const links = {
