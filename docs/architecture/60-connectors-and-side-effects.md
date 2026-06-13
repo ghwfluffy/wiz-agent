@@ -87,6 +87,15 @@ uses the memory write tool. Host code scopes and audits the write. Owner
 messages should not be pre-written to memory before the agent has made that
 decision.
 
+Conversational memory offload lists use the same controlled model tool/MCP path
+but have their own deterministic tools. When owner language means "save this for
+later" for a lightweight collection, even without exact words like "remember",
+"add", or "list", the agent should call the personal memory list tools instead
+of creating a task or appending generic memory. Examples include movie-night
+ideas, restaurants, books, project ideas, gift ideas, research buckets, places,
+and things to buy. Later indirect recall should use `search_memory_lists` before
+broad markdown/RAG search and should identify uncertain matches as uncertain.
+
 The worker also maintains autonomous scheduled tasks. A newsletter interest
 check reviews accumulated newsletter knowledge and decides whether to mention a
 small number of unusually interesting items conversationally or stay quiet. A
@@ -172,7 +181,10 @@ filesystem routes to show the standard root folders (`/personal`,
 `/legacy`), a file list, selected file preview, index status, and heading
 outline. Exact search is UI-side over known paths and the selected file body;
 semantic search should use read-only MCP/search sessions when added to the
-browser workflow. The owner may edit assistant-authored files under
+browser workflow. Browser-created MCP sessions may also use read-only personal
+list tools (`list_memory_items` and `search_memory_lists`) for list inspection;
+write/archive/delete list operations remain run-bound agent tools. The owner may
+edit assistant-authored files under
 `/assistant/`; other knowledge writes remain host-owned workflows or
 agent-runtime writes with validation and audit. The tab keeps trusted-contact
 management visible because sender trust is operational memory the owner needs

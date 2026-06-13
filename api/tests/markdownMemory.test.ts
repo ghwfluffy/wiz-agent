@@ -333,4 +333,222 @@ describe("MCP markdown tools", () => {
       }
     });
   });
+
+  it("adds, lists, deduplicates, searches, and archives personal memory list items", async () => {
+    const { store, context } = await testContext("owner");
+    const app = buildMcpApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      store
+    });
+    const session = await store.createAgentMcpSession(context, {
+      runId: "run-lists",
+      ttlSeconds: 60
+    });
+    const headers = {
+      authorization: `Bearer ${session.token}`,
+      "x-agent-run-id": "run-lists",
+      "content-type": "application/json"
+    };
+
+    const add = await app.request("/mcp/v1/tools/add_memory_list_item/call", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        listName: "movies",
+        item: "Desperado",
+        notes: "Antonio Banderas western to watch later.",
+        sourceMessageId: "msg-1",
+        rationale: "Owner asked to save it to a watch list."
+      })
+    });
+    expect(add.status).toBe(200);
+    const addBody = await add.json() as { result: Record<string, unknown> };
+    expect(addBody.result).toMatchObject({
+      path: "/personal/lists/movies.md",
+      duplicate: false,
+      item_count: 1
+    });
+    await expect(store.getMarkdownDocument(context, "/personal/lists/movies.md")).resolves.toMatchObject({
+      markdown: expect.stringContaining("<!-- memory-list:v1 list_id=\"movies\" -->")
+    });
+
+    const duplicate = await app.request("/mcp/v1/tools/add_memory_list_item/call", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        listName: "movie night pile",
+        item: "desperado!!!",
+        rationale: "Same owner item with inconsistent wording."
+      })
+    });
+    expect(duplicate.status).toBe(200);
+    await expect(duplicate.json()).resolves.toMatchObject({
+      ok: false,
+      sideEffect: "none",
+      result: {
+        duplicate: true,
+        item_count: 1
+      }
+    });
+
+    const list = await app.request("/mcp/v1/tools/list_memory_items/call", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        listName: "watch list"
+      })
+    });
+    expect(list.status).toBe(200);
+    const listBody = await list.json();
+    expect(listBody).toMatchObject({
+      result: {
+        path: "/personal/lists/movies.md",
+        items: [
+          expect.objectContaining({
+            item: "Desperado",
+            status: "active",
+            notes: "Antonio Banderas western to watch later."
+          })
+        ]
+      }
+    });
+    expect(listBody.result.items[0].item).not.toContain("memory-list-item");
+
+    const search = await app.request("/mcp/v1/tools/search_memory_lists/call", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        query: "what was that Antonio Banderas movie I wanted to watch?"
+      })
+    });
+    expect(search.status).toBe(200);
+    await expect(search.json()).resolves.toMatchObject({
+      result: {
+        candidates: [
+          expect.objectContaining({
+            path: "/personal/lists/movies.md",
+            confidence: "high",
+            matched_items: [
+              expect.objectContaining({ item: "Desperado" })
+            ]
+          })
+        ]
+      }
+    });
+
+    const archive = await app.request("/mcp/v1/tools/remove_memory_list_item/call", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        listName: "movies",
+        item: "Desperado",
+        reason: "Watched.",
+        rationale: "Owner asked to remove it after watching."
+      })
+    });
+    expect(archive.status).toBe(200);
+    await expect(archive.json()).resolves.toMatchObject({
+      result: {
+        removed: false,
+        archived: true,
+        item_count: 0
+      }
+    });
+    await expect(store.getMarkdownDocument(context, "/personal/lists/movies.md")).resolves.toMatchObject({
+      markdown: expect.stringContaining("- [x] Desperado")
+    });
+    const archivedList = await app.request("/mcp/v1/tools/list_memory_items/call", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        listName: "movies",
+        status: "all"
+      })
+    });
+    expect(archivedList.status).toBe(200);
+    await expect(archivedList.json()).resolves.toMatchObject({
+      result: {
+        items: [
+          expect.objectContaining({
+            item: "Desperado",
+            status: "archived"
+          })
+        ]
+      }
+    });
+  });
+
+  it("rejects personal list paths outside /personal/lists and keeps lists user scoped", async () => {
+    const { store, context: owner } = await testContext("owner");
+    const otherSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "other",
+      DEV_USER_EMAIL: "other@example.test"
+    });
+    const otherSession = await store.createDevelopmentSession(otherSettings, "other-login");
+    const other: RequestContext = {
+      userId: otherSession.user.id,
+      actorType: "user",
+      permissions: ["user"],
+      requestId: "other-request",
+      session: otherSession
+    };
+    const app = buildMcpApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      store
+    });
+    const ownerSession = await store.createAgentMcpSession(owner, {
+      runId: "run-owner-lists",
+      ttlSeconds: 60
+    });
+    const ownerHeaders = {
+      authorization: `Bearer ${ownerSession.token}`,
+      "x-agent-run-id": "run-owner-lists",
+      "content-type": "application/json"
+    };
+
+    const rejected = await app.request("/mcp/v1/tools/list_memory_items/call", {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify({
+        path: "/personal/profile.md"
+      })
+    });
+    expect(rejected.status).toBe(400);
+
+    await app.request("/mcp/v1/tools/add_memory_list_item/call", {
+      method: "POST",
+      headers: ownerHeaders,
+      body: JSON.stringify({
+        listName: "restaurants",
+        item: "Nopalito",
+        rationale: "Owner saved a restaurant."
+      })
+    });
+    await expect(store.getMarkdownDocument(other, "/personal/lists/restaurants.md")).resolves.toBeUndefined();
+
+    const otherMcpSession = await store.createAgentMcpSession(other, {
+      runId: "run-other-lists",
+      ttlSeconds: 60
+    });
+    const otherList = await app.request("/mcp/v1/tools/list_memory_items/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${otherMcpSession.token}`,
+        "x-agent-run-id": "run-other-lists",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        listName: "restaurants"
+      })
+    });
+    expect(otherList.status).toBe(200);
+    await expect(otherList.json()).resolves.toMatchObject({
+      result: {
+        item_count: 0,
+        items: []
+      }
+    });
+  });
 });

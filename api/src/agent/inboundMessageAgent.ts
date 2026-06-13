@@ -107,6 +107,15 @@ function stringFromResult(result: Record<string, unknown> | undefined, key: stri
   return typeof value === "string" && value.trim() ? value : undefined;
 }
 
+const memoryListGuidance = [
+  "Personal memory lists:",
+  "- When the owner expresses intent to preserve an item for later recall, categorization, recommendation, comparison, or future discussion, treat it as a memory-list operation.",
+  "- The owner may not say remember, add, or list. Phrases like 'that is one for movie night', 'save that restaurant', 'keep this around as a project idea', or 'put this in my someday research bucket' should use list tools.",
+  "- Use add_memory_list_item, list_memory_items, search_memory_lists, update_memory_list_item, or remove_memory_list_item for movies, books, project ideas, gift ideas, restaurants, research topics, places, things to buy, and other lightweight collections.",
+  "- Do not create a task unless the owner asks you to do work. Do not use generic write_memory for simple list add, remove, update, or read operations when a list tool fits.",
+  "- For indirect recall such as 'what was that Antonio Banderas movie I wanted to watch?' or 'show me project ideas about the house', use search_memory_lists before broad markdown/RAG search and state uncertainty for low-confidence matches."
+].join("\n");
+
 export async function buildOwnerInboundPrompt(options: {
   store: AgentStore;
   context: RequestContext;
@@ -121,6 +130,7 @@ export async function buildOwnerInboundPrompt(options: {
     "Decide whether the message should update memory, continue an existing task, create/schedule a new task, queue an outbound reply, call a registered app integration, or only record an observation.",
     "If it belongs to an active or completed task, use append_task_prompt with that task id and set the status back to pending/running as appropriate. If it is new work, use create_task. Use propose_outbound_message for owner replies instead of sending directly.",
     "If the owner gives durable preferences, facts, schedule rationale, project context, or instructions that should persist, use write_memory. Host code will enforce user scope.",
+    memoryListGuidance,
     "When replying, only provide intent='reply' and the message body. Do not choose a recipient, phone number, email address, or carrier gateway; host code will reply to the verified owner channel.",
     "The list_ongoing_tasks, list_recent_context, and list_recent_owner_conversations tools exist for lookup, but the current active and recent context is included below so you can usually take the next action directly.",
     "",
@@ -161,6 +171,7 @@ export async function buildOwnerWebPrompt(options: {
     "Use update_task_schedule when changing an existing task's due time and include rationale plus confidence. Prefer ask_owner_clarification over risky assumptions.",
     "Use propose_outbound_message only when a proactive owner message is useful. Do not choose a recipient, phone number, email address, or carrier gateway; host code resolves the owner destination.",
     "Use memory tools for durable preferences, facts, schedule rationale, project context, or instructions that should persist.",
+    memoryListGuidance,
     "The list_ongoing_tasks, list_recent_context, and list_recent_owner_conversations tools exist for additional bounded lookup.",
     "",
     `Mode: ${options.mode ?? "normal"}`,

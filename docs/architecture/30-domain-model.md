@@ -172,6 +172,25 @@ Markdown paths are user-owned and scoped by `users.id`, for example
 views over those path strings. Deleted markdown rows are omitted from directory
 and tree reads.
 
+Personal offload lists are ordinary markdown documents with deterministic list
+semantics. Canonical collection files live under `/personal/lists/`, including
+`/personal/lists/movies.md`, `/personal/lists/project-ideas.md`,
+`/personal/lists/books.md`, `/personal/lists/restaurants.md`, and
+`/personal/lists/research.md`; arbitrary owner list names are normalized to a
+slug in the same directory. Each list starts with a stable H1 plus a
+`memory-list:v1` marker, and entries use checkbox markdown with a hidden
+`memory-list-item` id plus simple metadata lines such as `added`, `source`,
+`notes`, `archived`, and `archive_reason`. The format is intentionally human
+editable while still parseable by deterministic host tools.
+
+The model should use personal memory list tools, not free-form memory writes,
+when the owner wants to save movies, books, project ideas, gift ideas,
+restaurants, research topics, places, things to buy, or similar lightweight
+collections for later recall. List tools resolve user scope from the MCP
+session, reject paths outside `/personal/lists/`, audit mutations, enqueue the
+normal markdown/RAG indexing path through `writeMarkdownDocument`, and archive
+items by default instead of deleting history.
+
 Markdown writes parse headings levels 1 through 6 into stable section IDs based
 on heading path, such as `goals/mvp`; pre-heading content is `_preamble`.
 Full-file and section writes use optimistic concurrency. A stale

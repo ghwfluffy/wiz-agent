@@ -58,7 +58,9 @@ const webMcpSessionTools = [
   "search_exact",
   "search_semantic",
   "find_backlinks",
-  "get_index_status"
+  "get_index_status",
+  "list_memory_items",
+  "search_memory_lists"
 ];
 
 function stringValue(input: Record<string, unknown>, key: string): string | undefined {

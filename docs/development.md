@@ -241,6 +241,21 @@ reindex_path({ path })
 markdown path tree. If the worker stops mid-job, stale claimed jobs become
 claimable again after the restart grace window.
 
+Useful MCP personal memory list tools:
+
+```text
+add_memory_list_item({ listName, item, notes?, sourceMessageId?, rationale })
+list_memory_items({ listName? | path?, status?, limit? })
+search_memory_lists({ query, limit? })
+update_memory_list_item({ listName? | path?, itemId? | item?, newItem?, notes?, status?, archiveReason?, rationale })
+remove_memory_list_item({ listName? | path?, itemId? | item?, reason?, rationale })
+```
+
+List files are stored as user-scoped markdown under `/personal/lists/*.md`.
+The tools normalize common owner phrases such as "movie night" to canonical
+lists, reject paths outside `/personal/lists/`, avoid duplicate active entries,
+and archive by default when removing an item.
+
 Useful MCP task/schedule tools:
 
 ```text

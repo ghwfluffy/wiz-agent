@@ -235,6 +235,63 @@ export const WriteFileToolSchema = z.object({
   rationale: z.string().min(1).optional()
 });
 
+const MemoryListPathSchema = z.string().min(1).max(500).regex(/^\/personal\/lists\/[a-z0-9][a-z0-9-]*\.md$/);
+
+export const AddMemoryListItemToolSchema = z.object({
+  listName: z.string().min(1).max(120),
+  item: z.string().min(1).max(500),
+  notes: z.string().min(1).max(1000).optional(),
+  sourceMessageId: z.string().min(1).max(200).optional(),
+  rationale: z.string().min(1)
+});
+
+export const ListMemoryItemsToolSchema = z.object({
+  listName: z.string().min(1).max(120).optional(),
+  path: MemoryListPathSchema.optional(),
+  status: z.enum(["active", "archived", "all"]).default("active"),
+  limit: z.number().int().min(1).max(100).default(50),
+  reason: z.string().min(1).optional()
+}).refine((value) => Boolean(value.listName || value.path), {
+  message: "listName or path is required."
+});
+
+export const SearchMemoryListsToolSchema = z.object({
+  query: z.string().min(1).max(500),
+  limit: z.number().int().min(1).max(25).default(10),
+  reason: z.string().min(1).optional()
+});
+
+export const UpdateMemoryListItemToolSchema = z.object({
+  listName: z.string().min(1).max(120).optional(),
+  path: MemoryListPathSchema.optional(),
+  itemId: z.string().min(1).max(120).optional(),
+  item: z.string().min(1).max(500).optional(),
+  newItem: z.string().min(1).max(500).optional(),
+  notes: z.string().min(1).max(1000).nullable().optional(),
+  status: z.enum(["active", "archived"]).optional(),
+  archiveReason: z.string().min(1).max(1000).optional(),
+  rationale: z.string().min(1)
+}).refine((value) => Boolean(value.listName || value.path), {
+  message: "listName or path is required."
+}).refine((value) => Boolean(value.itemId || value.item), {
+  message: "itemId or item is required."
+}).refine((value) => Boolean(value.newItem !== undefined || value.notes !== undefined || value.status !== undefined), {
+  message: "At least one update field is required."
+});
+
+export const RemoveMemoryListItemToolSchema = z.object({
+  listName: z.string().min(1).max(120).optional(),
+  path: MemoryListPathSchema.optional(),
+  itemId: z.string().min(1).max(120).optional(),
+  item: z.string().min(1).max(500).optional(),
+  reason: z.string().min(1).max(1000).optional(),
+  rationale: z.string().min(1)
+}).refine((value) => Boolean(value.listName || value.path), {
+  message: "listName or path is required."
+}).refine((value) => Boolean(value.itemId || value.item), {
+  message: "itemId or item is required."
+});
+
 export const AppendTaskPromptToolSchema = z.object({
   taskId: z.string().min(1),
   prompt: z.string().min(1),
@@ -363,6 +420,11 @@ export const ToolContracts = {
   list_budget_audit_logs: ListBudgetAuditLogsToolSchema,
   write_memory: WriteMemoryToolSchema,
   write_file: WriteFileToolSchema,
+  add_memory_list_item: AddMemoryListItemToolSchema,
+  list_memory_items: ListMemoryItemsToolSchema,
+  search_memory_lists: SearchMemoryListsToolSchema,
+  update_memory_list_item: UpdateMemoryListItemToolSchema,
+  remove_memory_list_item: RemoveMemoryListItemToolSchema,
   append_task_prompt: AppendTaskPromptToolSchema,
   update_task_schedule: UpdateTaskScheduleToolSchema,
   update_task_status: UpdateTaskStatusToolSchema,

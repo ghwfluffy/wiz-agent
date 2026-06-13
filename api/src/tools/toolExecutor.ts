@@ -6,6 +6,13 @@ import { createCrossAppApproval, createOutboundApproval } from "../security/appr
 import { listAppCapabilities, type IntegrationActionId, type IntegrationAppId } from "../integrations/capabilityRegistry.js";
 import { recordTaskOutcomeMemory } from "../memory/taskOutcomeMemory.js";
 import {
+  addMemoryListItem,
+  listMemoryItems,
+  removeMemoryListItem,
+  searchMemoryLists,
+  updateMemoryListItem
+} from "../memory/memoryLists.js";
+import {
   GuardrailExceededError,
   recordGuardrailExceeded,
   runtimeSafetyPolicy
@@ -594,6 +601,91 @@ export async function executeToolCall(options: {
           version: document.version,
           rationale: options.args.rationale
         }
+      };
+    }
+    case "add_memory_list_item": {
+      const result = await addMemoryListItem({
+        store: options.store,
+        context: options.context,
+        listName: String(options.args.listName),
+        item: String(options.args.item),
+        notes: typeof options.args.notes === "string" ? options.args.notes : null,
+        sourceMessageId: typeof options.args.sourceMessageId === "string" ? options.args.sourceMessageId : null,
+        rationale: String(options.args.rationale)
+      });
+      const duplicate = "duplicate" in result && result.duplicate === true;
+      const conflict = "code" in result;
+      return {
+        executed: !conflict && !duplicate,
+        sideEffect: !conflict && !duplicate ? "local_persistence" : "none",
+        result: result as Record<string, unknown>
+      };
+    }
+    case "list_memory_items": {
+      const result = await listMemoryItems({
+        store: options.store,
+        context: options.context,
+        listName: typeof options.args.listName === "string" ? options.args.listName : undefined,
+        path: typeof options.args.path === "string" ? options.args.path : undefined,
+        status: options.args.status === "archived" || options.args.status === "all" ? options.args.status : "active",
+        limit: typeof options.args.limit === "number" ? options.args.limit : undefined
+      });
+      return {
+        executed: true,
+        sideEffect: "none",
+        result
+      };
+    }
+    case "search_memory_lists": {
+      const result = await searchMemoryLists({
+        store: options.store,
+        context: options.context,
+        query: String(options.args.query),
+        limit: typeof options.args.limit === "number" ? options.args.limit : undefined
+      });
+      return {
+        executed: true,
+        sideEffect: "none",
+        result
+      };
+    }
+    case "update_memory_list_item": {
+      const result = await updateMemoryListItem({
+        store: options.store,
+        context: options.context,
+        listName: typeof options.args.listName === "string" ? options.args.listName : undefined,
+        path: typeof options.args.path === "string" ? options.args.path : undefined,
+        itemId: typeof options.args.itemId === "string" ? options.args.itemId : undefined,
+        item: typeof options.args.item === "string" ? options.args.item : undefined,
+        newItem: typeof options.args.newItem === "string" ? options.args.newItem : null,
+        notes: typeof options.args.notes === "string" ? options.args.notes : options.args.notes === null ? null : undefined,
+        status: options.args.status === "active" || options.args.status === "archived" ? options.args.status : undefined,
+        archiveReason: typeof options.args.archiveReason === "string" ? options.args.archiveReason : null,
+        rationale: String(options.args.rationale)
+      });
+      const changed = !("code" in result) && !("reason" in result);
+      return {
+        executed: changed,
+        sideEffect: changed ? "local_persistence" : "none",
+        result: result as Record<string, unknown>
+      };
+    }
+    case "remove_memory_list_item": {
+      const result = await removeMemoryListItem({
+        store: options.store,
+        context: options.context,
+        listName: typeof options.args.listName === "string" ? options.args.listName : undefined,
+        path: typeof options.args.path === "string" ? options.args.path : undefined,
+        itemId: typeof options.args.itemId === "string" ? options.args.itemId : undefined,
+        item: typeof options.args.item === "string" ? options.args.item : undefined,
+        reason: typeof options.args.reason === "string" ? options.args.reason : null,
+        rationale: String(options.args.rationale)
+      });
+      const changed = !("code" in result) && !("reason" in result);
+      return {
+        executed: changed,
+        sideEffect: changed ? "local_persistence" : "none",
+        result: result as Record<string, unknown>
       };
     }
     case "append_task_prompt": {

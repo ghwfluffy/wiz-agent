@@ -829,6 +829,86 @@ describe("agent task execution", () => {
     expect(prompt).toContain("The owner's cat is named Pierre.");
   });
 
+  it("includes intent-based personal memory list guidance in owner prompts", async () => {
+    const { context, store } = await testContext();
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-memory-list-guidance",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "That is one for movie night.",
+      source: "sms"
+    }, "owner");
+
+    const prompt = await buildOwnerInboundPrompt({ context, store, message });
+
+    expect(prompt).toContain("When the owner expresses intent to preserve an item for later recall");
+    expect(prompt).toContain("The owner may not say remember, add, or list.");
+    expect(prompt).toContain("add_memory_list_item");
+    expect(prompt).toContain("Do not create a task unless the owner asks you to do work.");
+    expect(prompt).toContain("use search_memory_lists before broad markdown/RAG search");
+  });
+
+  it("routes alternate owner list wording through personal memory list tools", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const store = createMemoryStore();
+    const app = buildApp({
+      settings,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "add_memory_list_item",
+            arguments: {
+              listName: "movie night",
+              item: "Desperado",
+              notes: "Owner phrased this as one for movie night.",
+              rationale: "Authenticated owner prompt expressed intent to save a movie for later recall."
+            }
+          }
+        ]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: "Desperado is one for movie night.",
+        mode: "normal"
+      })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      selectedAction: "add_memory_list_item",
+      toolStatus: "accepted",
+      toolResult: {
+        path: "/personal/lists/movies.md",
+        duplicate: false
+      }
+    });
+    const session = await store.getSession(cookie.match(/agent_session=([^;]+)/)?.[1]);
+    expect(session).toBeTruthy();
+    await expect(store.getMarkdownDocument({
+      userId: session!.user.id,
+      actorType: "admin",
+      permissions: ["user", "admin"],
+      requestId: "web-list-prompt-test",
+      session: session!
+    }, "/personal/lists/movies.md")).resolves.toMatchObject({
+      markdown: expect.stringContaining("Desperado")
+    });
+  });
+
   it("exposes a read-only recent context lookup tool", async () => {
     const { context, store } = await testContext();
     const task = await store.createTask(context, {

@@ -93,6 +93,11 @@ Current tool contracts:
 - `list_budget_audit_logs`
 - `write_memory`
 - `write_file`
+- `add_memory_list_item`
+- `list_memory_items`
+- `search_memory_lists`
+- `update_memory_list_item`
+- `remove_memory_list_item`
 - `append_task_prompt`
 - `update_task_schedule`
 - `update_task_status`
@@ -166,6 +171,15 @@ Current migrated agent tools:
   is intended for structured markdown memory paths such as scheduled
   self-review notes, while MCP session scoping, path normalization, audit
   events, and RAG indexing remain deterministic host responsibilities.
+- Personal memory list tools manage lightweight owner collections under
+  `/personal/lists/*.md`. `add_memory_list_item` normalizes loose owner list
+  names such as "movie night" to canonical list files, avoids duplicates with
+  punctuation-insensitive matching, preserves notes/source context, and creates
+  the markdown file when needed. `list_memory_items` and `search_memory_lists`
+  expose bounded read/recall behavior; `update_memory_list_item` and
+  `remove_memory_list_item` update or archive entries while preserving history
+  through the model-facing tool path. Generic `write_memory` should not be used
+  for simple list add/read/update/remove operations when these tools fit.
 - `append_task_prompt` appends owner follow-up context to an existing task,
   returns it to active work, and writes a task event.
 - `update_task_schedule` changes a user-scoped task due date, including null
