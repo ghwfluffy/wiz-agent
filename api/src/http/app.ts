@@ -1,6 +1,8 @@
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { OpenAIModelClient, type AgentModelClient } from "../agent/modelClient.js";
+import { runOwnerWebPromptAgent } from "../agent/inboundMessageAgent.js";
 import { loadSettings, type Settings } from "../config/settings.js";
 import { clearSessionCookie, writeSessionCookie } from "../auth/session.js";
 import { testImapConnection } from "../connectors/imapPoller.js";
@@ -20,6 +22,7 @@ export type AppOptions = {
   settings?: Settings;
   store?: AgentStore;
   fetchImpl?: typeof fetch;
+  modelClient?: AgentModelClient;
 };
 
 function errorPayload(code: string, message: string, requestId: string, fieldErrors: unknown[] = []) {
@@ -42,6 +45,19 @@ function createDefaultStore(settings: Settings): AgentStore {
 
 const allowedConnectorKinds = new Set<ConnectorKind>(["owner-contact", "imap", "smtp", "openai"]);
 const allowedConnectorStatuses = new Set<ConnectorStatus>(["enabled", "disabled"]);
+const webMcpSessionTools = [
+  "list_dir",
+  "tree",
+  "stat_path",
+  "read_file",
+  "read_section",
+  "search_headings",
+  "grep",
+  "search_exact",
+  "search_semantic",
+  "find_backlinks",
+  "get_index_status"
+];
 
 function stringValue(input: Record<string, unknown>, key: string): string | undefined {
   const value = input[key];
@@ -150,10 +166,16 @@ function decodePathParam(value: string): string {
   return decodeURIComponent(value);
 }
 
+function linkValue(result: Record<string, unknown> | undefined, key: string): string | null {
+  const value = result?.[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
 export function buildApp(options: AppOptions = {}): Hono {
   const settings = options.settings ?? loadSettings();
   const store = options.store ?? createDefaultStore(settings);
   const fetcher = options.fetchImpl ?? fetch;
+  const modelClient = options.modelClient ?? OpenAIModelClient.fromSettings(settings, { fetchImpl: fetcher });
   const app = new Hono();
 
   function appRedirect(path: string, error?: string): string {
@@ -507,13 +529,66 @@ export function buildApp(options: AppOptions = {}): Hono {
     const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
     const session = await store.createAgentMcpSession(authContext, {
       runId: typeof payload?.runId === "string" ? payload.runId : null,
-      ttlSeconds: typeof payload?.ttlSeconds === "number" ? payload.ttlSeconds : undefined
+      ttlSeconds: typeof payload?.ttlSeconds === "number" ? payload.ttlSeconds : undefined,
+      allowedTools: webMcpSessionTools
     });
     return context.json({
       token: session.token,
       runId: session.runId,
-      expiresAt: session.expiresAt
+      expiresAt: session.expiresAt,
+      allowedTools: session.allowedTools
     }, 201);
+  });
+
+  app.post("/api/v1/agent/prompts", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
+    const prompt = typeof payload?.prompt === "string" ? payload.prompt.trim() : "";
+    if (!prompt) {
+      return context.json(errorPayload("validation_error", "Prompt text is required.", authContext.requestId), 400);
+    }
+    const mode = typeof payload?.mode === "string" ? payload.mode : "normal";
+    if (!["normal", "quick_reply", "planning"].includes(mode)) {
+      return context.json(errorPayload("validation_error", "Prompt mode must be normal, quick_reply, or planning.", authContext.requestId), 400);
+    }
+    let contextTask;
+    if (typeof payload?.contextTaskId === "string" && payload.contextTaskId.trim()) {
+      contextTask = await store.getTask(authContext, payload.contextTaskId);
+      if (!contextTask) {
+        return context.json(errorPayload("http_404", "Context task not found.", authContext.requestId), 404);
+      }
+    }
+    const result = await runOwnerWebPromptAgent({
+      context: authContext,
+      store,
+      prompt,
+      contextTask,
+      mode: mode as "normal" | "quick_reply" | "planning",
+      modelClient,
+      settings,
+      fetchImpl: fetcher
+    });
+    const links = {
+      taskId: linkValue(result.executionResult, "task_id") ?? contextTask?.id ?? null,
+      taskEventId: linkValue(result.executionResult, "task_event_id"),
+      outboundMessageId: linkValue(result.executionResult, "outbound_message_id"),
+      memoryDocumentId: linkValue(result.executionResult, "memory_document_id"),
+      memorySlug: linkValue(result.executionResult, "slug"),
+      clarificationRequestId: linkValue(result.executionResult, "clarification_request_id")
+    };
+    return context.json({
+      runId: result.runId,
+      status: result.status,
+      selectedAction: result.toolName ?? null,
+      toolStatus: result.toolStatus,
+      repaired: result.repaired,
+      toolResult: result.executionResult ?? null,
+      links,
+      failureMessage: result.failureMessage ?? null
+    }, result.status === "failed" ? 500 : 200);
   });
 
   app.get("/api/v1/knowledge/tree", async (context) => {

@@ -8,6 +8,7 @@ import { LocalToolClient } from "../src/agent/toolClient.js";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
+import { buildApp } from "../src/http/app.js";
 import { buildCapabilityContext, getIntegrationAction, listAppCapabilities } from "../src/integrations/capabilityRegistry.js";
 import { PERSONAL_PROFILE_SLUG } from "../src/memory/personalMemory.js";
 import { buildMcpApp } from "../src/mcp/server.js";
@@ -535,6 +536,167 @@ describe("agent task execution", () => {
     ]);
   });
 
+  it("exposes a read-only recent owner conversation lookup tool", async () => {
+    const { context, store } = await testContext();
+    await store.recordInboundMessage(context, {
+      providerMessageId: "owner-conversation-tool",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Use the west entrance for the appointment.",
+      source: "sms"
+    }, "owner");
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "sent",
+      toAddr: "owner-sms@example.test",
+      bodyText: "I added that to the appointment notes."
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "list_recent_owner_conversations",
+            arguments: {
+              reason: "Resolve a short owner follow-up.",
+              limit: 4
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Look up recent owner conversation."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "list_recent_owner_conversations",
+      sideEffect: "none"
+    });
+    expect(result.executionResult?.conversations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          direction: "inbound",
+          body_excerpt: "Use the west entrance for the appointment."
+        }),
+        expect.objectContaining({
+          direction: "outbound",
+          body_excerpt: "I added that to the appointment notes."
+        })
+      ])
+    );
+  });
+
+  it("updates task schedules with rationale through the decision tool", async () => {
+    const { context, store } = await testContext();
+    const task = await store.createTask(context, {
+      title: "Renew passport",
+      prompt: "Schedule passport renewal."
+    });
+    const dueAt = "2026-07-01T15:00:00.000Z";
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "update_task_schedule",
+            arguments: {
+              taskId: task.id,
+              dueAt,
+              rationale: "Owner asked to handle it after the July holiday week.",
+              confidence: "high"
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Reschedule the passport task.",
+        taskId: task.id
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "update_task_schedule",
+      executionResult: {
+        task_id: task.id,
+        due_at: dueAt,
+        rationale: "Owner asked to handle it after the July holiday week.",
+        confidence: "high"
+      }
+    });
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({ dueAt });
+    await expect(store.listTaskEvents(context, task.id)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "task.schedule_updated",
+          details: expect.objectContaining({
+            rationale: "Owner asked to handle it after the July holiday week.",
+            confidence: "high"
+          })
+        })
+      ])
+    );
+  });
+
+  it("turns ambiguous owner messages into clarification requests", async () => {
+    const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        sms_gateway: "owner-sms@example.test"
+      }
+    });
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-clarify-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Move it to after the thing.",
+      source: "sms"
+    }, "owner");
+
+    const result = await runOwnerInboundAgent({
+      context,
+      store,
+      message,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "ask_owner_clarification",
+            arguments: {
+              question: "Which task should I move, and what date do you mean?",
+              urgency: "now"
+            }
+          }
+        ]
+      })
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "ask_owner_clarification",
+      executionResult: {
+        outbound_message_id: expect.any(String),
+        clarification_request_id: expect.any(String),
+        urgency: "now",
+        destination: "inbound_owner_message"
+      }
+    });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        toAddr: "owner-sms@example.test",
+        bodyText: "Which task should I move, and what date do you mean?"
+      })
+    ]);
+  });
+
   it("queues owner replies to the inbound SMS gateway without model-selected recipients", async () => {
     const { context, store } = await testContext();
     const message = await store.recordInboundMessage(context, {
@@ -675,6 +837,148 @@ describe("agent task execution", () => {
         expect.objectContaining({ action: "agent_run.failed" })
       ])
     );
+  });
+
+  it("lets authenticated web prompts use the same owner decision loop", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const store = createMemoryStore();
+    const app = buildApp({
+      settings,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "write_memory",
+            arguments: {
+              slug: "personal-profile",
+              title: "Personal Profile",
+              appendMarkdown: "- The owner prefers concise morning briefings.",
+              rationale: "Authenticated owner web prompt stated a durable preference."
+            }
+          }
+        ]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: "Remember that I prefer concise morning briefings.",
+        mode: "normal"
+      })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      selectedAction: "write_memory",
+      toolStatus: "accepted",
+      links: {
+        memorySlug: "personal-profile"
+      }
+    });
+    const session = await store.getSession(cookie.match(/agent_session=([^;]+)/)?.[1]);
+    expect(session).toBeTruthy();
+    await expect(store.getMemoryDocument({
+      userId: session!.user.id,
+      actorType: "admin",
+      permissions: ["user", "admin"],
+      requestId: "web-prompt-test",
+      session: session!
+    }, PERSONAL_PROFILE_SLUG)).resolves.toMatchObject({
+      body: expect.stringContaining("concise morning briefings")
+    });
+  });
+
+  it("requires auth before web prompts can reach decision tools", async () => {
+    const app = buildApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "standalone"
+      }),
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "create_task",
+            arguments: {
+              title: "Should not happen",
+              prompt: "Unauthenticated prompt."
+            }
+          }
+        ]
+      })
+    });
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ prompt: "Create a task." })
+    });
+
+    expect(response.status).toBe(401);
+  });
+
+  it("limits web-created MCP sessions to read-only memory tools", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const store = createMemoryStore();
+    const app = buildApp({ settings, store });
+    const mcp = buildMcpApp({ settings, store });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const sessionResponse = await app.request("/api/v1/agent/mcp-sessions", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ ttlSeconds: 60 })
+    });
+    expect(sessionResponse.status).toBe(201);
+    const session = await sessionResponse.json() as { token: string; allowedTools: string[] };
+    expect(session.allowedTools).toContain("read_file");
+    expect(session.allowedTools).not.toContain("create_task");
+
+    const readOnly = await mcp.request("/mcp/v1/tools/list_dir/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ path: "/" })
+    });
+    expect(readOnly.status).toBe(200);
+
+    const forbidden = await mcp.request("/mcp/v1/tools/create_task/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ title: "Bypass", prompt: "Should not run." })
+    });
+    expect(forbidden.status).toBe(403);
+    await expect(store.listTasks({
+      userId: "dev-user",
+      actorType: "admin",
+      permissions: ["user", "admin"],
+      requestId: "web-mcp-test",
+      session: (await store.getSession(cookie.match(/agent_session=([^;]+)/)?.[1]))!
+    })).resolves.toEqual([]);
   });
 
   it("fails clearly when OpenAI is selected without an API key", async () => {

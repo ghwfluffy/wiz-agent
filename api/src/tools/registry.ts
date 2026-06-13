@@ -33,7 +33,9 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   list_recent_owner_conversations: { access: "read", risk: "low", sideEffect: "none" },
   write_memory: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   append_task_prompt: { access: "write", risk: "medium", sideEffect: "local_persistence" },
+  update_task_schedule: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   propose_outbound_message: { access: "write", risk: "high", sideEffect: "local_persistence" },
+  ask_owner_clarification: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   record_observation: { access: "write", risk: "low", sideEffect: "none" },
   integration_action: { access: "write", risk: "high", sideEffect: "cross_app_api" }
 };

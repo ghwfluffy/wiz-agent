@@ -67,7 +67,9 @@ Current tool contracts:
 - `list_recent_owner_conversations`
 - `write_memory`
 - `append_task_prompt`
+- `update_task_schedule`
 - `propose_outbound_message`
+- `ask_owner_clarification`
 - `record_observation`
 - `integration_action`
 
@@ -94,6 +96,12 @@ The local in-process executor remains only as `LocalToolClient`, a
 compatibility wrapper for deterministic tests and emergency fallback. It is not
 the default runtime path.
 
+Authenticated browser sessions can request MCP tokens for operator-console
+memory browsing, but those sessions are restricted to read-only memory and
+search tools. Decision tools such as `create_task`, `write_memory`,
+`propose_outbound_message`, and `integration_action` are only minted through
+run-bound agent sessions.
+
 Current migrated agent tools:
 
 - `create_task` creates a user-scoped task.
@@ -106,7 +114,14 @@ Current migrated agent tools:
   user scope.
 - `append_task_prompt` appends owner follow-up context to an existing task,
   returns it to active work, and writes a task event.
+- `update_task_schedule` changes a user-scoped task due date, including null
+  due dates, and records the model-provided rationale and confidence as a task
+  event.
 - `propose_outbound_message` queues an outbound message rather than sending it.
+- `ask_owner_clarification` records that the agent needs more owner input. For
+  `urgency = now`, it queues an owner message through host-resolved owner
+  contact or verified inbound reply context. For lower urgency, it creates a
+  local clarification task for later owner-facing handling.
 - `record_observation` records the accepted observation in the tool-call result.
 
 `integration_action` resolves through the registered app capability allowlist
@@ -159,9 +174,19 @@ sender policy classifies a message as `owner`, host code builds an inbound
 prompt that includes bounded active task, recent conversation, and saved memory
 context. The model then decides what to do: write memory, append to an existing
 task, create/schedule a new task, queue a reply, call a registered app
-integration, request recent owner conversation context, or record an
-observation. The inbox record is updated with the agent run id and any linked
-task/task-event ids so the UI can show what the message triggered.
+integration, request recent owner conversation context, ask for clarification,
+or record an observation. The inbox record is updated with the agent run id and
+any linked task/task-event ids so the UI can show what the message triggered.
+
+Authenticated direct web prompts use the same owner-command decision loop via
+`POST /api/v1/agent/prompts`. The request body includes `prompt`, optional
+`contextTaskId`, and optional mode `normal`, `quick_reply`, or `planning`.
+Because the request comes from an authenticated web session, it is owner input,
+but the model still receives only bounded context and can act only through the
+same validated tool/MCP path. If a context task is supplied, the agent run links
+to that task and task events record the prompt/tool outcomes. The endpoint
+returns the run id, selected action, tool status/result, and host-derived links
+to created or updated task, outbox, memory, or clarification records.
 
 Owner messages must not be pre-written to long-term memory by regex or other
 host heuristics. Durable owner facts, preferences, and schedule rationale should

@@ -192,6 +192,37 @@ export async function executeToolCall(options: {
         }
       };
     }
+    case "update_task_schedule": {
+      const taskId = String(options.args.taskId);
+      const task = await options.store.getTask(options.context, taskId);
+      if (!task) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { reason: "task_not_found" }
+        };
+      }
+      const updated = await options.store.updateTask(options.context, taskId, {
+        dueAt: typeof options.args.dueAt === "string" ? options.args.dueAt : null
+      });
+      const event = await options.store.recordTaskEvent(options.context, taskId, "task.schedule_updated", {
+        due_at: updated?.dueAt ?? null,
+        rationale: String(options.args.rationale),
+        confidence: String(options.args.confidence),
+        summary: "Agent updated the task schedule with rationale."
+      });
+      return {
+        executed: Boolean(updated),
+        sideEffect: "local_persistence",
+        result: {
+          task_id: taskId,
+          task_event_id: event.id,
+          due_at: updated?.dueAt ?? null,
+          rationale: options.args.rationale,
+          confidence: options.args.confidence
+        }
+      };
+    }
     case "propose_outbound_message": {
       const approvalRequired = options.args.approvalRequired === true;
       const destination = await resolveOwnerReplyDestination(options);
@@ -217,6 +248,65 @@ export async function executeToolCall(options: {
           status: message.status,
           approval_required: approvalRequired,
           destination: destination.source
+        }
+      };
+    }
+    case "ask_owner_clarification": {
+      const urgency = String(options.args.urgency);
+      if (urgency === "now") {
+        const destination = await resolveOwnerReplyDestination(options);
+        if (!destination) {
+          return {
+            executed: false,
+            sideEffect: "none",
+            result: { reason: "owner_clarification_destination_unavailable" }
+          };
+        }
+        const message = await options.store.queueOutboundMessage(options.context, {
+          channel: destination.channel,
+          status: "pending",
+          toAddr: destination.toAddr,
+          bodyText: String(options.args.question)
+        });
+        return {
+          executed: true,
+          sideEffect: "local_persistence",
+          result: {
+            clarification_request_id: message.id,
+            outbound_message_id: message.id,
+            status: message.status,
+            urgency,
+            destination: destination.source
+          }
+        };
+      }
+
+      const relatedTaskId = typeof options.args.relatedTaskId === "string" ? options.args.relatedTaskId : undefined;
+      const relatedTask = relatedTaskId ? await options.store.getTask(options.context, relatedTaskId) : undefined;
+      const task = await options.store.createTask(options.context, {
+        title: "Clarify owner request",
+        prompt: [
+          "Ask the owner for clarification before proceeding.",
+          "",
+          `Question: ${String(options.args.question)}`,
+          relatedTask ? `Related task: ${relatedTask.title} (${relatedTask.id})` : null
+        ].filter(Boolean).join("\n"),
+        priority: urgency === "daily_briefing" ? 40 : 20
+      });
+      const event = await options.store.recordTaskEvent(options.context, task.id, "clarification.requested", {
+        question: String(options.args.question),
+        related_task_id: relatedTask?.id ?? null,
+        urgency,
+        summary: "Agent requested owner clarification."
+      });
+      return {
+        executed: true,
+        sideEffect: "local_persistence",
+        result: {
+          clarification_request_id: task.id,
+          task_id: task.id,
+          task_event_id: event.id,
+          urgency
         }
       };
     }

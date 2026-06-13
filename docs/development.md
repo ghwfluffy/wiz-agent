@@ -71,6 +71,19 @@ model calls locally, set `AGENT_OPENAI_API_KEY` in your ignored local env file
 or point `AGENT_OPENAI_API_KEY_FILE` at an ignored file. `AGENT_OPENAI_BASE_URL`
 defaults to `https://api.openai.com/v1`.
 
+Authenticated owner prompts can be sent to the same decision loop used for
+owner-classified SMS/MMS/email:
+
+```text
+POST /api/v1/agent/prompts
+```
+
+The JSON body is `prompt`, optional `contextTaskId`, and optional `mode`
+(`normal`, `quick_reply`, or `planning`). The endpoint requires the normal web
+session cookie, creates an agent run, and executes at most one selected
+host-validated tool call through MCP. Tests should inject `MockModelClient`
+through `buildApp` instead of relying on live OpenAI credentials.
+
 Live connector config can be seeded from ignored files for initial bootstrap or
 repair with:
 
@@ -116,6 +129,9 @@ JSON calls at `POST /mcp/v1/tools/:tool/call` with
 `Authorization: Bearer <token>` and, for run-bound sessions,
 `X-Agent-Run-Id: <run id>`. The legacy `POST /mcp/v1/tools/:tool` endpoint is
 kept for existing memory/RAG callers that expect `{ result }` responses.
+The web API can mint browser-facing MCP sessions at
+`POST /api/v1/agent/mcp-sessions`, but those sessions are intentionally limited
+to read-only memory browsing and search tools.
 
 Agents and tests should pass only tool arguments such as file paths, content,
 task ids, and message bodies. They must not pass `userId`, tenant, Qdrant

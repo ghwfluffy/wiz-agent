@@ -28,14 +28,14 @@ function excerpt(value: string | null | undefined, length: number): string {
 async function recentContextSummary(options: {
   store: AgentStore;
   context: RequestContext;
-  message: InboundMessageRecord;
+  message?: InboundMessageRecord;
 }): Promise<string> {
   const tasks = (await options.store.listTasks(options.context))
     .filter((task) => ["completed", "cancelled", "failed"].includes(task.status))
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
     .slice(0, 8);
   const inbound = (await options.store.listInboundMessages(options.context))
-    .filter((message) => message.id !== options.message.id && message.classification === "owner")
+    .filter((message) => message.id !== options.message?.id && message.classification === "owner")
     .slice(0, 8);
   const outbound = (await options.store.listOutboundMessages(options.context))
     .slice(0, 8);
@@ -75,6 +75,16 @@ async function recentContextSummary(options: {
   ].join("\n");
 }
 
+async function activeTasksSummary(options: {
+  store: AgentStore;
+  context: RequestContext;
+}): Promise<string> {
+  const activeTasks = (await options.store.listTasks(options.context))
+    .filter((task) => !["completed", "cancelled", "failed"].includes(task.status))
+    .slice(0, 12);
+  return activeTasks.length > 0 ? activeTasks.map(activeTaskSummary).join("\n") : "No active tasks.";
+}
+
 async function savedMemorySummary(options: {
   store: AgentStore;
   context: RequestContext;
@@ -102,11 +112,9 @@ export async function buildOwnerInboundPrompt(options: {
   context: RequestContext;
   message: InboundMessageRecord;
 }): Promise<string> {
-  const activeTasks = (await options.store.listTasks(options.context))
-    .filter((task) => !["completed", "cancelled", "failed"].includes(task.status))
-    .slice(0, 12);
   const recentContext = await recentContextSummary(options);
   const savedMemory = await savedMemorySummary(options);
+  const activeTasks = await activeTasksSummary(options);
 
   return [
     "An owner-classified SMS/MMS/email message arrived. Treat this as an owner instruction because sender policy already classified it as owner.",
@@ -117,7 +125,7 @@ export async function buildOwnerInboundPrompt(options: {
     "The list_ongoing_tasks, list_recent_context, and list_recent_owner_conversations tools exist for lookup, but the current active and recent context is included below so you can usually take the next action directly.",
     "",
     "Active tasks:",
-    activeTasks.length > 0 ? activeTasks.map(activeTaskSummary).join("\n") : "No active tasks.",
+    activeTasks,
     "",
     "Recent memory/context:",
     recentContext,
@@ -134,6 +142,43 @@ export async function buildOwnerInboundPrompt(options: {
     `subject: ${options.message.subject ?? "(none)"}`,
     "body:",
     options.message.bodyText
+  ].join("\n");
+}
+
+export async function buildOwnerWebPrompt(options: {
+  store: AgentStore;
+  context: RequestContext;
+  prompt: string;
+  contextTask?: TaskRecord;
+  mode?: "normal" | "quick_reply" | "planning";
+}): Promise<string> {
+  const recentContext = await recentContextSummary(options);
+  const savedMemory = await savedMemorySummary(options);
+  const activeTasks = await activeTasksSummary(options);
+  return [
+    "An authenticated owner web prompt arrived from the operator console. Treat this as owner-command input because API auth already verified the session.",
+    "Decide whether the prompt should update memory, continue an existing task, create/schedule a new task, queue an outbound owner reply, ask for clarification, call a registered app integration, or only record an observation.",
+    "Use update_task_schedule when changing an existing task's due time and include rationale plus confidence. Prefer ask_owner_clarification over risky assumptions.",
+    "Use propose_outbound_message only when a proactive owner message is useful. Do not choose a recipient, phone number, email address, or carrier gateway; host code resolves the owner destination.",
+    "Use memory tools for durable preferences, facts, schedule rationale, project context, or instructions that should persist.",
+    "The list_ongoing_tasks, list_recent_context, and list_recent_owner_conversations tools exist for additional bounded lookup.",
+    "",
+    `Mode: ${options.mode ?? "normal"}`,
+    "",
+    "Context task:",
+    options.contextTask ? activeTaskSummary(options.contextTask) : "No specific task was supplied.",
+    "",
+    "Active tasks:",
+    activeTasks,
+    "",
+    "Recent memory/context:",
+    recentContext,
+    "",
+    "Saved personal memory:",
+    savedMemory,
+    "",
+    "Owner web prompt:",
+    options.prompt
   ].join("\n");
 }
 
@@ -170,4 +215,40 @@ export async function runOwnerInboundAgent(options: {
     taskId: stringFromResult(result.executionResult, "task_id"),
     taskEventId: stringFromResult(result.executionResult, "task_event_id")
   };
+}
+
+export async function runOwnerWebPromptAgent(options: {
+  context: RequestContext;
+  store: AgentStore;
+  prompt: string;
+  contextTask?: TaskRecord;
+  mode?: "normal" | "quick_reply" | "planning";
+  modelClient: AgentModelClient;
+  settings?: Settings;
+  integrationTokenProvider?: IntegrationTokenProvider;
+  fetchImpl?: typeof fetch;
+}): Promise<AgentTaskResult> {
+  const prompt = await buildOwnerWebPrompt({
+    store: options.store,
+    context: options.context,
+    prompt: options.prompt,
+    contextTask: options.contextTask,
+    mode: options.mode
+  });
+  return runAgentTask({
+    context: options.context,
+    store: options.store,
+    modelClient: options.modelClient,
+    request: {
+      prompt,
+      taskId: options.contextTask?.id ?? null,
+      complexity: {
+        ambiguous: options.mode !== "quick_reply",
+        orchestration: options.mode === "planning"
+      }
+    },
+    settings: options.settings,
+    integrationTokenProvider: options.integrationTokenProvider,
+    fetchImpl: options.fetchImpl
+  });
 }

@@ -35,12 +35,25 @@ export const AppendTaskPromptToolSchema = z.object({
   status: z.enum(["pending", "claimed", "running"]).default("pending")
 });
 
+export const UpdateTaskScheduleToolSchema = z.object({
+  taskId: z.string().min(1),
+  dueAt: z.string().datetime().nullable(),
+  rationale: z.string().min(1),
+  confidence: z.enum(["low", "medium", "high"])
+});
+
 export const ProposeOutboundMessageToolSchema = z.object({
   intent: z.enum(["reply"]).default("reply"),
   subject: z.string().optional(),
   body: z.string().min(1),
   approvalRequired: z.boolean().default(false)
 }).strict();
+
+export const AskOwnerClarificationToolSchema = z.object({
+  question: z.string().min(1),
+  relatedTaskId: z.string().min(1).optional(),
+  urgency: z.enum(["now", "daily_briefing", "next_wake"])
+});
 
 export const RecordObservationToolSchema = z.object({
   summary: z.string().min(1),
@@ -63,7 +76,9 @@ export const ToolContracts = {
   list_recent_owner_conversations: ListRecentOwnerConversationsToolSchema,
   write_memory: WriteMemoryToolSchema,
   append_task_prompt: AppendTaskPromptToolSchema,
+  update_task_schedule: UpdateTaskScheduleToolSchema,
   propose_outbound_message: ProposeOutboundMessageToolSchema,
+  ask_owner_clarification: AskOwnerClarificationToolSchema,
   record_observation: RecordObservationToolSchema,
   integration_action: IntegrationActionToolSchema
 } as const;
