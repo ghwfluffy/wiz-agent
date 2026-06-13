@@ -144,6 +144,30 @@ host heuristics. Durable owner facts, preferences, and schedule rationale should
 be persisted through the same controlled tool/MCP path the model uses for other
 decisions, with deterministic validation and audit records.
 
+## MCP Memory Filesystem
+
+The Phase 01 MCP boundary exposes long-term memory as a virtual markdown
+filesystem. API or worker host code creates a short-lived `agent_mcp_sessions`
+row for a specific user and optional agent run. The MCP service receives only
+the opaque bearer token, resolves user/run scope server-side, and rejects
+missing, expired, revoked, or mismatched-run sessions. Tool arguments must not
+include user IDs, tenant IDs, collection names, connector credentials, or raw
+recipient information.
+
+Initial MCP memory tools are:
+
+- `list_dir`, `tree`, `stat_path`
+- `read_file`, `write_file`, `delete_path`, `move_path`
+- `read_section`, `replace_section`, `append_to_section`
+- `search_headings`, `grep`
+- `get_index_status`, `reindex_path`
+
+Every MCP tool call records an audit event with the resolved user, tool name,
+optional run id, path when supplied, and outcome. Markdown writes update source
+rows, parse sections, and enqueue RAG index jobs. RAG indexing remains a
+deterministic host concern; the model never receives or supplies Qdrant
+collection names.
+
 ## Host-Owned Controls
 
 The host owns:

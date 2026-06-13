@@ -168,6 +168,90 @@ export type MemoryDocumentRecord = {
   updatedAt: string;
 };
 
+export type MarkdownPathType = "file" | "directory" | "missing";
+
+export type MarkdownDirectoryEntry = {
+  path: string;
+  name: string;
+  type: "file" | "directory";
+  version?: number;
+  updatedAt?: string;
+};
+
+export type MarkdownDocumentRecord = {
+  id: string;
+  userId: string;
+  path: string;
+  basename: string;
+  title: string | null;
+  markdown: string;
+  contentHash: string;
+  version: number;
+  indexStatus: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type MarkdownSectionRecord = {
+  id: string;
+  userId: string;
+  documentId: string;
+  documentVersion: number;
+  sectionId: string;
+  parentSectionId: string | null;
+  heading: string;
+  headingPath: string[];
+  level: number;
+  lineStart: number;
+  lineEnd: number;
+  contentHash: string;
+};
+
+export type MarkdownHeadingMatch = {
+  path: string;
+  version: number;
+  sectionId: string;
+  heading: string;
+  headingPath: string[];
+  level: number;
+  lineStart: number;
+  lineEnd: number;
+};
+
+export type MarkdownWriteInput = {
+  path: string;
+  markdown: string;
+  expectedVersion?: number;
+};
+
+export type MarkdownMoveInput = {
+  from: string;
+  to: string;
+  expectedVersions?: Record<string, number>;
+};
+
+export type MarkdownConflict = {
+  code: "conflict";
+  path: string;
+  expectedVersion: number;
+  actualVersion: number;
+};
+
+export type MarkdownIndexStatus = {
+  path: string;
+  version: number;
+  indexStatus: string;
+  pendingJobs: number;
+};
+
+export type AgentMcpSession = {
+  id: string;
+  token: string;
+  userId: string;
+  runId: string | null;
+  expiresAt: string;
+};
+
 export type AgentRunRecord = {
   id: string;
   userId: string;
@@ -242,6 +326,51 @@ export type AgentStore = {
     title: string;
     body: string;
   }): Promise<MemoryDocumentRecord>;
+  listMarkdownDirectory(context: RequestContext, path: string): Promise<MarkdownDirectoryEntry[]>;
+  getMarkdownDocument(context: RequestContext, path: string, version?: number): Promise<MarkdownDocumentRecord | undefined>;
+  writeMarkdownDocument(
+    context: RequestContext,
+    input: MarkdownWriteInput
+  ): Promise<MarkdownDocumentRecord | MarkdownConflict>;
+  deleteMarkdownPath(context: RequestContext, path: string, expectedVersion?: number): Promise<boolean | MarkdownConflict>;
+  moveMarkdownPath(context: RequestContext, input: MarkdownMoveInput): Promise<MarkdownDocumentRecord[] | MarkdownConflict>;
+  listMarkdownSections(context: RequestContext, path: string): Promise<MarkdownSectionRecord[]>;
+  readMarkdownSection(context: RequestContext, path: string, sectionId: string): Promise<MarkdownSectionRecord | undefined>;
+  replaceMarkdownSection(
+    context: RequestContext,
+    path: string,
+    sectionId: string,
+    markdown: string,
+    expectedVersion: number
+  ): Promise<MarkdownDocumentRecord | MarkdownConflict | undefined>;
+  appendMarkdownSection(
+    context: RequestContext,
+    path: string,
+    sectionId: string,
+    markdown: string,
+    expectedVersion?: number
+  ): Promise<MarkdownDocumentRecord | MarkdownConflict | undefined>;
+  searchMarkdownExact(context: RequestContext, query: string): Promise<MarkdownDirectoryEntry[]>;
+  searchMarkdownHeadings(context: RequestContext, input: {
+    query?: string;
+    pathPrefix?: string;
+    maxDepth?: number;
+  }): Promise<MarkdownHeadingMatch[]>;
+  grepMarkdown(context: RequestContext, input: {
+    pattern: string;
+    pathPrefix?: string;
+    caseSensitive?: boolean;
+    regex?: boolean;
+    contextLines?: number;
+    limit?: number;
+  }): Promise<Array<{ path: string; line: number; text: string; before: string[]; after: string[] }>>;
+  getMarkdownIndexStatus(context: RequestContext, path?: string): Promise<MarkdownIndexStatus[]>;
+  reindexMarkdownPath(context: RequestContext, path: string): Promise<MarkdownIndexStatus[]>;
+  createAgentMcpSession(context: RequestContext, input: {
+    runId?: string | null;
+    ttlSeconds?: number;
+  }): Promise<AgentMcpSession>;
+  resolveAgentMcpSession(token: string | undefined, runId?: string | null): Promise<RequestContext | undefined>;
   listConnectors(context: RequestContext): Promise<ConnectorRecord[]>;
   getConnector(context: RequestContext, kind: ConnectorKind): Promise<ConnectorRecord | undefined>;
   upsertConnector(context: RequestContext, input: ConnectorInput): Promise<ConnectorRecord>;

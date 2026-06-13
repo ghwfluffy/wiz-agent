@@ -1,7 +1,12 @@
 import { createPool } from "./pool.js";
 import { INITIAL_SCHEMA_SQL } from "./schema.js";
 import { loadSettings } from "../config/settings.js";
-import { COLLAPSE_TENANT_TO_USER_MIGRATION_ID, COLLAPSE_TENANT_TO_USER_SQL } from "./migrations.js";
+import {
+  COLLAPSE_TENANT_TO_USER_MIGRATION_ID,
+  COLLAPSE_TENANT_TO_USER_SQL,
+  MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID,
+  MEMORY_MARKDOWN_BACKFILL_SQL
+} from "./migrations.js";
 
 export async function runMigrations(): Promise<void> {
   const settings = loadSettings();
@@ -49,6 +54,26 @@ export async function runMigrations(): Promise<void> {
         await client.query(COLLAPSE_TENANT_TO_USER_SQL);
         await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
           COLLAPSE_TENANT_TO_USER_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const memoryBackfillApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID
+    ]);
+    if (memoryBackfillApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(MEMORY_MARKDOWN_BACKFILL_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID
         ]);
         await client.query("COMMIT");
       } catch (error) {

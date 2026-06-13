@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { COLLAPSE_TENANT_TO_USER_MIGRATION_ID, COLLAPSE_TENANT_TO_USER_SQL } from "../src/db/migrations.js";
+import {
+  COLLAPSE_TENANT_TO_USER_MIGRATION_ID,
+  COLLAPSE_TENANT_TO_USER_SQL,
+  MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID,
+  MEMORY_MARKDOWN_BACKFILL_SQL
+} from "../src/db/migrations.js";
 import { INITIAL_SCHEMA_SQL } from "../src/db/schema.js";
 
 describe("initial schema", () => {
@@ -29,6 +34,7 @@ describe("initial schema", () => {
       "links",
       "article_snapshots",
       "agent_runs",
+      "agent_mcp_sessions",
       "tool_calls",
       "audit_log",
       "admin_ai_config",
@@ -52,6 +58,7 @@ describe("initial schema", () => {
     expect(INITIAL_SCHEMA_SQL).toContain("idx_tasks_user_status_due");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_audit_log_user_created");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_agent_runs_user_started");
+    expect(INITIAL_SCHEMA_SQL).toContain("idx_agent_mcp_sessions_token");
   });
 
   it("defines the tenant-collapse migration", () => {
@@ -60,5 +67,14 @@ describe("initial schema", () => {
     expect(COLLAPSE_TENANT_TO_USER_SQL).toContain("DROP TABLE IF EXISTS tenant_memberships CASCADE");
     expect(COLLAPSE_TENANT_TO_USER_SQL).toContain("DROP TABLE IF EXISTS tenants CASCADE");
     expect(COLLAPSE_TENANT_TO_USER_SQL).toContain("idx_tasks_user_status_due");
+  });
+
+  it("defines the memory markdown backfill migration", () => {
+    expect(MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID).toBe("0003_memory_markdown_backfill");
+    expect(MEMORY_MARKDOWN_BACKFILL_SQL).toContain("CREATE TABLE IF NOT EXISTS agent_mcp_sessions");
+    expect(MEMORY_MARKDOWN_BACKFILL_SQL).toContain("WHEN m.slug = 'personal-profile' THEN '/personal/profile.md'");
+    expect(MEMORY_MARKDOWN_BACKFILL_SQL).toContain("WHEN m.slug = 'newsletter-preferences' THEN '/preferences/newsletters.md'");
+    expect(MEMORY_MARKDOWN_BACKFILL_SQL).toContain("ON CONFLICT (user_id, path) DO NOTHING");
+    expect(MEMORY_MARKDOWN_BACKFILL_SQL).toContain("NOT EXISTS");
   });
 });

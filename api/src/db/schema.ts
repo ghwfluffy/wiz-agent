@@ -321,6 +321,16 @@ CREATE TABLE IF NOT EXISTS agent_runs (
   failure_message TEXT
 );
 
+CREATE TABLE IF NOT EXISTS agent_mcp_sessions (
+  id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL UNIQUE,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  run_id TEXT REFERENCES agent_runs(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ
+);
+
 CREATE TABLE IF NOT EXISTS tool_calls (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -366,4 +376,5 @@ CREATE INDEX IF NOT EXISTS idx_agent_runs_user_started ON agent_runs(user_id, st
 CREATE INDEX IF NOT EXISTS idx_markdown_documents_user_path ON markdown_documents(user_id, path);
 CREATE INDEX IF NOT EXISTS idx_markdown_sections_document_version ON markdown_sections(document_id, document_version);
 CREATE INDEX IF NOT EXISTS idx_rag_index_jobs_status_available ON rag_index_jobs(status, available_at, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_mcp_sessions_token ON agent_mcp_sessions(token_hash) WHERE revoked_at IS NULL;
 `;

@@ -6,7 +6,14 @@ import { clearSessionCookie, writeSessionCookie } from "../auth/session.js";
 import { testImapConnection } from "../connectors/imapPoller.js";
 import { createPool } from "../db/pool.js";
 import { createMemoryStore, createPostgresStore } from "../domain/store.js";
-import type { AgentStore, ConnectorKind, ConnectorStatus, RequestContext, SenderStatus } from "../domain/types.js";
+import type {
+  AgentStore,
+  ConnectorKind,
+  ConnectorStatus,
+  MarkdownConflict,
+  RequestContext,
+  SenderStatus
+} from "../domain/types.js";
 import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
 
 export type AppOptions = {
@@ -133,6 +140,14 @@ function connectorResponse(connector: {
     config.smtp = smtp;
   }
   return { ...connector, config };
+}
+
+function isMarkdownConflict(value: unknown): value is MarkdownConflict {
+  return typeof value === "object" && value !== null && (value as { code?: unknown }).code === "conflict";
+}
+
+function decodePathParam(value: string): string {
+  return decodeURIComponent(value);
 }
 
 export function buildApp(options: AppOptions = {}): Hono {
@@ -482,6 +497,90 @@ export function buildApp(options: AppOptions = {}): Hono {
       return context.json(errorPayload("http_404", "Memory document not found.", authContext.requestId), 404);
     }
     return context.json({ document });
+  });
+
+  app.post("/api/v1/agent/mcp-sessions", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
+    const session = await store.createAgentMcpSession(authContext, {
+      runId: typeof payload?.runId === "string" ? payload.runId : null,
+      ttlSeconds: typeof payload?.ttlSeconds === "number" ? payload.ttlSeconds : undefined
+    });
+    return context.json({
+      token: session.token,
+      runId: session.runId,
+      expiresAt: session.expiresAt
+    }, 201);
+  });
+
+  app.get("/api/v1/knowledge/tree", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const root = context.req.query("path") ?? "/";
+    const maxDepth = Math.max(0, Math.min(Number(context.req.query("maxDepth") ?? 4), 8));
+    const walk = async (path: string, depth: number): Promise<unknown[]> => {
+      const entries = await store.listMarkdownDirectory(authContext, path);
+      return Promise.all(entries.map(async (entry) => ({
+        ...entry,
+        children: entry.type === "directory" && depth < maxDepth ? await walk(entry.path, depth + 1) : undefined
+      })));
+    };
+    return context.json({ path: root, entries: await walk(root, 0) });
+  });
+
+  app.get("/api/v1/knowledge/files", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    return context.json({ entries: await store.listMarkdownDirectory(authContext, context.req.query("path") ?? "/") });
+  });
+
+  app.get("/api/v1/knowledge/files/:encodedPath", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const document = await store.getMarkdownDocument(authContext, decodePathParam(context.req.param("encodedPath")));
+    if (!document) {
+      return context.json(errorPayload("http_404", "Knowledge file not found.", authContext.requestId), 404);
+    }
+    return context.json({ document });
+  });
+
+  app.put("/api/v1/knowledge/files/:encodedPath", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
+    if (!payload || typeof payload.content !== "string") {
+      return context.json(errorPayload("validation_error", "File content is required.", authContext.requestId), 400);
+    }
+    const result = await store.writeMarkdownDocument(authContext, {
+      path: decodePathParam(context.req.param("encodedPath")),
+      markdown: payload.content,
+      expectedVersion: typeof payload.expectedVersion === "number" ? payload.expectedVersion : undefined
+    });
+    if (isMarkdownConflict(result)) {
+      return context.json({ error: result }, 409);
+    }
+    return context.json({ document: result });
+  });
+
+  app.get("/api/v1/knowledge/files/:encodedPath/sections", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    return context.json({
+      sections: await store.listMarkdownSections(authContext, decodePathParam(context.req.param("encodedPath")))
+    });
   });
 
   app.get("/api/v1/connectors", async (context) => {

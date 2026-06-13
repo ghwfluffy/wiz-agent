@@ -7,8 +7,20 @@ import {
   type Session
 } from "../auth/session.js";
 import type { Settings } from "../config/settings.js";
+import {
+  appendToSectionMarkdown,
+  basenameForPath,
+  hashMarkdown,
+  memorySlugToMarkdownPath,
+  normalizeMarkdownDirectory,
+  normalizeMarkdownPath,
+  parseMarkdownSections,
+  replaceSectionMarkdown,
+  titleFromMarkdown
+} from "../memory/markdownFilesystem.js";
 import type {
   AgentStore,
+  AgentMcpSession,
   AgentRunRecord,
   AiConfig,
   ConnectorInput,
@@ -18,6 +30,12 @@ import type {
   AuditRecord,
   InboundMessageInput,
   InboundMessageRecord,
+  MarkdownConflict,
+  MarkdownDirectoryEntry,
+  MarkdownDocumentRecord,
+  MarkdownHeadingMatch,
+  MarkdownIndexStatus,
+  MarkdownSectionRecord,
   MemoryDocumentRecord,
   OutboundMessageRecord,
   RequestContext,
@@ -207,6 +225,72 @@ function memoryDocumentFromRow(row: Record<string, unknown>): MemoryDocumentReco
   };
 }
 
+function markdownDocumentFromRow(row: Record<string, unknown>): MarkdownDocumentRecord {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    path: String(row.path),
+    basename: String(row.basename),
+    title: row.title ? String(row.title) : null,
+    markdown: String(row.markdown ?? ""),
+    contentHash: String(row.content_hash),
+    version: Number(row.version),
+    indexStatus: String(row.index_status),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
+  };
+}
+
+function markdownSectionFromRow(row: Record<string, unknown>): MarkdownSectionRecord {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    documentId: String(row.document_id),
+    documentVersion: Number(row.document_version),
+    sectionId: String(row.section_id),
+    parentSectionId: row.parent_section_id ? String(row.parent_section_id) : null,
+    heading: String(row.heading),
+    headingPath: Array.isArray(row.heading_path) ? row.heading_path.map(String) : [],
+    level: Number(row.level),
+    lineStart: Number(row.line_start),
+    lineEnd: Number(row.line_end),
+    contentHash: String(row.content_hash)
+  };
+}
+
+function conflict(path: string, expectedVersion: number, actualVersion: number): MarkdownConflict {
+  return {
+    code: "conflict",
+    path,
+    expectedVersion,
+    actualVersion
+  };
+}
+
+function isMarkdownConflict(value: unknown): value is MarkdownConflict {
+  return typeof value === "object" && value !== null && (value as { code?: unknown }).code === "conflict";
+}
+
+function contextForAgentSession(session: AgentMcpSession): RequestContext {
+  return {
+    userId: session.userId,
+    actorType: "agent",
+    permissions: ["agent", "mcp"],
+    requestId: `mcp:${session.id}`,
+    session: {
+      id: session.token,
+      user: {
+        id: session.userId,
+        email: "",
+        displayName: "Agent MCP Session",
+        isAdmin: false
+      },
+      createdAt: nowIso(),
+      expiresAt: session.expiresAt
+    }
+  };
+}
+
 function runFromRow(row: Record<string, unknown>): AgentRunRecord {
   return {
     id: String(row.id),
@@ -289,6 +373,120 @@ async function taskIdForRun(pool: Pool, context: Pick<RequestContext, "userId">,
   );
   const taskId = result.rows[0]?.task_id;
   return taskId ? String(taskId) : null;
+}
+
+async function insertMarkdownSections(
+  queryable: Pick<Pool, "query">,
+  context: Pick<RequestContext, "userId">,
+  documentId: string,
+  version: number,
+  markdown: string
+): Promise<void> {
+  await queryable.query(
+    `DELETE FROM markdown_sections
+     WHERE user_id = $1 AND document_id = $2 AND document_version = $3`,
+    [context.userId, documentId, version]
+  );
+  for (const section of parseMarkdownSections(markdown)) {
+    await queryable.query(
+      `INSERT INTO markdown_sections
+        (id, user_id, document_id, document_version, section_id, parent_section_id, heading,
+         heading_path, level, line_start, line_end, content_hash)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [
+        randomUUID(),
+        context.userId,
+        documentId,
+        version,
+        section.sectionId,
+        section.parentSectionId,
+        section.heading,
+        JSON.stringify(section.headingPath),
+        section.level,
+        section.lineStart,
+        section.lineEnd,
+        section.contentHash
+      ]
+    );
+  }
+}
+
+async function enqueueMarkdownIndexJob(
+  queryable: Pick<Pool, "query">,
+  context: Pick<RequestContext, "userId">,
+  document: Pick<MarkdownDocumentRecord, "id" | "version" | "contentHash">
+): Promise<void> {
+  await queryable.query(
+    `INSERT INTO rag_index_jobs
+      (id, user_id, document_id, requested_version, requested_content_hash, job_type)
+     VALUES ($1, $2, $3, $4, $5, 'index_markdown')`,
+    [randomUUID(), context.userId, document.id, document.version, document.contentHash]
+  );
+}
+
+async function writeMarkdownDocumentPostgres(
+  pool: Pool,
+  context: RequestContext,
+  input: { path: string; markdown: string; expectedVersion?: number },
+  auditAction = "markdown.write"
+): Promise<MarkdownDocumentRecord | MarkdownConflict> {
+  const path = normalizeMarkdownPath(input.path);
+  const contentHash = hashMarkdown(input.markdown);
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const existing = await client.query(
+      `SELECT * FROM markdown_documents
+       WHERE user_id = $1 AND path = $2 AND deleted_at IS NULL
+       FOR UPDATE`,
+      [context.userId, path]
+    );
+    const existingRow = existing.rows[0] as Record<string, unknown> | undefined;
+    if (input.expectedVersion !== undefined) {
+      const actualVersion = existingRow ? Number(existingRow.version) : 0;
+      if (actualVersion !== input.expectedVersion) {
+        await client.query("ROLLBACK");
+        return conflict(path, input.expectedVersion, actualVersion);
+      }
+    }
+    const result = existingRow
+      ? await client.query(
+        `UPDATE markdown_documents
+         SET basename = $3,
+             title = $4,
+             markdown = $5,
+             content_hash = $6,
+             version = version + 1,
+             index_status = 'pending',
+             updated_at = now()
+         WHERE id = $1 AND user_id = $2
+         RETURNING *`,
+        [existingRow.id, context.userId, basenameForPath(path), titleFromMarkdown(input.markdown), input.markdown, contentHash]
+      )
+      : await client.query(
+        `INSERT INTO markdown_documents
+          (id, user_id, path, basename, title, markdown, content_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING *`,
+        [randomUUID(), context.userId, path, basenameForPath(path), titleFromMarkdown(input.markdown), input.markdown, contentHash]
+      );
+    const document = markdownDocumentFromRow(result.rows[0]);
+    await insertMarkdownSections(client, context, document.id, document.version, document.markdown);
+    await enqueueMarkdownIndexJob(client, context, document);
+    await client.query(
+      `INSERT INTO audit_log
+        (id, user_id, actor_type, action, entity_type, entity_id, details_json, request_id)
+       VALUES ($1, $2, $3, $4, 'markdown_document', $5, $6, $7)`,
+      [randomUUID(), context.userId, context.actorType, auditAction, document.id, { path, version: document.version }, context.requestId]
+    );
+    await client.query("COMMIT");
+    return document;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 export function createPostgresStore(pool: Pool): AgentStore {
@@ -717,7 +915,404 @@ export function createPostgresStore(pool: Pool): AgentStore {
       await recordAudit(pool, context, "memory.upsert", "memory_document", record.id, {
         slug: record.slug
       });
+      await writeMarkdownDocumentPostgres(pool, context, {
+        path: memorySlugToMarkdownPath(record.slug),
+        markdown: record.body
+      }, "memory.markdown_dual_write");
       return record;
+    },
+
+    async listMarkdownDirectory(context, path) {
+      const dir = normalizeMarkdownDirectory(path);
+      const prefix = dir === "/" ? "/" : `${dir}/`;
+      const result = await pool.query(
+        `SELECT path, basename, version, updated_at
+         FROM markdown_documents
+         WHERE user_id = $1
+           AND deleted_at IS NULL
+           AND path LIKE $2
+         ORDER BY path ASC`,
+        [context.userId, `${prefix}%`]
+      );
+      const entries = new Map<string, MarkdownDirectoryEntry>();
+      for (const row of result.rows as Record<string, unknown>[]) {
+        const fullPath = String(row.path);
+        const remainder = fullPath.slice(prefix.length);
+        if (!remainder) {
+          continue;
+        }
+        const [first = "", ...rest] = remainder.split("/");
+        if (rest.length === 0) {
+          entries.set(fullPath, {
+            path: fullPath,
+            name: String(row.basename),
+            type: "file",
+            version: Number(row.version),
+            updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
+          });
+        } else {
+          const childPath = `${prefix}${first}`;
+          entries.set(childPath, {
+            path: childPath,
+            name: first,
+            type: "directory"
+          });
+        }
+      }
+      return [...entries.values()].sort((a, b) => a.type.localeCompare(b.type) || a.path.localeCompare(b.path));
+    },
+
+    async getMarkdownDocument(context, path, version) {
+      const normalized = normalizeMarkdownPath(path);
+      const result = await pool.query(
+        version === undefined
+          ? `SELECT * FROM markdown_documents
+             WHERE user_id = $1 AND path = $2 AND deleted_at IS NULL
+             LIMIT 1`
+          : `SELECT * FROM markdown_documents
+             WHERE user_id = $1 AND path = $2 AND version = $3 AND deleted_at IS NULL
+             LIMIT 1`,
+        version === undefined ? [context.userId, normalized] : [context.userId, normalized, version]
+      );
+      return result.rows[0] ? markdownDocumentFromRow(result.rows[0]) : undefined;
+    },
+
+    async writeMarkdownDocument(context, input) {
+      return writeMarkdownDocumentPostgres(pool, context, input);
+    },
+
+    async deleteMarkdownPath(context, path, expectedVersion) {
+      const normalized = normalizeMarkdownPath(path);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const existing = await client.query(
+          `SELECT * FROM markdown_documents
+           WHERE user_id = $1 AND path = $2 AND deleted_at IS NULL
+           FOR UPDATE`,
+          [context.userId, normalized]
+        );
+        const row = existing.rows[0] as Record<string, unknown> | undefined;
+        if (!row) {
+          await client.query("COMMIT");
+          return false;
+        }
+        if (expectedVersion !== undefined && Number(row.version) !== expectedVersion) {
+          await client.query("ROLLBACK");
+          return conflict(normalized, expectedVersion, Number(row.version));
+        }
+        await client.query(
+          `UPDATE markdown_documents
+           SET deleted_at = now(), index_status = 'pending', updated_at = now()
+           WHERE id = $1 AND user_id = $2`,
+          [row.id, context.userId]
+        );
+        await client.query(
+          `INSERT INTO rag_index_jobs
+            (id, user_id, document_id, requested_version, requested_content_hash, job_type)
+           VALUES ($1, $2, $3, $4, $5, 'delete_markdown')`,
+          [randomUUID(), context.userId, row.id, row.version, row.content_hash]
+        );
+        await client.query("COMMIT");
+        await recordAudit(pool, context, "markdown.delete", "markdown_document", String(row.id), { path: normalized });
+        return true;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async moveMarkdownPath(context, input) {
+      const from = normalizeMarkdownPath(input.from);
+      const to = normalizeMarkdownPath(input.to);
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await client.query(
+          `SELECT * FROM markdown_documents
+           WHERE user_id = $1
+             AND deleted_at IS NULL
+             AND (path = $2 OR path LIKE $3)
+           ORDER BY path ASC
+           FOR UPDATE`,
+          [context.userId, from, `${from}/%`]
+        );
+        const rows = result.rows as Record<string, unknown>[];
+        for (const row of rows) {
+          const expected = input.expectedVersions?.[String(row.path)];
+          if (expected !== undefined && expected !== Number(row.version)) {
+            await client.query("ROLLBACK");
+            return conflict(String(row.path), expected, Number(row.version));
+          }
+        }
+        const moved: MarkdownDocumentRecord[] = [];
+        for (const row of rows) {
+          const oldPath = String(row.path);
+          const nextPath = oldPath === from ? to : `${to}${oldPath.slice(from.length)}`;
+          const updated = await client.query(
+            `UPDATE markdown_documents
+             SET path = $3,
+                 basename = $4,
+                 version = version + 1,
+                 index_status = 'pending',
+                 updated_at = now()
+             WHERE id = $1 AND user_id = $2
+             RETURNING *`,
+            [row.id, context.userId, nextPath, basenameForPath(nextPath)]
+          );
+          const document = markdownDocumentFromRow(updated.rows[0]);
+          await enqueueMarkdownIndexJob(client, context, document);
+          moved.push(document);
+        }
+        await client.query("COMMIT");
+        await recordAudit(pool, context, "markdown.move", "markdown_document", null, {
+          from,
+          to,
+          count: moved.length
+        });
+        return moved;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async listMarkdownSections(context, path) {
+      const document = await this.getMarkdownDocument(context, path);
+      if (!document) {
+        return [];
+      }
+      const result = await pool.query(
+        `SELECT * FROM markdown_sections
+         WHERE user_id = $1 AND document_id = $2 AND document_version = $3
+         ORDER BY line_start ASC`,
+        [context.userId, document.id, document.version]
+      );
+      return result.rows.map(markdownSectionFromRow);
+    },
+
+    async readMarkdownSection(context, path, sectionId) {
+      return (await this.listMarkdownSections(context, path)).find((section) => section.sectionId === sectionId);
+    },
+
+    async replaceMarkdownSection(context, path, sectionId, markdown, expectedVersion) {
+      const document = await this.getMarkdownDocument(context, path);
+      if (!document) {
+        return undefined;
+      }
+      if (document.version !== expectedVersion) {
+        return conflict(document.path, expectedVersion, document.version);
+      }
+      const section = parseMarkdownSections(document.markdown).find((entry) => entry.sectionId === sectionId);
+      if (!section) {
+        return undefined;
+      }
+      return writeMarkdownDocumentPostgres(pool, context, {
+        path: document.path,
+        markdown: replaceSectionMarkdown(document.markdown, section, markdown),
+        expectedVersion
+      }, "markdown.section.replace");
+    },
+
+    async appendMarkdownSection(context, path, sectionId, markdown, expectedVersion) {
+      const document = await this.getMarkdownDocument(context, path);
+      if (!document) {
+        return undefined;
+      }
+      if (expectedVersion !== undefined && document.version !== expectedVersion) {
+        return conflict(document.path, expectedVersion, document.version);
+      }
+      const section = parseMarkdownSections(document.markdown).find((entry) => entry.sectionId === sectionId);
+      if (!section) {
+        return undefined;
+      }
+      return writeMarkdownDocumentPostgres(pool, context, {
+        path: document.path,
+        markdown: appendToSectionMarkdown(document.markdown, section, markdown),
+        expectedVersion
+      }, "markdown.section.append");
+    },
+
+    async searchMarkdownExact(context, query) {
+      const result = await pool.query(
+        `SELECT path, basename, version, updated_at
+         FROM markdown_documents
+         WHERE user_id = $1
+           AND deleted_at IS NULL
+           AND (path ILIKE $2 OR title ILIKE $2 OR markdown ILIKE $2)
+         ORDER BY updated_at DESC
+         LIMIT 50`,
+        [context.userId, `%${query}%`]
+      );
+      return result.rows.map((row: Record<string, unknown>) => ({
+        path: String(row.path),
+        name: String(row.basename),
+        type: "file" as const,
+        version: Number(row.version),
+        updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
+      }));
+    },
+
+    async searchMarkdownHeadings(context, input) {
+      const prefix = input.pathPrefix ? normalizeMarkdownDirectory(input.pathPrefix) : "/";
+      const query = input.query?.trim().toLowerCase();
+      const maxDepth = input.maxDepth === undefined ? undefined : Math.max(0, Math.min(input.maxDepth, 6));
+      const result = await pool.query(
+        `SELECT d.path, d.version, s.section_id, s.heading, s.heading_path, s.level, s.line_start, s.line_end
+         FROM markdown_documents d
+         JOIN markdown_sections s ON s.user_id = d.user_id
+          AND s.document_id = d.id
+          AND s.document_version = d.version
+         WHERE d.user_id = $1
+           AND d.deleted_at IS NULL
+           AND ($2 = '/' OR d.path = $2 OR d.path LIKE $3)
+           AND ($4::text IS NULL OR lower(s.heading) LIKE $4 OR lower(s.section_id) LIKE $4)
+           AND ($5::int IS NULL OR s.level <= $5)
+         ORDER BY d.path ASC, s.line_start ASC
+         LIMIT 100`,
+        [
+          context.userId,
+          prefix,
+          `${prefix}/%`,
+          query ? `%${query}%` : null,
+          maxDepth ?? null
+        ]
+      );
+      return result.rows.map((row: Record<string, unknown>): MarkdownHeadingMatch => ({
+        path: String(row.path),
+        version: Number(row.version),
+        sectionId: String(row.section_id),
+        heading: String(row.heading),
+        headingPath: Array.isArray(row.heading_path) ? row.heading_path.map(String) : [],
+        level: Number(row.level),
+        lineStart: Number(row.line_start),
+        lineEnd: Number(row.line_end)
+      }));
+    },
+
+    async grepMarkdown(context, input) {
+      const prefix = input.pathPrefix ? normalizeMarkdownDirectory(input.pathPrefix) : "/";
+      const result = await pool.query(
+        `SELECT path, markdown FROM markdown_documents
+         WHERE user_id = $1
+           AND deleted_at IS NULL
+           AND ($2 = '/' OR path = $2 OR path LIKE $3)
+         ORDER BY path ASC`,
+        [context.userId, prefix, `${prefix}/%`]
+      );
+      const flags = input.caseSensitive ? "" : "i";
+      const matcher = input.regex ? new RegExp(input.pattern, flags) : undefined;
+      const needle = input.caseSensitive ? input.pattern : input.pattern.toLowerCase();
+      const contextLines = Math.max(0, Math.min(input.contextLines ?? 0, 5));
+      const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+      const matches: Array<{ path: string; line: number; text: string; before: string[]; after: string[] }> = [];
+      for (const row of result.rows as Record<string, unknown>[]) {
+        const lines = String(row.markdown ?? "").split("\n");
+        lines.forEach((line, index) => {
+          if (matches.length >= limit) {
+            return;
+          }
+          const hit = matcher ? matcher.test(line) : (input.caseSensitive ? line : line.toLowerCase()).includes(needle);
+          if (hit) {
+            matches.push({
+              path: String(row.path),
+              line: index + 1,
+              text: line,
+              before: lines.slice(Math.max(0, index - contextLines), index),
+              after: lines.slice(index + 1, index + 1 + contextLines)
+            });
+          }
+        });
+      }
+      return matches;
+    },
+
+    async getMarkdownIndexStatus(context, path) {
+      const prefix = path ? normalizeMarkdownDirectory(path) : "/";
+      const result = await pool.query(
+        `SELECT d.path, d.version, d.index_status, count(j.id)::int AS pending_jobs
+         FROM markdown_documents d
+         LEFT JOIN rag_index_jobs j ON j.user_id = d.user_id
+          AND j.document_id = d.id
+          AND j.status = 'pending'
+         WHERE d.user_id = $1
+           AND d.deleted_at IS NULL
+           AND ($2 = '/' OR d.path = $2 OR d.path LIKE $3)
+         GROUP BY d.path, d.version, d.index_status
+         ORDER BY d.path ASC`,
+        [context.userId, prefix, `${prefix}/%`]
+      );
+      return result.rows.map((row: Record<string, unknown>) => ({
+        path: String(row.path),
+        version: Number(row.version),
+        indexStatus: String(row.index_status),
+        pendingJobs: Number(row.pending_jobs)
+      }));
+    },
+
+    async reindexMarkdownPath(context, path) {
+      const prefix = normalizeMarkdownDirectory(path);
+      const result = await pool.query(
+        `SELECT * FROM markdown_documents
+         WHERE user_id = $1
+           AND deleted_at IS NULL
+           AND ($2 = '/' OR path = $2 OR path LIKE $3)
+         ORDER BY path ASC`,
+        [context.userId, prefix, `${prefix}/%`]
+      );
+      for (const row of result.rows as Record<string, unknown>[]) {
+        await enqueueMarkdownIndexJob(pool, context, markdownDocumentFromRow(row));
+      }
+      return this.getMarkdownIndexStatus(context, path);
+    },
+
+    async createAgentMcpSession(context, input) {
+      const token = randomUUID();
+      const expiresAt = new Date(Date.now() + (input.ttlSeconds ?? 900) * 1000).toISOString();
+      const id = randomUUID();
+      await pool.query(
+        `INSERT INTO agent_mcp_sessions (id, token_hash, user_id, run_id, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [id, hashSessionToken(token), context.userId, input.runId ?? null, expiresAt]
+      );
+      await recordAudit(pool, context, "mcp.session.create", "agent_mcp_session", id, {
+        run_id: input.runId ?? null
+      });
+      return { id, token, userId: context.userId, runId: input.runId ?? null, expiresAt };
+    },
+
+    async resolveAgentMcpSession(token, runId) {
+      if (!token) {
+        return undefined;
+      }
+      const result = await pool.query(
+        `SELECT id, user_id, run_id, expires_at
+         FROM agent_mcp_sessions
+         WHERE token_hash = $1
+           AND revoked_at IS NULL
+           AND expires_at > now()
+         LIMIT 1`,
+        [hashSessionToken(token)]
+      );
+      const row = result.rows[0] as Record<string, unknown> | undefined;
+      if (!row) {
+        return undefined;
+      }
+      const session: AgentMcpSession = {
+        id: String(row.id),
+        token,
+        userId: String(row.user_id),
+        runId: row.run_id ? String(row.run_id) : null,
+        expiresAt: row.expires_at instanceof Date ? row.expires_at.toISOString() : String(row.expires_at)
+      };
+      if (session.runId && session.runId !== runId) {
+        return undefined;
+      }
+      return contextForAgentSession(session);
     },
 
     async listConnectors(context: RequestContext): Promise<ConnectorRecord[]> {
@@ -1094,6 +1689,10 @@ export function createMemoryStore(): AgentStore {
   const toolCalls = new Map<string, ToolCallRecord>();
   const senderStatuses = new Map<string, SenderRecord>();
   const memoryDocuments = new Map<string, MemoryDocumentRecord>();
+  const markdownDocuments = new Map<string, MarkdownDocumentRecord>();
+  const markdownSections = new Map<string, MarkdownSectionRecord[]>();
+  const markdownIndexJobs: Array<{ userId: string; documentId: string; status: string }> = [];
+  const agentMcpSessions = new Map<string, AgentMcpSession>();
   const connectors = new Map<string, ConnectorRecord>();
   const inboundProviderIds = new Map<string, string>();
   const inboundMessages = new Map<string, InboundMessageRecord>();
@@ -1138,6 +1737,68 @@ export function createMemoryStore(): AgentStore {
     };
     taskEvents.set(taskId, [event, ...(taskEvents.get(taskId) ?? [])]);
     return event;
+  }
+
+  function storeMarkdownSections(document: MarkdownDocumentRecord): void {
+    markdownSections.set(
+      document.id,
+      parseMarkdownSections(document.markdown).map((section) => ({
+        id: randomUUID(),
+        userId: document.userId,
+        documentId: document.id,
+        documentVersion: document.version,
+        sectionId: section.sectionId,
+        parentSectionId: section.parentSectionId,
+        heading: section.heading,
+        headingPath: section.headingPath,
+        level: section.level,
+        lineStart: section.lineStart,
+        lineEnd: section.lineEnd,
+        contentHash: section.contentHash
+      }))
+    );
+  }
+
+  function writeMarkdownMemory(
+    context: RequestContext,
+    input: { path: string; markdown: string; expectedVersion?: number },
+    auditAction = "markdown.write"
+  ): MarkdownDocumentRecord | MarkdownConflict {
+    const path = normalizeMarkdownPath(input.path);
+    const key = `${context.userId}:${path}`;
+    const existing = markdownDocuments.get(key);
+    if (input.expectedVersion !== undefined) {
+      const actualVersion = existing?.version ?? 0;
+      if (actualVersion !== input.expectedVersion) {
+        return conflict(path, input.expectedVersion, actualVersion);
+      }
+    }
+    const now = nowIso();
+    const document: MarkdownDocumentRecord = {
+      id: existing?.id ?? randomUUID(),
+      userId: context.userId,
+      path,
+      basename: basenameForPath(path),
+      title: titleFromMarkdown(input.markdown),
+      markdown: input.markdown,
+      contentHash: hashMarkdown(input.markdown),
+      version: existing ? existing.version + 1 : 1,
+      indexStatus: "pending",
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now
+    };
+    markdownDocuments.set(key, document);
+    storeMarkdownSections(document);
+    markdownIndexJobs.push({ userId: context.userId, documentId: document.id, status: "pending" });
+    pushAudit(context, auditAction, "markdown_document", document.id, {
+      path: document.path,
+      version: document.version
+    });
+    return document;
+  }
+
+  function markdownPathMatchesPrefix(path: string, prefix: string): boolean {
+    return prefix === "/" || path === prefix || path.startsWith(`${prefix}/`);
   }
 
   return {
@@ -1378,7 +2039,271 @@ export function createMemoryStore(): AgentStore {
       pushAudit(context, "memory.upsert", "memory_document", record.id, {
         slug: record.slug
       });
+      writeMarkdownMemory(context, {
+        path: memorySlugToMarkdownPath(record.slug),
+        markdown: record.body
+      }, "memory.markdown_dual_write");
       return record;
+    },
+    async listMarkdownDirectory(context, path) {
+      const dir = normalizeMarkdownDirectory(path);
+      const prefix = dir === "/" ? "/" : `${dir}/`;
+      const entries = new Map<string, MarkdownDirectoryEntry>();
+      for (const document of markdownDocuments.values()) {
+        if (document.userId !== context.userId || !document.path.startsWith(prefix)) {
+          continue;
+        }
+        const remainder = document.path.slice(prefix.length);
+        if (!remainder) {
+          continue;
+        }
+        const [first = "", ...rest] = remainder.split("/");
+        if (rest.length === 0) {
+          entries.set(document.path, {
+            path: document.path,
+            name: document.basename,
+            type: "file",
+            version: document.version,
+            updatedAt: document.updatedAt
+          });
+        } else {
+          entries.set(`${prefix}${first}`, {
+            path: `${prefix}${first}`,
+            name: first,
+            type: "directory"
+          });
+        }
+      }
+      return [...entries.values()].sort((a, b) => a.type.localeCompare(b.type) || a.path.localeCompare(b.path));
+    },
+    async getMarkdownDocument(context, path, version) {
+      const document = markdownDocuments.get(`${context.userId}:${normalizeMarkdownPath(path)}`);
+      if (!document || (version !== undefined && document.version !== version)) {
+        return undefined;
+      }
+      return document;
+    },
+    async writeMarkdownDocument(context, input) {
+      return writeMarkdownMemory(context, input);
+    },
+    async deleteMarkdownPath(context, path, expectedVersion) {
+      const normalized = normalizeMarkdownPath(path);
+      const key = `${context.userId}:${normalized}`;
+      const document = markdownDocuments.get(key);
+      if (!document) {
+        return false;
+      }
+      if (expectedVersion !== undefined && document.version !== expectedVersion) {
+        return conflict(normalized, expectedVersion, document.version);
+      }
+      markdownDocuments.delete(key);
+      markdownSections.delete(document.id);
+      markdownIndexJobs.push({ userId: context.userId, documentId: document.id, status: "pending" });
+      pushAudit(context, "markdown.delete", "markdown_document", document.id, { path: normalized });
+      return true;
+    },
+    async moveMarkdownPath(context, input) {
+      const from = normalizeMarkdownPath(input.from);
+      const to = normalizeMarkdownPath(input.to);
+      const documents = [...markdownDocuments.values()]
+        .filter((document) => document.userId === context.userId && (document.path === from || document.path.startsWith(`${from}/`)))
+        .sort((a, b) => a.path.localeCompare(b.path));
+      for (const document of documents) {
+        const expected = input.expectedVersions?.[document.path];
+        if (expected !== undefined && expected !== document.version) {
+          return conflict(document.path, expected, document.version);
+        }
+      }
+      const moved: MarkdownDocumentRecord[] = [];
+      for (const document of documents) {
+        markdownDocuments.delete(`${context.userId}:${document.path}`);
+        const nextPath = document.path === from ? to : `${to}${document.path.slice(from.length)}`;
+        const updated: MarkdownDocumentRecord = {
+          ...document,
+          path: nextPath,
+          basename: basenameForPath(nextPath),
+          version: document.version + 1,
+          indexStatus: "pending",
+          updatedAt: nowIso()
+        };
+        markdownDocuments.set(`${context.userId}:${nextPath}`, updated);
+        markdownIndexJobs.push({ userId: context.userId, documentId: updated.id, status: "pending" });
+        moved.push(updated);
+      }
+      pushAudit(context, "markdown.move", "markdown_document", null, { from, to, count: moved.length });
+      return moved;
+    },
+    async listMarkdownSections(context, path) {
+      const document = await this.getMarkdownDocument(context, path);
+      if (!document) {
+        return [];
+      }
+      return markdownSections.get(document.id) ?? [];
+    },
+    async readMarkdownSection(context, path, sectionId) {
+      return (await this.listMarkdownSections(context, path)).find((section) => section.sectionId === sectionId);
+    },
+    async replaceMarkdownSection(context, path, sectionId, markdown, expectedVersion) {
+      const document = await this.getMarkdownDocument(context, path);
+      if (!document) {
+        return undefined;
+      }
+      if (document.version !== expectedVersion) {
+        return conflict(document.path, expectedVersion, document.version);
+      }
+      const section = parseMarkdownSections(document.markdown).find((entry) => entry.sectionId === sectionId);
+      if (!section) {
+        return undefined;
+      }
+      return writeMarkdownMemory(context, {
+        path: document.path,
+        markdown: replaceSectionMarkdown(document.markdown, section, markdown),
+        expectedVersion
+      }, "markdown.section.replace");
+    },
+    async appendMarkdownSection(context, path, sectionId, markdown, expectedVersion) {
+      const document = await this.getMarkdownDocument(context, path);
+      if (!document) {
+        return undefined;
+      }
+      if (expectedVersion !== undefined && document.version !== expectedVersion) {
+        return conflict(document.path, expectedVersion, document.version);
+      }
+      const section = parseMarkdownSections(document.markdown).find((entry) => entry.sectionId === sectionId);
+      if (!section) {
+        return undefined;
+      }
+      return writeMarkdownMemory(context, {
+        path: document.path,
+        markdown: appendToSectionMarkdown(document.markdown, section, markdown),
+        expectedVersion
+      }, "markdown.section.append");
+    },
+    async searchMarkdownExact(context, query) {
+      const needle = query.toLowerCase();
+      return [...markdownDocuments.values()]
+        .filter((document) => document.userId === context.userId)
+        .filter((document) => [document.path, document.title ?? "", document.markdown].some((value) => value.toLowerCase().includes(needle)))
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 50)
+        .map((document) => ({
+          path: document.path,
+          name: document.basename,
+          type: "file" as const,
+          version: document.version,
+          updatedAt: document.updatedAt
+        }));
+    },
+    async searchMarkdownHeadings(context, input) {
+      const prefix = input.pathPrefix ? normalizeMarkdownDirectory(input.pathPrefix) : "/";
+      const query = input.query?.trim().toLowerCase();
+      const maxDepth = input.maxDepth === undefined ? undefined : Math.max(0, Math.min(input.maxDepth, 6));
+      const matches: MarkdownHeadingMatch[] = [];
+      for (const document of [...markdownDocuments.values()].sort((a, b) => a.path.localeCompare(b.path))) {
+        if (document.userId !== context.userId || !markdownPathMatchesPrefix(document.path, prefix)) {
+          continue;
+        }
+        for (const section of markdownSections.get(document.id) ?? []) {
+          if (maxDepth !== undefined && section.level > maxDepth) {
+            continue;
+          }
+          const haystack = `${section.heading} ${section.sectionId}`.toLowerCase();
+          if (query && !haystack.includes(query)) {
+            continue;
+          }
+          matches.push({
+            path: document.path,
+            version: document.version,
+            sectionId: section.sectionId,
+            heading: section.heading,
+            headingPath: section.headingPath,
+            level: section.level,
+            lineStart: section.lineStart,
+            lineEnd: section.lineEnd
+          });
+        }
+      }
+      return matches.slice(0, 100);
+    },
+    async grepMarkdown(context, input) {
+      const prefix = input.pathPrefix ? normalizeMarkdownDirectory(input.pathPrefix) : "/";
+      const matcher = input.regex ? new RegExp(input.pattern, input.caseSensitive ? "" : "i") : undefined;
+      const needle = input.caseSensitive ? input.pattern : input.pattern.toLowerCase();
+      const contextLines = Math.max(0, Math.min(input.contextLines ?? 0, 5));
+      const limit = Math.max(1, Math.min(input.limit ?? 50, 100));
+      const matches: Array<{ path: string; line: number; text: string; before: string[]; after: string[] }> = [];
+      for (const document of [...markdownDocuments.values()].sort((a, b) => a.path.localeCompare(b.path))) {
+        if (document.userId !== context.userId || !markdownPathMatchesPrefix(document.path, prefix)) {
+          continue;
+        }
+        const lines = document.markdown.split("\n");
+        lines.forEach((line, index) => {
+          if (matches.length >= limit) {
+            return;
+          }
+          const hit = matcher ? matcher.test(line) : (input.caseSensitive ? line : line.toLowerCase()).includes(needle);
+          if (hit) {
+            matches.push({
+              path: document.path,
+              line: index + 1,
+              text: line,
+              before: lines.slice(Math.max(0, index - contextLines), index),
+              after: lines.slice(index + 1, index + 1 + contextLines)
+            });
+          }
+        });
+      }
+      return matches;
+    },
+    async getMarkdownIndexStatus(context, path) {
+      const prefix = path ? normalizeMarkdownDirectory(path) : "/";
+      return [...markdownDocuments.values()]
+        .filter((document) => document.userId === context.userId && markdownPathMatchesPrefix(document.path, prefix))
+        .sort((a, b) => a.path.localeCompare(b.path))
+        .map((document): MarkdownIndexStatus => ({
+          path: document.path,
+          version: document.version,
+          indexStatus: document.indexStatus,
+          pendingJobs: markdownIndexJobs.filter((job) => {
+            return job.userId === context.userId && job.documentId === document.id && job.status === "pending";
+          }).length
+        }));
+    },
+    async reindexMarkdownPath(context, path) {
+      const prefix = normalizeMarkdownDirectory(path);
+      for (const document of markdownDocuments.values()) {
+        if (document.userId === context.userId && markdownPathMatchesPrefix(document.path, prefix)) {
+          markdownIndexJobs.push({ userId: context.userId, documentId: document.id, status: "pending" });
+        }
+      }
+      return this.getMarkdownIndexStatus(context, path);
+    },
+    async createAgentMcpSession(context, input) {
+      const session: AgentMcpSession = {
+        id: randomUUID(),
+        token: randomUUID(),
+        userId: context.userId,
+        runId: input.runId ?? null,
+        expiresAt: new Date(Date.now() + (input.ttlSeconds ?? 900) * 1000).toISOString()
+      };
+      agentMcpSessions.set(session.token, session);
+      pushAudit(context, "mcp.session.create", "agent_mcp_session", session.id, {
+        run_id: session.runId
+      });
+      return session;
+    },
+    async resolveAgentMcpSession(token, runId) {
+      if (!token) {
+        return undefined;
+      }
+      const session = agentMcpSessions.get(token);
+      if (!session || Date.parse(session.expiresAt) <= Date.now()) {
+        return undefined;
+      }
+      if (session.runId && session.runId !== runId) {
+        return undefined;
+      }
+      return contextForAgentSession(session);
     },
     async listConnectors(context: RequestContext): Promise<ConnectorRecord[]> {
       return [...connectors.values()]

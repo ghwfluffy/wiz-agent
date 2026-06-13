@@ -105,14 +105,38 @@ UI. Deleting a sender row does not delete any historical message or audit data;
 it only removes the explicit classification so future inbound messages from that
 address are classified by the default policy again.
 
-## Memory Documents
+## Memory And Knowledge Documents
 
-Memory documents are user-owned markdown-like records in `memory_documents`.
-They are readable from the operations UI and API. Writes should remain explicit
-host-owned workflows or controlled model/MCP tool calls with audit records.
-Owner messages can update durable memory when the agent chooses the memory write
-tool. Trusted newsletter content is stored as knowledge input under path-like
-memory titles such as `newsletters/2026-06-13/forbes.md`. The
-`newsletter-preferences` document stores owner-stated newsletter interests and
-style preferences that are injected into later scheduled newsletter synthesis
-tasks.
+Long-term memory is moving from slug-only `memory_documents` into a server-owned
+virtual markdown filesystem backed by Postgres rows. The source file rows live
+in `markdown_documents`; parsed heading ranges live in `markdown_sections`; and
+writes enqueue `rag_index_jobs` so derived vector state can be reconciled later.
+No actual filesystem files are created.
+
+Markdown paths are user-owned and scoped by `users.id`, for example
+`/personal/profile.md`, `/preferences/newsletters.md`,
+`/assistant/schedule.md`, `/assistant/notification-policy.md`,
+`/tasks/schedule-rationale.md`, `/projects/<project>/decisions.md`, and
+`/newsletters/YYYY-MM-DD/source.md`. Directory listing and tree APIs are virtual
+views over those path strings. Deleted markdown rows are omitted from directory
+and tree reads.
+
+Markdown writes parse headings levels 1 through 6 into stable section IDs based
+on heading path, such as `goals/mvp`; pre-heading content is `_preamble`.
+Full-file and section writes use optimistic concurrency. A stale
+`expectedVersion` returns a structured conflict instead of overwriting newer
+state.
+
+The legacy memory API remains available while the web UI is migrated. Legacy
+memory writes dual-write to markdown paths, and the Phase 01 migration backfills
+existing rows:
+
+- `personal-profile` -> `/personal/profile.md`
+- `newsletter-preferences` -> `/preferences/newsletters.md`
+- `agent-schedule` -> `/assistant/schedule.md`
+- `newsletters-YYYY-MM-DD-*` -> `/newsletters/YYYY-MM-DD/*.md`
+- other slugs -> `/legacy/<slug>.md`
+
+Owner messages can update durable memory only through controlled host-owned
+workflows or MCP/tool calls. Trusted newsletter content is knowledge input, not
+command input.

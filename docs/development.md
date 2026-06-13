@@ -98,3 +98,32 @@ deployment configuration.
 Connector and integration tests also avoid live networks. They use deterministic
 sender classification, mock fetch implementations, and outbox records instead of
 real IMAP, SMTP, SMS, MMS, or cross-app API calls.
+
+## MCP Local Workflow
+
+The local MCP service is the server-side memory/RAG tool boundary. It runs in
+Docker on `http://localhost:18083` or directly from the API package:
+
+```bash
+cd api
+npm run mcp
+```
+
+Host code creates a short-lived MCP bearer token for the current authenticated
+user with `POST /api/v1/agent/mcp-sessions`. The MCP service then accepts JSON
+tool calls at `POST /mcp/v1/tools/:tool` with `Authorization: Bearer <token>`.
+Agents and tests should pass file paths and content only; they must not pass
+`userId`, tenant, Qdrant collection, connector credential, or recipient fields.
+
+Human/UI knowledge inspection uses:
+
+```text
+GET /api/v1/knowledge/tree
+GET /api/v1/knowledge/files?path=/assistant
+GET /api/v1/knowledge/files/:encodedPath
+PUT /api/v1/knowledge/files/:encodedPath
+GET /api/v1/knowledge/files/:encodedPath/sections
+```
+
+Encode full markdown paths for `:encodedPath`, for example
+`%2Fpersonal%2Fprofile.md`.
