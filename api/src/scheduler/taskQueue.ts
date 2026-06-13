@@ -4,6 +4,7 @@ import { runAgentTask } from "../agent/runAgentTask.js";
 import type { Settings } from "../config/settings.js";
 import { processOutboundQueue, type MailTransport } from "../connectors/smtpSender.js";
 import { SignedIntegrationTokenProvider } from "../integrations/tokenProvider.js";
+import { ensureAutonomousTasks, scheduleNextAutonomousTask } from "./autonomousTasks.js";
 
 export async function claimDueTasks(options: {
   store: AgentStore;
@@ -24,6 +25,13 @@ export async function daemonOnce(options: {
   now?: Date;
 }): Promise<{ claimedTasks: number; ranTasks: number; outboundAttempted: number; outboundSent: number; outboundFailed: number }> {
   const modelClient = options.modelClient;
+  if (modelClient) {
+    await ensureAutonomousTasks({
+      store: options.store,
+      context: options.context,
+      now: options.now
+    });
+  }
   const claimed = modelClient
     ? await claimDueTasks({
         store: options.store,
@@ -46,6 +54,12 @@ export async function daemonOnce(options: {
         }
       });
       await options.store.updateTask(options.context, task.id, { status: "completed" });
+      await scheduleNextAutonomousTask({
+        store: options.store,
+        context: options.context,
+        task,
+        now: options.now
+      });
       ranTasks += 1;
     }
   }

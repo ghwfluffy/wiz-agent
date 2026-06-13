@@ -103,6 +103,66 @@ export async function executeToolCall(options: {
         result: { tasks, inbound, outbound }
       };
     }
+    case "list_recent_owner_conversations": {
+      const limit = typeof options.args.limit === "number" ? options.args.limit : 8;
+      const inbound = (await options.store.listInboundMessages(options.context))
+        .filter((message) => message.classification === "owner")
+        .slice(0, limit)
+        .map((message) => ({
+          message_id: message.id,
+          direction: "inbound",
+          source: message.source ?? "imap",
+          timestamp: message.receivedAt ?? message.createdAt,
+          subject: message.subject,
+          body_excerpt: excerpt(message.bodyText, 500),
+          handling_action: message.handlingAction,
+          task_id: message.taskId
+        }));
+      const outbound = (await options.store.listOutboundMessages(options.context))
+        .slice(0, limit)
+        .map((message) => ({
+          outbound_message_id: message.id,
+          direction: "outbound",
+          channel: message.channel,
+          status: message.status,
+          timestamp: message.sentAt ?? message.createdAt,
+          subject: message.subject,
+          body_excerpt: excerpt(message.bodyText, 500)
+        }));
+      return {
+        executed: true,
+        sideEffect: "none",
+        result: {
+          conversations: [...inbound, ...outbound]
+            .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
+            .slice(0, limit)
+        }
+      };
+    }
+    case "write_memory": {
+      const slug = String(options.args.slug);
+      const title = String(options.args.title);
+      const appendMarkdown = String(options.args.appendMarkdown).trim();
+      const existing = await options.store.getMemoryDocument(options.context, slug);
+      const document = await options.store.upsertMemoryDocument(options.context, {
+        slug,
+        title: existing?.title ?? title,
+        body: [
+          existing?.body?.trim() || `# ${title}`,
+          "",
+          appendMarkdown
+        ].join("\n")
+      });
+      return {
+        executed: true,
+        sideEffect: "local_persistence",
+        result: {
+          memory_document_id: document.id,
+          slug: document.slug,
+          rationale: options.args.rationale
+        }
+      };
+    }
     case "append_task_prompt": {
       const taskId = String(options.args.taskId);
       const task = await options.store.getTask(options.context, taskId);

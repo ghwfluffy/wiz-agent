@@ -11,6 +11,7 @@ import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
 import { FileIntegrationTokenProvider, SignedIntegrationTokenProvider } from "../src/integrations/tokenProvider.js";
 import { validateSafeHttpUrl } from "../src/links/safeFetch.js";
+import { PERSONAL_PROFILE_SLUG, extractPersonalFacts } from "../src/memory/personalMemory.js";
 import { claimDueTasks } from "../src/scheduler/taskQueue.js";
 import {
   handleInboundMessage,
@@ -297,7 +298,7 @@ describe("inbound sender policy", () => {
     })).toContain("Reply YES to trust as a newsletter");
   });
 
-  it("lets owner SMS replies trust a reviewed sender as a newsletter and queue digest work", async () => {
+  it("lets owner SMS replies trust a reviewed sender as a newsletter and ingest knowledge", async () => {
     const { context, store } = await testContext();
     await store.upsertConnector(context, {
       kind: "owner-contact",
@@ -343,13 +344,90 @@ describe("inbound sender policy", () => {
       action: "sender_reviewed"
     });
     await expect(store.getSenderStatus(context, "news@example.test")).resolves.toBe("newsletter");
-    const tasks = await store.listTasks(context);
-    expect(tasks).toEqual([
+    await expect(store.listTasks(context)).resolves.toEqual([]);
+    const memories = await store.listMemoryDocuments(context);
+    expect(memories).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        title: "Review newsletter: Robots Weekly",
-        prompt: expect.stringContaining("Keep the SMS/MMS digest concise, useful, and quippy")
+        title: expect.stringContaining("newsletters/"),
+        body: expect.stringContaining("A cool story about tiny robots.")
       })
-    ]);
+    ]));
+  });
+
+  it("accepts trusted senders through memory integration without routing owner tools", async () => {
+    const { context, store } = await testContext();
+    await store.setSenderStatus(context, "trusted@example.test", "trusted");
+    const calls: string[] = [];
+
+    const result = await handleInboundMessage({
+      context,
+      settings: loadSettings({ APP_ENV: "test" }),
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      memoryIntegrator: async () => {
+        calls.push("memory");
+        return { integrated: false, updatedSlugs: [], mode: "test" };
+      },
+      ownerAgentRunner: async () => {
+        calls.push("agent");
+        return { runId: "should-not-run" };
+      },
+      message: {
+        providerMessageId: "trusted-1",
+        fromAddr: "trusted@example.test",
+        toAddr: "agent@example.test",
+        subject: "Context",
+        bodyText: "The deployment runbook moved to Friday."
+      }
+    });
+
+    expect(result).toMatchObject({
+      classification: "trusted",
+      action: "accepted_trusted"
+    });
+    expect(calls).toEqual(["memory"]);
+  });
+
+  it("lets owner messages choose memory updates through the agent tool path", async () => {
+    const { context, store } = await testContext();
+
+    const result = await processInboundMessage({
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OWNER_SMS_EMAILS: "15555550100@sms.example.test"
+      }),
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "write_memory",
+            arguments: {
+              slug: "personal-profile",
+              title: "Personal Profile",
+              appendMarkdown: "- The owner prefers Friday deployment windows.",
+              rationale: "Owner explicitly stated a durable scheduling preference."
+            }
+          }
+        ]
+      }),
+      message: {
+        providerMessageId: "owner-memory-tool-1",
+        fromAddr: "15555550100@sms.example.test",
+        toAddr: "agent@example.test",
+        bodyText: "Remember that I prefer Friday deployment windows.",
+        source: "sms"
+      }
+    });
+
+    expect(result).toMatchObject({
+      classification: "owner",
+      action: "routed_to_agent"
+    });
+    await expect(store.getMemoryDocument(context, PERSONAL_PROFILE_SLUG)).resolves.toMatchObject({
+      body: expect.stringContaining("Friday deployment windows")
+    });
   });
 
   it("lets owner SMS replies block a reviewed sender without queuing digest work", async () => {
@@ -397,7 +475,7 @@ describe("inbound sender policy", () => {
     await expect(store.listTasks(context)).resolves.toEqual([]);
   });
 
-  it("queues trusted newsletter digest work with saved owner preferences", async () => {
+  it("ingests trusted newsletter knowledge without queuing immediate digest work", async () => {
     const { context, store } = await testContext();
     await store.setSenderStatus(context, "news@example.test", "newsletter");
     await store.upsertMemoryDocument(context, {
@@ -424,11 +502,14 @@ describe("inbound sender policy", () => {
       classification: "newsletter",
       action: "accepted_newsletter"
     });
-    const tasks = await store.listTasks(context);
-    expect(tasks[0]).toMatchObject({
-      title: "Review newsletter: Infra Weekly",
-      prompt: expect.stringContaining("I like weird infrastructure failures")
-    });
+    await expect(store.listTasks(context)).resolves.toEqual([]);
+    const memories = await store.listMemoryDocuments(context);
+    expect(memories).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: expect.stringContaining("newsletters/"),
+        body: expect.stringContaining("A deep dive into a weird outage.")
+      })
+    ]));
   });
 
   it("saves owner-stated newsletter preferences into memory", async () => {
@@ -455,6 +536,43 @@ describe("inbound sender policy", () => {
       title: "Newsletter Preferences",
       body: expect.stringContaining("agent tooling")
     });
+  });
+
+  it("does not pre-write owner memory before the owner agent decides", async () => {
+    const { context, store } = await testContext();
+
+    expect(extractPersonalFacts("Remind me to pet Pierre my cat in ten minutes.")).toEqual([
+      "The owner's cat is named Pierre."
+    ]);
+
+    const result = await handleInboundMessage({
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OWNER_SMS_EMAILS: "owner-sms@example.test"
+      }),
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      ownerAgentRunner: async () => ({
+        runId: "agent-run-1",
+        taskId: "task-1",
+        taskEventId: "event-1"
+      }),
+      message: {
+        providerMessageId: "owner-personal-memory-1",
+        fromAddr: "owner-sms@example.test",
+        toAddr: "agent@example.test",
+        bodyText: "Remind me to pet Pierre my cat in ten minutes.",
+        source: "sms"
+      }
+    });
+
+    expect(result).toMatchObject({
+      classification: "owner",
+      action: "routed_to_agent",
+      taskId: "task-1"
+    });
+    await expect(store.getMemoryDocument(context, PERSONAL_PROFILE_SLUG)).resolves.toBeUndefined();
   });
 
   it("rate limits repeated untrusted senders before queueing owner notifications", async () => {

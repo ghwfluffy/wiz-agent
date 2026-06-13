@@ -2,6 +2,7 @@ import type { AgentModelClient } from "../agent/modelClient.js";
 import { runOwnerInboundAgent } from "../agent/inboundMessageAgent.js";
 import type { Settings } from "../config/settings.js";
 import type { AgentStore, InboundHandlingResult, InboundMessageInput, RequestContext } from "../domain/types.js";
+import { integrateTrustedMessageIntoMemory } from "../memory/personalMemory.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { handleInboundMessage, type InboundRateLimiter } from "../security/senderPolicy.js";
 
@@ -21,6 +22,12 @@ export async function processInboundMessage(options: {
     store: options.store,
     message: options.message,
     rateLimiter: options.rateLimiter,
+    memoryIntegrator: async (recorded) => integrateTrustedMessageIntoMemory({
+      context: options.context,
+      store: options.store,
+      message: recorded,
+      modelClient: options.modelClient
+    }),
     ownerAgentRunner: async (recorded) => runOwnerInboundAgent({
       context: options.context,
       store: options.store,

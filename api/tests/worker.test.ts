@@ -1,11 +1,52 @@
 import { describe, expect, it, vi } from "vitest";
+import { MockModelClient } from "../src/agent/modelClient.js";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
+import { daemonOnce } from "../src/scheduler/taskQueue.js";
 import { isWorkerEntrypoint, workerTick } from "../src/worker.js";
 
 describe("worker loop", () => {
   it("detects the worker entrypoint when node receives a relative script path", () => {
     expect(isWorkerEntrypoint(new URL("../src/worker.ts", import.meta.url).href, "src/worker.ts")).toBe(true);
+  });
+
+  it("keeps daily newsletter and autonomous wake tasks scheduled with durable rationale", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-autonomous-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-autonomous-test",
+      session
+    };
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient(),
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+
+    const tasks = await store.listTasks(context);
+    expect(tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: "Daily newsletter synthesis",
+        prompt: expect.stringContaining("newsletters/")
+      }),
+      expect.objectContaining({
+        title: "Autonomous agent wake review",
+        prompt: expect.stringContaining("default 3-hour autonomous wake")
+      })
+    ]));
+    await expect(store.getMemoryDocument(context, "agent-schedule")).resolves.toMatchObject({
+      body: expect.stringContaining("Default cadence: every 3 hours.")
+    });
   });
 
   it("processes approved outbox records for OAuth users without a dashboard session", async () => {

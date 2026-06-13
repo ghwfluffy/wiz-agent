@@ -8,6 +8,7 @@ import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
 import { buildCapabilityContext, getIntegrationAction, listAppCapabilities } from "../src/integrations/capabilityRegistry.js";
+import { PERSONAL_PROFILE_SLUG } from "../src/memory/personalMemory.js";
 import { validateOrRepairToolCall } from "../src/tools/validator.js";
 
 async function testContext(isAdmin = true): Promise<{ context: RequestContext; store: ReturnType<typeof createMemoryStore> }> {
@@ -307,6 +308,27 @@ describe("agent task execution", () => {
     expect(prompt).toContain("Your joke got cut off.");
     expect(prompt).toContain("Why don't scientists trust atoms?");
     expect(prompt).not.toContain("providerMessageId");
+  });
+
+  it("includes saved personal memory in owner inbound prompts", async () => {
+    const { context, store } = await testContext();
+    await store.upsertMemoryDocument(context, {
+      slug: PERSONAL_PROFILE_SLUG,
+      title: "Personal Profile",
+      body: "# Personal Profile\n\n- The owner's cat is named Pierre."
+    });
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-memory-profile-current",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "What should I do next?",
+      source: "sms"
+    }, "owner");
+
+    const prompt = await buildOwnerInboundPrompt({ context, store, message });
+
+    expect(prompt).toContain("Saved personal memory:");
+    expect(prompt).toContain("The owner's cat is named Pierre.");
   });
 
   it("exposes a read-only recent context lookup tool", async () => {

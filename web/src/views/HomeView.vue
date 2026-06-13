@@ -121,6 +121,7 @@ const configForm = reactive<AiConfig>({
 });
 
 const taskStatuses = ["pending", "claimed", "running", "completed", "cancelled", "failed"];
+const senderStatuses: Sender["status"][] = ["owner", "newsletter", "trusted", "blocked", "untrusted"];
 const activeOutbox = computed(() => outbox.value.filter((message) => ["requires_approval", "pending", "approved", "sending"].includes(message.status)));
 const outboxHistory = computed(() => outbox.value.filter((message) => ["sent", "failed"].includes(message.status)));
 const recentAudit = computed(() => audit.value.slice(0, 12));
@@ -257,7 +258,7 @@ function statusTagClass(status: string): string {
   if (["failed", "blocked"].includes(status)) {
     return "cds--tag--red";
   }
-  if (["running", "claimed", "sending", "newsletter", "routed_to_agent", "accepted_newsletter"].includes(status)) {
+  if (["running", "claimed", "sending", "newsletter", "trusted", "routed_to_agent", "accepted_newsletter", "accepted_trusted"].includes(status)) {
     return "cds--tag--blue";
   }
   if (["cancelled", "untrusted"].includes(status)) {
@@ -405,8 +406,12 @@ async function loadActiveTab(): Promise<void> {
         break;
       }
       case "memory": {
-        const response = await api.listMemory();
-        memoryDocuments.value = response.documents;
+        const [memoryResponse, senderResponse] = await Promise.all([
+          api.listMemory(),
+          api.listSenders()
+        ]);
+        memoryDocuments.value = memoryResponse.documents;
+        senders.value = senderResponse.senders;
         break;
       }
       case "senders": {
@@ -588,9 +593,39 @@ async function saveSender(): Promise<void> {
   try {
     const response = await api.setSender(senderForm.address, senderForm.status);
     senders.value = response.senders;
-    senderForm.address = "";
+    resetSenderForm();
+    dashboardError.value = null;
   } catch {
     dashboardError.value = "Unable to save the sender.";
+  } finally {
+    saving.value = false;
+  }
+}
+
+function editSender(sender: Sender): void {
+  senderForm.address = sender.address;
+  senderForm.status = sender.status;
+}
+
+function resetSenderForm(): void {
+  senderForm.address = "";
+  senderForm.status = "trusted";
+}
+
+async function deleteSender(sender: Sender): Promise<void> {
+  if (!window.confirm(`Remove ${sender.address} from trusted contacts?`)) {
+    return;
+  }
+  saving.value = true;
+  try {
+    const response = await api.deleteSender(sender.address);
+    senders.value = response.senders;
+    if (senderForm.address.trim().toLowerCase() === sender.address.toLowerCase()) {
+      resetSenderForm();
+    }
+    dashboardError.value = null;
+  } catch {
+    dashboardError.value = "Unable to remove the sender.";
   } finally {
     saving.value = false;
   }
@@ -1097,6 +1132,62 @@ onUnmounted(() => {
       </section>
 
       <section v-show="activeTab === 'memory'" id="panel-memory" class="tab-panel" role="tabpanel" aria-labelledby="tab-memory">
+        <section class="activity-section" aria-label="Trusted contacts">
+          <div class="section-heading">
+            <h2>Trusted contacts</h2>
+            <p class="label">{{ senders.length }} entries</p>
+          </div>
+          <form class="form-grid sender-form contact-form" @submit.prevent="saveSender">
+            <div class="cds--form-item">
+              <label class="cds--label" for="memory-sender-address">Address</label>
+              <input id="memory-sender-address" v-model="senderForm.address" class="cds--text-input" required type="email">
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="memory-sender-status">Status</label>
+              <select id="memory-sender-status" v-model="senderForm.status" class="cds--select-input">
+                <option v-for="status in senderStatuses" :key="status" :value="status">{{ status }}</option>
+              </select>
+            </div>
+            <div class="form-actions">
+              <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
+                Save contact
+              </button>
+              <button class="cds--btn cds--btn--ghost" type="button" :disabled="saving" @click="resetSenderForm">
+                Clear
+              </button>
+            </div>
+          </form>
+          <p v-if="senders.length === 0" class="empty">No trusted contacts configured.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra contact-table">
+            <thead>
+              <tr>
+                <th>Address</th>
+                <th>Status</th>
+                <th>Updated</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="sender in senders" :key="sender.id">
+                <td>{{ sender.address }}</td>
+                <td>
+                  <span class="cds--tag" :class="statusTagClass(sender.status)">{{ sender.status }}</span>
+                </td>
+                <td>{{ formatDate(sender.updatedAt) }}</td>
+                <td>
+                  <div class="table-actions">
+                    <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" @click="editSender(sender)">
+                      Edit
+                    </button>
+                    <button class="cds--btn cds--btn--sm cds--btn--danger--ghost" type="button" @click="deleteSender(sender)">
+                      Remove
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
         <section class="activity-section" aria-label="Agent memory">
           <div class="section-heading">
             <h2>Memory</h2>
@@ -1145,7 +1236,7 @@ onUnmounted(() => {
           <div class="section-heading">
             <h2>Sender trust</h2>
           </div>
-          <form class="form-grid sender-form" @submit.prevent="saveSender">
+          <form class="form-grid sender-form contact-form" @submit.prevent="saveSender">
             <div class="cds--form-item">
               <label class="cds--label" for="sender-address">Address</label>
               <input id="sender-address" v-model="senderForm.address" class="cds--text-input" required type="email">
@@ -1153,26 +1244,26 @@ onUnmounted(() => {
             <div class="cds--form-item">
               <label class="cds--label" for="sender-status">Status</label>
               <select id="sender-status" v-model="senderForm.status" class="cds--select-input">
-                <option value="owner">owner</option>
-                <option value="newsletter">newsletter</option>
-                <option value="trusted">trusted</option>
-                <option value="blocked">blocked</option>
-                <option value="untrusted">untrusted</option>
+                <option v-for="status in senderStatuses" :key="status" :value="status">{{ status }}</option>
               </select>
             </div>
             <div class="form-actions">
               <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
                 Save sender
               </button>
+              <button class="cds--btn cds--btn--ghost" type="button" :disabled="saving" @click="resetSenderForm">
+                Clear
+              </button>
             </div>
           </form>
           <p v-if="senders.length === 0" class="empty">No senders configured.</p>
-          <table v-else class="cds--data-table cds--data-table--zebra">
+          <table v-else class="cds--data-table cds--data-table--zebra contact-table">
             <thead>
               <tr>
                 <th>Address</th>
                 <th>Status</th>
                 <th>Updated</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -1182,6 +1273,16 @@ onUnmounted(() => {
                   <span class="cds--tag" :class="statusTagClass(sender.status)">{{ sender.status }}</span>
                 </td>
                 <td>{{ formatDate(sender.updatedAt) }}</td>
+                <td>
+                  <div class="table-actions">
+                    <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" @click="editSender(sender)">
+                      Edit
+                    </button>
+                    <button class="cds--btn cds--btn--sm cds--btn--danger--ghost" type="button" @click="deleteSender(sender)">
+                      Remove
+                    </button>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>

@@ -57,6 +57,9 @@ Current tool contracts:
 
 - `create_task`
 - `list_ongoing_tasks`
+- `list_recent_context`
+- `list_recent_owner_conversations`
+- `write_memory`
 - `append_task_prompt`
 - `propose_outbound_message`
 - `record_observation`
@@ -73,6 +76,12 @@ Accepted local tool calls now execute through deterministic host code:
 
 - `create_task` creates a user-scoped task.
 - `list_ongoing_tasks` returns active user-scoped tasks without side effects.
+- `list_recent_context` returns bounded owner-scoped recent task/message context
+  without side effects.
+- `list_recent_owner_conversations` returns recent owner inbound/outbound
+  conversation excerpts so the agent can resolve short follow-up messages.
+- `write_memory` appends model-selected durable markdown memory under host-owned
+  user scope.
 - `append_task_prompt` appends owner follow-up context to an existing task,
   returns it to active work, and writes a task event.
 - `propose_outbound_message` queues an outbound message rather than sending it.
@@ -123,11 +132,17 @@ modal; audit logs remain the broader operational record.
 
 Owner inbound SMS/MMS/email handling uses the same runtime boundary. After
 sender policy classifies a message as `owner`, host code builds an inbound
-prompt that includes a bounded list of active tasks. The model can then choose
-to append the message to an existing task, create/schedule a new task, queue a
-reply, call a registered app integration, or record an observation. The inbox
-record is updated with the agent run id and any linked task/task-event ids so
-the UI can show what the message triggered.
+prompt that includes bounded active task, recent conversation, and saved memory
+context. The model then decides what to do: write memory, append to an existing
+task, create/schedule a new task, queue a reply, call a registered app
+integration, request recent owner conversation context, or record an
+observation. The inbox record is updated with the agent run id and any linked
+task/task-event ids so the UI can show what the message triggered.
+
+Owner messages must not be pre-written to long-term memory by regex or other
+host heuristics. Durable owner facts, preferences, and schedule rationale should
+be persisted through the same controlled tool/MCP path the model uses for other
+decisions, with deterministic validation and audit records.
 
 ## Host-Owned Controls
 
@@ -147,3 +162,12 @@ The model must not receive secrets or raw credential references.
 
 Untrusted inbound messages and newsletters must be treated as data, not
 instructions. Only owner-classified inbound messages can drive agent actions.
+Trusted newsletter and trusted third-party messages may be ingested into
+long-term knowledge, but they must not directly trigger replies, goal updates,
+or cross-app actions.
+
+The worker maintains recurring agent wake tasks. A daily newsletter synthesis
+task reviews ingested newsletter knowledge and decides whether anything is worth
+messaging the owner about. A three-hour autonomous wake task reviews memory,
+active tasks, and schedule rationale so the agent can decide whether to act or
+adjust future work timing through controlled tools.

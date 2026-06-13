@@ -17,6 +17,18 @@ export const ListRecentContextToolSchema = z.object({
   limit: z.number().int().min(1).max(20).default(8)
 });
 
+export const ListRecentOwnerConversationsToolSchema = z.object({
+  reason: z.string().min(1).optional(),
+  limit: z.number().int().min(1).max(20).default(8)
+});
+
+export const WriteMemoryToolSchema = z.object({
+  slug: z.string().min(1).max(120).regex(/^[a-z0-9][a-z0-9-]*$/),
+  title: z.string().min(1).max(160),
+  appendMarkdown: z.string().min(1),
+  rationale: z.string().min(1)
+});
+
 export const AppendTaskPromptToolSchema = z.object({
   taskId: z.string().min(1),
   prompt: z.string().min(1),
@@ -48,6 +60,8 @@ export const ToolContracts = {
   create_task: CreateTaskToolSchema,
   list_ongoing_tasks: ListOngoingTasksToolSchema,
   list_recent_context: ListRecentContextToolSchema,
+  list_recent_owner_conversations: ListRecentOwnerConversationsToolSchema,
+  write_memory: WriteMemoryToolSchema,
   append_task_prompt: AppendTaskPromptToolSchema,
   propose_outbound_message: ProposeOutboundMessageToolSchema,
   record_observation: RecordObservationToolSchema,

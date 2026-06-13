@@ -214,6 +214,9 @@ h3 {
 }
 
 .form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   align-self: end;
 }
 
@@ -438,6 +441,11 @@ h3 {
   background: #f4f4f4;
   padding: 16px;
   white-space: pre-wrap;
+}
+
+.contact-table td:last-child,
+.contact-table th:last-child {
+  min-width: 180px;
 }
 
 .cds--inline-notification {

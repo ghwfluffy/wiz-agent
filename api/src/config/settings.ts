@@ -58,7 +58,12 @@ const SettingsSchema = z.object({
   inboundMaxUntrustedNotificationsPerHour: z.coerce.number().int().positive().default(10),
   agentIntegrationTokenSecret: z.string().default(""),
   goalsApiBaseUrl: z.string().default(""),
-  budgetApiBaseUrl: z.string().default("")
+  budgetApiBaseUrl: z.string().default(""),
+  qdrantUrl: z.string().default("http://localhost:6333"),
+  ragEmbeddingModel: z.string().default("text-embedding-3-small"),
+  ragEmbeddingDimensions: z.coerce.number().int().positive().default(1536),
+  ragIndexBatchSize: z.coerce.number().int().positive().default(10),
+  mcpServerPort: z.coerce.number().int().positive().default(8010)
 });
 
 export type Settings = z.infer<typeof SettingsSchema>;
@@ -117,7 +122,12 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     inboundMaxUntrustedNotificationsPerHour: env.INBOUND_MAX_UNTRUSTED_NOTIFICATIONS_PER_HOUR,
     agentIntegrationTokenSecret: env.AGENT_INTEGRATION_TOKEN_SECRET,
     goalsApiBaseUrl: env.GOALS_API_BASE_URL,
-    budgetApiBaseUrl: env.BUDGET_API_BASE_URL
+    budgetApiBaseUrl: env.BUDGET_API_BASE_URL,
+    qdrantUrl: env.QDRANT_URL,
+    ragEmbeddingModel: env.RAG_EMBEDDING_MODEL,
+    ragEmbeddingDimensions: env.RAG_EMBEDDING_DIMENSIONS,
+    ragIndexBatchSize: env.RAG_INDEX_BATCH_SIZE,
+    mcpServerPort: env.MCP_SERVER_PORT
   });
   if (settings.appEnv === "production" && settings.postgresPassword === "agent_dev_password") {
     throw new Error("Unsafe production configuration values: POSTGRES_PASSWORD");

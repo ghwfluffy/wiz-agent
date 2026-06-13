@@ -169,7 +169,7 @@ describe("home view", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ events: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ senders: [] }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ senders: [{ id: "sender-1", address: "news@example.test", status: "newsletter", createdAt: "", updatedAt: "" }] }) })
       .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [] }) })
       .mockResolvedValueOnce({
         ok: true,
@@ -265,44 +265,112 @@ describe("home view", () => {
       createdAt: "",
       updatedAt: ""
     };
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          authenticated: true,
-          user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ events: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ senders: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [] }) })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          fastModel: "gpt-5-mini",
-          smartModel: "gpt-5",
-          orchestratorModel: "gpt-5",
-          repairModel: "gpt-5-mini",
-          maxToolCalls: 10,
-          maxRuntimeSec: 120,
-          repairAttemptLimit: 1
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [document] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [document] }) });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [document] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [{ id: "sender-1", address: "news@example.test", status: "newsletter", createdAt: "", updatedAt: "" }] }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/admin/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const { wrapper } = await mountHome("/?tab=memory");
     await flushPromises();
 
     expect(wrapper.get("#tab-memory").attributes("aria-selected")).toBe("true");
+    expect(wrapper.text()).toContain("Trusted contacts");
+    expect(wrapper.text()).toContain("news@example.test");
     expect(wrapper.text()).toContain("Newsletter Preferences");
     expect(wrapper.text()).toContain("newsletter-preferences");
     expect(wrapper.text()).toContain("Useful security writeups");
+  });
+
+  it("manages trusted contacts from the memory tab", async () => {
+    let senderState = [{ id: "sender-1", address: "owner@example.test", status: "owner", createdAt: "", updatedAt: "" }];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/senders/friend%40example.test") && init?.method === "PUT") {
+        senderState = [{ id: "sender-2", address: "friend@example.test", status: "trusted", createdAt: "", updatedAt: "" }];
+        return { ok: true, json: async () => ({ senders: senderState }) };
+      }
+      if (url.includes("/senders/friend%40example.test") && init?.method === "DELETE") {
+        senderState = [];
+        return { ok: true, json: async () => ({ senders: senderState }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: senderState }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/admin/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    const { wrapper } = await mountHome("/?tab=memory");
+    await flushPromises();
+
+    await wrapper.get("#memory-sender-address").setValue("friend@example.test");
+    await wrapper.get("#memory-sender-status").setValue("trusted");
+    await wrapper.get("form.contact-form").trigger("submit");
+    await flushPromises();
+
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/senders/friend%40example.test"))).toBe(true);
+    expect(wrapper.text()).toContain("friend@example.test");
+
+    const removeButton = wrapper.findAll("button").find((button) => button.text() === "Remove");
+    expect(removeButton).toBeTruthy();
+    await removeButton!.trigger("click");
+    await flushPromises();
+
+    const deleteCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/senders/friend%40example.test") && (call[1] as RequestInit | undefined)?.method === "DELETE");
+    expect(deleteCall).toBeTruthy();
   });
 
   it("shows IMAP test failures from the settings tab", async () => {

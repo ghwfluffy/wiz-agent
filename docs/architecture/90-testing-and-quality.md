@@ -59,9 +59,15 @@ Current tests cover:
 - owner-contact backed untrusted sender review notification queueing.
 - owner SMS sender-review replies for newsletter trust, one-time review, and
   blocking.
-- trusted newsletter digest task queueing with owner preference memory.
+- trusted newsletter knowledge ingestion without immediate digest task queueing.
+- trusted non-owner sender memory integration without owner-command tool
+  routing.
+- owner-message memory writes through the controlled agent tool path.
+- recurring daily newsletter synthesis and three-hour autonomous wake task
+  scheduling with durable schedule rationale.
 - newsletter preference memory writes from explicit owner messages.
-- memory document API and Memory tab rendering.
+- personal-profile memory injection into future owner prompts.
+- memory document API, Memory tab rendering, and trusted-contact management.
 - owner reply tool contract without model-selected recipients.
 - outbound fail-closed recipient checks and raw owner mobile gateway mapping.
 - outbox listing, status updates, SMTP queue delivery, and fail-closed outbound

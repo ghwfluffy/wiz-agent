@@ -894,6 +894,19 @@ export function createPostgresStore(pool: Pool): AgentStore {
       await recordAudit(pool, context, "sender.status.set", "sender", address, { status });
     },
 
+    async deleteSender(context, address) {
+      const result = await pool.query(
+        `DELETE FROM senders
+         WHERE user_id = $1 AND lower(address) = lower($2)`,
+        [context.userId, address]
+      );
+      const deleted = Number(result.rowCount ?? 0) > 0;
+      if (deleted) {
+        await recordAudit(pool, context, "sender.status.delete", "sender", address, {});
+      }
+      return deleted;
+    },
+
     async recordInboundMessage(context, input: InboundMessageInput, classification: SenderClassification) {
       const existing = await pool.query(
         `SELECT * FROM messages
@@ -1497,6 +1510,14 @@ export function createMemoryStore(): AgentStore {
         updatedAt: now
       });
       pushAudit(context, "sender.status.set", "sender", address, { status });
+    },
+    async deleteSender(context, address) {
+      const key = `${context.userId}:${address.toLowerCase()}`;
+      const deleted = senderStatuses.delete(key);
+      if (deleted) {
+        pushAudit(context, "sender.status.delete", "sender", address, {});
+      }
+      return deleted;
     },
     async recordInboundMessage(context, input, classification) {
       const key = `${context.userId}:${input.providerMessageId}`;

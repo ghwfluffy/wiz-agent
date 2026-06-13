@@ -84,23 +84,35 @@ Inbound email/SMS/MMS records are source records in `messages` with
 `direction = 'inbound'`. They are listed chronologically through
 `GET /api/v1/messages` for the signed-in user. Sender classification is stored
 in `auth_status`; derived handling state such as `routed_to_agent`,
-`queued_owner_review`, `accepted_newsletter`, `sender_reviewed`, `blocked`, and
-`rate_limited` is stored in `auth_json`.
+`queued_owner_review`, `accepted_newsletter`, `accepted_trusted`,
+`sender_reviewed`, `blocked`, and `rate_limited` is stored in `auth_json`.
 
 Inbox entries are not command history by themselves. Only messages classified as
-`owner` may be handed to the agent path. Newsletter, untrusted, and blocked
-messages remain durable data for review/audit and must not trigger tool calls.
+`owner` may be handed to the owner-command agent path. Newsletter and trusted
+third-party messages may be integrated into knowledge. Untrusted and blocked
+messages remain durable data for review/audit and must not trigger model tool
+calls.
 
 Newsletter sender review is represented as source inbox records plus derived
 handling state. Unknown newsletter-like senders start as `untrusted` and queue
-owner review. Owner replies can mark the sender as `newsletter` or `blocked`, and
-accepted newsletters link to the digest task they created.
+owner review. Owner replies can mark the sender as `newsletter` or `blocked`.
+Accepted newsletters create path-like markdown knowledge records under
+`newsletters/YYYY-MM-DD/*.md`; they do not create immediate digest tasks.
+
+Sender trust rows are explicit user-owned classifications for known addresses.
+They can be created, updated, listed, and deleted through the API and operations
+UI. Deleting a sender row does not delete any historical message or audit data;
+it only removes the explicit classification so future inbound messages from that
+address are classified by the default policy again.
 
 ## Memory Documents
 
 Memory documents are user-owned markdown-like records in `memory_documents`.
 They are readable from the operations UI and API. Writes should remain explicit
-host-owned workflows with audit records; newsletter content must not directly
-modify memory. The `newsletter-preferences` document stores owner-stated
-newsletter interests and style preferences that are injected into later
-newsletter digest tasks.
+host-owned workflows or controlled model/MCP tool calls with audit records.
+Owner messages can update durable memory when the agent chooses the memory write
+tool. Trusted newsletter content is stored as knowledge input under path-like
+memory titles such as `newsletters/2026-06-13/forbes.md`. The
+`newsletter-preferences` document stores owner-stated newsletter interests and
+style preferences that are injected into later scheduled newsletter synthesis
+tasks.

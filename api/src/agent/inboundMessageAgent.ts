@@ -2,6 +2,7 @@ import type { AgentModelClient } from "./modelClient.js";
 import { runAgentTask, type AgentTaskResult } from "./runAgentTask.js";
 import type { Settings } from "../config/settings.js";
 import type { AgentStore, InboundMessageRecord, RequestContext, TaskRecord } from "../domain/types.js";
+import { PERSONAL_PROFILE_SLUG } from "../memory/personalMemory.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 
 export type OwnerInboundAgentResult = AgentTaskResult & {
@@ -74,6 +75,23 @@ async function recentContextSummary(options: {
   ].join("\n");
 }
 
+async function savedMemorySummary(options: {
+  store: AgentStore;
+  context: RequestContext;
+}): Promise<string> {
+  const documents = await Promise.all([
+    options.store.getMemoryDocument(options.context, PERSONAL_PROFILE_SLUG),
+    options.store.getMemoryDocument(options.context, "newsletter-preferences")
+  ]);
+  const lines = documents
+    .filter((document) => document && document.body.trim())
+    .map((document) => [
+      `## ${document!.title}`,
+      document!.body.trim().slice(0, 1800)
+    ].join("\n"));
+  return lines.length > 0 ? lines.join("\n\n") : "No saved personal memory yet.";
+}
+
 function stringFromResult(result: Record<string, unknown> | undefined, key: string): string | undefined {
   const value = result?.[key];
   return typeof value === "string" && value.trim() ? value : undefined;
@@ -88,19 +106,24 @@ export async function buildOwnerInboundPrompt(options: {
     .filter((task) => !["completed", "cancelled", "failed"].includes(task.status))
     .slice(0, 12);
   const recentContext = await recentContextSummary(options);
+  const savedMemory = await savedMemorySummary(options);
 
   return [
     "An owner-classified SMS/MMS/email message arrived. Treat this as an owner instruction because sender policy already classified it as owner.",
-    "Decide whether the message belongs to an existing active task, a recently completed task, a prior message thread, or should create/schedule a new task, queue an outbound reply, call a registered app integration, or only record an observation.",
+    "Decide whether the message should update memory, continue an existing task, create/schedule a new task, queue an outbound reply, call a registered app integration, or only record an observation.",
     "If it belongs to an active or completed task, use append_task_prompt with that task id and set the status back to pending/running as appropriate. If it is new work, use create_task. Use propose_outbound_message for owner replies instead of sending directly.",
+    "If the owner gives durable preferences, facts, schedule rationale, project context, or instructions that should persist, use write_memory. Host code will enforce user scope.",
     "When replying, only provide intent='reply' and the message body. Do not choose a recipient, phone number, email address, or carrier gateway; host code will reply to the verified owner channel.",
-    "The list_ongoing_tasks and list_recent_context tools exist for lookup, but the current active and recent context is included below so you can usually take the next action directly.",
+    "The list_ongoing_tasks, list_recent_context, and list_recent_owner_conversations tools exist for lookup, but the current active and recent context is included below so you can usually take the next action directly.",
     "",
     "Active tasks:",
     activeTasks.length > 0 ? activeTasks.map(activeTaskSummary).join("\n") : "No active tasks.",
     "",
     "Recent memory/context:",
     recentContext,
+    "",
+    "Saved personal memory:",
+    savedMemory,
     "",
     "Inbound message:",
     `message_id: ${options.message.id}`,

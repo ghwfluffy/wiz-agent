@@ -8,7 +8,8 @@ import type {
   RequestContext,
   SenderClassification
 } from "../domain/types.js";
-import { handleOwnerNewsletterReply, queueNewsletterDigestTask } from "./newsletterPolicy.js";
+import { integrateTrustedMessageIntoMemory } from "../memory/personalMemory.js";
+import { appendNewsletterKnowledge, handleOwnerNewsletterReply } from "./newsletterPolicy.js";
 
 export function normalizeAddress(value: string): string {
   const trimmed = value.trim().toLowerCase();
@@ -124,6 +125,9 @@ export async function classifySender(
   if (storedStatus === "newsletter") {
     return "newsletter";
   }
+  if (storedStatus === "trusted") {
+    return "trusted";
+  }
   return "untrusted";
 }
 
@@ -138,6 +142,11 @@ export async function handleInboundMessage(
       runId?: string;
       taskId?: string;
       taskEventId?: string;
+    }>;
+    memoryIntegrator?: (message: InboundMessageRecord) => Promise<{
+      integrated: boolean;
+      updatedSlugs: string[];
+      mode: string;
     }>;
   }
 ): Promise<InboundHandlingResult> {
@@ -164,6 +173,13 @@ export async function handleInboundMessage(
       action: "blocked",
       messageId: recorded.id
     };
+  }
+  if (["newsletter", "trusted"].includes(classification)) {
+    await (options.memoryIntegrator ?? ((message) => integrateTrustedMessageIntoMemory({
+      store: options.store,
+      context: options.context,
+      message
+    })))(recorded);
   }
   if (classification === "owner") {
     const newsletterReply = await handleOwnerNewsletterReply({
@@ -201,22 +217,30 @@ export async function handleInboundMessage(
       agentRunId: agentResult?.runId
     };
   }
+  if (classification === "trusted") {
+    await options.store.updateInboundMessageHandling(options.context, recorded.id, {
+      action: "accepted_trusted"
+    });
+    return {
+      classification,
+      action: "accepted_trusted",
+      messageId: recorded.id
+    };
+  }
   if (classification === "newsletter") {
-    const task = await queueNewsletterDigestTask({
+    await appendNewsletterKnowledge({
       store: options.store,
       context: options.context,
       message: recorded,
       reason: "trusted_newsletter"
     });
     await options.store.updateInboundMessageHandling(options.context, recorded.id, {
-      action: "accepted_newsletter",
-      taskId: task.id
+      action: "accepted_newsletter"
     });
     return {
       classification,
       action: "accepted_newsletter",
-      messageId: recorded.id,
-      taskId: task.id
+      messageId: recorded.id
     };
   }
   if (!options.rateLimiter.allow(options.message.fromAddr)) {

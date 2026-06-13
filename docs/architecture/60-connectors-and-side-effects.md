@@ -18,8 +18,11 @@ any agent/tool path:
 
 - `owner`: configured owner email/SMS/MMS addresses. Owner messages may route to
   the agent.
-- `newsletter`: explicitly trusted newsletter senders. Newsletter content may be
-  summarized or ingested, but it is not treated as owner instructions.
+- `newsletter`: explicitly trusted newsletter senders. Newsletter content is
+  ingested as knowledge, but it is not treated as owner instructions and must
+  not trigger immediate outbound messages.
+- `trusted`: explicitly trusted non-owner senders. Trusted content may be
+  integrated into knowledge, but it must not trigger owner-command tools.
 - `untrusted`: every unknown sender. Untrusted content must not trigger tool
   calls. The deterministic host records the message and queues a short
   conversational owner-review notification instead. Review notifications use
@@ -36,25 +39,28 @@ sender as a newsletter, `NO` to block it, or `ONCE` to process only that message
 Those replies are parsed by host code against the most recent pending sender
 review from the last 48 hours. Host code, not the model, updates sender trust.
 
-Trusted newsletter messages queue a newsletter-review task. The task prompt
-treats newsletter content as untrusted data, includes the owner's saved
-newsletter preferences, and asks the agent to extract only genuinely interesting
-items. If there is something worth sending, the task should use the owner-reply
-outbox tool and keep the digest concise, useful, and quippy. If nothing is worth
-interrupting the owner about, the task should record an observation instead.
-Owner `ONCE` replies queue the same digest task without trusting future messages.
-Owner `YES` replies mark the sender as `newsletter` and queue the digest task for
-the reviewed message. Owner `NO` replies mark the sender as `blocked`.
+Trusted newsletter messages are appended to newsletter knowledge using a
+path-like markdown memory title such as `newsletters/2026-06-13/forbes.md`.
+The immediate inbound path stops after ingestion. Owner `ONCE` replies ingest
+only the reviewed message without trusting future messages. Owner `YES` replies
+mark the sender as `newsletter` and ingest the reviewed message. Owner `NO`
+replies mark the sender as `blocked`.
+
+Daily newsletter synthesis is a scheduled agent task, not an inbound side
+effect. That task reviews newsletter knowledge and owner newsletter preferences,
+then decides whether to queue a concise owner reply or record that nothing was
+worth interrupting the owner about.
 
 Connectors should call `processInboundMessage`, not the lower-level sender
 policy helper directly. The processor records the message, applies sender
 policy, and for owner-classified messages invokes `runOwnerInboundAgent`. That
-prompt includes current active tasks so the model can decide whether the message
-is a continuation of ongoing work or new work. The model has local tools to list
-ongoing tasks, append a prompt to an existing task, create/schedule a new task,
-queue an outbound message, record an observation, or request an allowed
-cross-app integration action. The host still validates every tool call and
-records the final handling action back on the inbox record.
+prompt includes current active tasks and bounded recent owner context so the
+model can decide whether the message is a continuation of ongoing work or new
+work. The model has local tools to list ongoing tasks, inspect recent owner
+conversations, append a prompt to an existing task, write memory,
+create/schedule a new task, queue an outbound message, record an observation, or
+request an allowed cross-app integration action. The host still validates every
+tool call and records the final handling action back on the inbox record.
 
 Owner SMS/MMS follow-ups often refer to older messages or completed tasks in a
 conversational way. The owner inbound prompt therefore includes bounded recent
@@ -66,10 +72,17 @@ of bounded lookup when the model explicitly needs more context. If an owner
 message refers to completed work, the agent should append to that task and move
 it back to active work instead of creating a duplicate task.
 
-Owner messages that clearly state newsletter preferences, such as what topics to
-prioritize or avoid, are appended to the user-owned `newsletter-preferences`
-memory document. Newsletter content itself must not write memory. Preference
-memory is used as input to later newsletter-review tasks.
+Owner messages can update durable memory through the controlled model tool/MCP
+path. The agent decides whether an owner message contains durable preferences,
+facts, schedule rationale, project context, or task-management guidance, then
+uses the memory write tool. Host code scopes and audits the write. Owner
+messages should not be pre-written to memory before the agent has made that
+decision.
+
+The worker also maintains autonomous scheduled tasks. A daily newsletter task
+reviews the accumulated newsletter knowledge. A three-hour wake task reviews
+long-term memory, active tasks, and schedule rationale so the agent can decide
+whether anything needs action or whether a task should be rescheduled.
 
 The worker polls enabled per-user IMAP connector records and processes unread
 mail in bounded batches. IMAP connector settings live in the database and are
@@ -114,9 +127,13 @@ deterministic review notification after owner contact settings are configured.
 
 The operations UI also has a Memory tab. It lists user-owned memory documents,
 supports searching title, slug, and body text, shows a lightweight heading
-outline, and previews the markdown body. The tab is for inspection/navigation;
-memory writes still come from host-owned workflows such as explicit owner
-preference messages.
+outline, and previews the markdown body. It also exposes trusted-contact
+management for sender classifications because sender trust is operational memory
+the owner needs to inspect and correct while reviewing agent behavior. The
+Memory tab and the Sender tab both edit the same `senders` records; deleting a
+contact removes the explicit classification so the address falls back to normal
+unknown/untrusted handling. Memory document writes still come from host-owned
+workflows such as explicit owner preference messages.
 
 ## Prompt-Injection Controls
 
@@ -126,10 +143,12 @@ Controls:
 
 - sender classification before model calls;
 - no tool calls for untrusted senders;
-- newsletter content is data, not instruction;
+- no owner-command tool calls for newsletter or trusted third-party senders;
+- newsletter content is knowledge input, not instruction;
 - owner commands are the only inbound messages that may request actions;
-- owner-message prompts must include only bounded active-task context and the
-  normalized inbound message, never connector secrets or raw credential refs;
+- owner-message prompts must include only bounded active-task/recent-owner
+  context and the normalized inbound message, never connector secrets or raw
+  credential refs;
 - model prompts must label externally sourced text as untrusted data;
 - raw connector credentials and secret refs are never included in model context;
 - spam/rate limits prevent token burn and owner-notification floods.
@@ -230,9 +249,10 @@ lower-level queue processor also defaults to one message per call so tests,
 manual scripts, and future workers do not accidentally send a large batch.
 
 Sender trust is operator-managed. The API and UI can list sender
-classifications and set a sender to `owner`, `newsletter`, `trusted`,
-`blocked`, or `untrusted`. Sender changes write audit events so future inbound
-behavior can be traced back to an operator decision.
+classifications, set a sender to `owner`, `newsletter`, `trusted`, `blocked`, or
+`untrusted`, and delete an explicit sender classification. Sender changes write
+audit events so future inbound behavior can be traced back to an operator
+decision.
 
 ## MMS Images
 

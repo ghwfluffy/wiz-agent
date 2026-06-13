@@ -653,6 +653,25 @@ export function buildApp(options: AppOptions = {}): Hono {
     return context.json({ senders: await store.listSenders(authContext) });
   });
 
+  app.delete("/api/v1/senders/:address", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const address = decodeURIComponent(context.req.param("address")).trim().toLowerCase();
+    if (!address) {
+      return context.json(
+        errorPayload("validation_error", "Sender address is required.", authContext.requestId),
+        400
+      );
+    }
+    const deleted = await store.deleteSender(authContext, address);
+    if (!deleted) {
+      return context.json(errorPayload("http_404", "Sender not found.", authContext.requestId), 404);
+    }
+    return context.json({ senders: await store.listSenders(authContext) });
+  });
+
   app.get("/api/v1/admin/audit", async (context) => {
     const authContext = await requireAdmin(context);
     if (authContext instanceof Response) {

@@ -171,6 +171,96 @@ CREATE TABLE IF NOT EXISTS memory_revisions (
   applied_at TIMESTAMPTZ
 );
 
+CREATE TABLE IF NOT EXISTS markdown_documents (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  path TEXT NOT NULL,
+  basename TEXT NOT NULL,
+  title TEXT,
+  markdown TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  version BIGINT NOT NULL DEFAULT 1,
+  index_status TEXT NOT NULL DEFAULT 'pending',
+  indexed_version BIGINT,
+  indexed_content_hash TEXT,
+  indexed_at TIMESTAMPTZ,
+  deleted_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, path)
+);
+
+CREATE TABLE IF NOT EXISTS markdown_sections (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  document_id TEXT NOT NULL REFERENCES markdown_documents(id) ON DELETE CASCADE,
+  document_version BIGINT NOT NULL,
+  section_id TEXT NOT NULL,
+  parent_section_id TEXT,
+  heading TEXT NOT NULL,
+  heading_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+  level INTEGER NOT NULL,
+  line_start INTEGER NOT NULL,
+  line_end INTEGER NOT NULL,
+  content_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, document_id, document_version, section_id)
+);
+
+CREATE TABLE IF NOT EXISTS markdown_document_chunks (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  document_id TEXT NOT NULL REFERENCES markdown_documents(id) ON DELETE CASCADE,
+  document_version BIGINT NOT NULL,
+  section_id TEXT,
+  heading_path JSONB NOT NULL DEFAULT '[]'::jsonb,
+  chunk_index INTEGER NOT NULL,
+  content TEXT NOT NULL,
+  content_hash TEXT NOT NULL,
+  qdrant_point_id TEXT NOT NULL,
+  qdrant_collection TEXT NOT NULL,
+  embedding_model TEXT NOT NULL,
+  embedding_dimensions INTEGER NOT NULL,
+  indexed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, document_id, chunk_index),
+  UNIQUE (qdrant_point_id)
+);
+
+CREATE TABLE IF NOT EXISTS rag_index_jobs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  document_id TEXT NOT NULL,
+  requested_version BIGINT,
+  requested_content_hash TEXT,
+  job_type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  available_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  started_at TIMESTAMPTZ,
+  completed_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS rag_user_indexes (
+  user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  qdrant_collection TEXT NOT NULL UNIQUE,
+  collection_exists BOOLEAN NOT NULL DEFAULT false,
+  last_collection_check_at TIMESTAMPTZ,
+  last_reconciliation_started_at TIMESTAMPTZ,
+  last_reconciliation_completed_at TIMESTAMPTZ,
+  expected_document_count BIGINT NOT NULL DEFAULT 0,
+  expected_chunk_count BIGINT NOT NULL DEFAULT 0,
+  qdrant_point_count BIGINT,
+  health_status TEXT NOT NULL DEFAULT 'unknown',
+  last_error TEXT,
+  embedding_model TEXT NOT NULL DEFAULT 'text-embedding-3-small',
+  embedding_dimensions INTEGER NOT NULL DEFAULT 1536,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS outbound_messages (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -273,4 +363,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_tasks_user_status_due ON tasks(user_id, status, due_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_user_created ON audit_log(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_user_started ON agent_runs(user_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_markdown_documents_user_path ON markdown_documents(user_id, path);
+CREATE INDEX IF NOT EXISTS idx_markdown_sections_document_version ON markdown_sections(document_id, document_version);
+CREATE INDEX IF NOT EXISTS idx_rag_index_jobs_status_available ON rag_index_jobs(status, available_at, created_at);
 `;

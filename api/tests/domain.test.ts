@@ -314,6 +314,23 @@ describe("domain and user ownership APIs", () => {
         })
       ]
     });
+
+    const deleted = await app.request("/api/v1/senders/newsletter%40example.test", {
+      method: "DELETE",
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(deleted.status).toBe(200);
+    await expect(deleted.json()).resolves.toMatchObject({ senders: [] });
+
+    const missingDelete = await app.request("/api/v1/senders/newsletter%40example.test", {
+      method: "DELETE",
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(missingDelete.status).toBe(404);
   });
 
   it("lists and reads memory documents for the current user", async () => {

@@ -47,7 +47,7 @@ export type TaskEventRecord = {
 
 export type SenderStatus = "owner" | "newsletter" | "trusted" | "blocked" | "untrusted";
 
-export type SenderClassification = "owner" | "newsletter" | "untrusted" | "blocked";
+export type SenderClassification = "owner" | "newsletter" | "trusted" | "untrusted" | "blocked";
 
 export type SenderRecord = {
   id: string;
@@ -101,7 +101,14 @@ export type OutboundMessageRecord = OutboundMessageInput & {
 
 export type InboundHandlingResult = {
   classification: SenderClassification;
-  action: "routed_to_agent" | "queued_owner_review" | "accepted_newsletter" | "blocked" | "rate_limited" | "sender_reviewed";
+  action:
+    | "routed_to_agent"
+    | "queued_owner_review"
+    | "accepted_newsletter"
+    | "accepted_trusted"
+    | "blocked"
+    | "rate_limited"
+    | "sender_reviewed";
   messageId?: string;
   taskId?: string;
   taskEventId?: string;
@@ -263,6 +270,7 @@ export type AgentStore = {
   listSenders(context: RequestContext): Promise<SenderRecord[]>;
   getSenderStatus(context: RequestContext, address: string): Promise<SenderStatus | undefined>;
   setSenderStatus(context: RequestContext, address: string, status: SenderStatus): Promise<void>;
+  deleteSender(context: RequestContext, address: string): Promise<boolean>;
   recordInboundMessage(
     context: RequestContext,
     input: InboundMessageInput,

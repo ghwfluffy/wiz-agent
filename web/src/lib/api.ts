@@ -49,7 +49,7 @@ export type InboundMessage = {
   bodyText: string;
   receivedAt?: string | null;
   source?: string | null;
-  classification: "owner" | "newsletter" | "untrusted" | "blocked";
+  classification: "owner" | "newsletter" | "trusted" | "untrusted" | "blocked";
   handlingAction: string | null;
   taskId: string | null;
   taskEventId: string | null;
@@ -247,6 +247,11 @@ export const api = {
     return request<{ senders: Sender[] }>(`/senders/${encodeURIComponent(address)}`, {
       method: "PUT",
       body: JSON.stringify({ status })
+    });
+  },
+  deleteSender(address: string): Promise<{ senders: Sender[] }> {
+    return request<{ senders: Sender[] }>(`/senders/${encodeURIComponent(address)}`, {
+      method: "DELETE"
     });
   },
   getAiConfig(): Promise<AiConfig> {
