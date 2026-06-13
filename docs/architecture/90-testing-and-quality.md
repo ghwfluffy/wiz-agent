@@ -73,6 +73,10 @@ Current tests cover:
 - owner feedback tool validation, MCP execution, monthly markdown writes under
   `/assistant/feedback/`, audit/RAG enqueueing, prompt guidance for inconsistent
   corrections, and no automatic preference rewrite from feedback capture.
+- assistant decision-ledger writes under `/assistant/decisions/YYYY-MM.md` for
+  outbound proposals, cross-app approvals, scheduled quiet/acted/failure
+  outcomes, linked ids, duplicate-safe markers, user scoping, audit, and RAG
+  enqueueing.
 - recurring newsletter interest check and three-hour autonomous wake task
   scheduling with durable schedule rationale.
 - scheduled memory quality review task scheduling, bounded prompt context from

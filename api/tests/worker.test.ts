@@ -342,6 +342,13 @@ describe("worker loop", () => {
       expect.objectContaining({ eventType: "task.schedule_rationale_recorded" }),
       expect.objectContaining({ eventType: "scheduled_task.outcome" })
     ]));
+    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
+    expect(ledger).toMatchObject({
+      markdown: expect.stringContaining("completed scheduled task with action")
+    });
+    expect(ledger?.markdown).toContain(`taskId: ${task.id}`);
+    expect(ledger?.markdown).toContain("Stayed quiet: recent newsletter material was routine");
+    expect(ledger?.markdown).toContain("Owner-visible side effect status: tool_or_local_side_effect_recorded");
     expect((await store.listTasks(context)).filter((entry) =>
       entry.title === "Newsletter interest check" &&
       entry.status === "pending" &&
@@ -427,6 +434,15 @@ describe("worker loop", () => {
         })
       })
     ]));
+    const [approval] = await store.listApprovals(context, ["pending"]);
+    const [outbound] = await store.listOutboundMessages(context);
+    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
+    expect(ledger).toMatchObject({
+      markdown: expect.stringContaining("queued owner-visible outbound proposal for approval")
+    });
+    expect(ledger?.markdown).toContain(`approvalId: ${approval.id}`);
+    expect(ledger?.markdown).toContain(`outboundMessageId: ${outbound.id}`);
+    expect(ledger?.markdown).toContain("Owner-visible side effect status: approval_required:queued_approval");
   });
 
   it("builds a self-review prompt with activity and preference-memory guidance", async () => {
@@ -814,6 +830,9 @@ describe("worker loop", () => {
     });
     const document = await store.getMarkdownDocument(context, "/tasks/outcomes/2026-06.md");
     expect(document?.markdown).toContain("- Failure reason: model unavailable");
+    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
+    expect(ledger?.markdown).toContain("recorded scheduled task failure");
+    expect(ledger?.markdown).toContain("model unavailable");
   });
 
   it("preserves split and follow-up source task links in outcome memory", async () => {

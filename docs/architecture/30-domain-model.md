@@ -141,6 +141,18 @@ preferences, newsletter preferences, list memory, task policy, or capability
 guidance; those mutations must happen through a separate controlled tool with
 rationale.
 
+Assistant decisions are durable host-written source notes. Meaningful
+autonomous/tool paths append compact entries under
+`/assistant/decisions/YYYY-MM.md` with a deterministic hidden
+`assistant-decision` marker, timestamp, trigger/source, action chosen,
+alternative/deferred action when known, context summary, rationale, linked
+run/task/tool/message/outbox/approval/action ids, and owner-visible side effect
+status. The ledger is generated from existing task, run, tool-call, message,
+approval, and markdown records; it must not make a second model call just to
+explain a decision. Decision files are ordinary user-scoped markdown documents,
+so writes are audited, parsed into sections, and queued for RAG indexing through
+the existing markdown store behavior.
+
 Inbound owner messages that the agent associates with a task also record
 `message.inbound.assigned` on that task. The inbox record stores the task id,
 task event id, agent run id, outbound review id where applicable, and handling

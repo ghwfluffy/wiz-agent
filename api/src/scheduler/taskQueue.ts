@@ -12,6 +12,7 @@ import {
 } from "./autonomousTasks.js";
 import { executeApprovedCrossAppApprovals } from "./approvalExecutor.js";
 import { recordTaskOutcomeMemory } from "../memory/taskOutcomeMemory.js";
+import { recordScheduledTaskDecision } from "../memory/decisionLedger.js";
 import { runtimeSafetyPolicy } from "../security/safetyPolicy.js";
 
 export async function claimDueTasks(options: {
@@ -93,12 +94,31 @@ export async function daemonOnce(options: {
             failure_message: result.failureMessage ?? null,
             summary: "Scheduled task run failed; recurrence will still be scheduled."
           });
+          await recordScheduledTaskDecision({
+            store: options.store,
+            context: options.context,
+            taskId: task.id,
+            runId: result.runId || null,
+            outcome: "failed",
+            toolName: result.toolName ?? null,
+            failureMessage: result.failureMessage ?? null,
+            now: options.now
+          });
         } else {
           const outcome = result.sideEffect && result.sideEffect !== "none" ? "acted" : "observed";
           await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.outcome", {
             outcome,
             tool_name: result.toolName ?? null,
             summary: `Scheduled task outcome: ${outcome}.`
+          });
+          await recordScheduledTaskDecision({
+            store: options.store,
+            context: options.context,
+            taskId: task.id,
+            runId: result.runId,
+            outcome,
+            toolName: result.toolName ?? null,
+            now: options.now
           });
         }
         await recordTaskOutcomeMemory({
@@ -116,6 +136,14 @@ export async function daemonOnce(options: {
         await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.failed", {
           failure_message: error instanceof Error ? error.message : String(error),
           summary: "Scheduled task run failed; recurrence will still be scheduled."
+        });
+        await recordScheduledTaskDecision({
+          store: options.store,
+          context: options.context,
+          taskId: task.id,
+          outcome: "failed",
+          failureMessage: error instanceof Error ? error.message : String(error),
+          now: options.now
         });
         await recordTaskOutcomeMemory({
           store: options.store,

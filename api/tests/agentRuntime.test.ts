@@ -10,6 +10,7 @@ import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
 import { buildApp } from "../src/http/app.js";
 import { buildCapabilityContext, getIntegrationAction, listAppCapabilities } from "../src/integrations/capabilityRegistry.js";
+import { recordDecisionLedgerForToolCall } from "../src/memory/decisionLedger.js";
 import { PERSONAL_PROFILE_SLUG } from "../src/memory/personalMemory.js";
 import { buildMcpApp } from "../src/mcp/server.js";
 import { validateOrRepairToolCall } from "../src/tools/validator.js";
@@ -398,6 +399,127 @@ describe("agent task execution", () => {
         })
       })
     ]);
+  });
+
+  it("records cross-app approval decisions in the monthly decision ledger", async () => {
+    const { context, store } = await testContext();
+
+    const result = await runAgentTask({
+      context,
+      store,
+      toolClient: new LocalToolClient(),
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "create_goal",
+            arguments: {
+              goalType: "checklist",
+              title: "Ship phase 03",
+              startDate: "2026-06-13",
+              userIntentSummary: "Create a goal for finishing the decision ledger phase."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Create a goal."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "accepted",
+      executionResult: expect.objectContaining({
+        approval_required: true,
+        action_id: "goals.create_goal"
+      })
+    });
+    const [approval] = await store.listApprovals(context, ["pending"]);
+    const [toolCall] = await store.listToolCalls(context);
+    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
+    expect(ledger).toMatchObject({
+      userId: context.userId,
+      markdown: expect.stringContaining("queued cross-app write approval")
+    });
+    expect(ledger?.markdown).toContain(`approvalId: ${approval.id}`);
+    expect(ledger?.markdown).toContain(`toolCallId: ${toolCall.id}`);
+    expect(ledger?.markdown).toContain("actionId: goals.create_goal");
+    await expect(store.getMarkdownIndexStatus(context, "/assistant/decisions")).resolves.toEqual([
+      expect.objectContaining({
+        path: "/assistant/decisions/2026-06.md",
+        pendingJobs: 1
+      })
+    ]);
+  });
+
+  it("does not duplicate a decision ledger entry for the same persisted tool call", async () => {
+    const { context, store } = await testContext();
+    const toolCall = await store.recordToolCall(context, {
+      runId: null,
+      toolName: "record_observation",
+      status: "accepted",
+      arguments: {
+        summary: "Stayed quiet because there was nothing useful to do.",
+        source: "unit-test"
+      },
+      result: {
+        accepted: true,
+        side_effect_executed: false,
+        side_effect: "none",
+        execution: {
+          recorded: true,
+          source: "unit-test",
+          summary: "Stayed quiet because there was nothing useful to do."
+        }
+      }
+    });
+
+    await recordDecisionLedgerForToolCall({
+      store,
+      context,
+      toolCall,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+    await recordDecisionLedgerForToolCall({
+      store,
+      context,
+      toolCall,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+
+    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
+    expect(ledger?.markdown.match(new RegExp(`assistant-decision:tool-call:${toolCall.id}`, "g"))).toHaveLength(1);
+  });
+
+  it("does not claim no-op accepted tool calls wrote decision side effects", async () => {
+    const { context, store } = await testContext();
+    const toolCall = await store.recordToolCall(context, {
+      runId: null,
+      toolName: "write_file",
+      status: "accepted",
+      arguments: {
+        path: "/assistant/self-review/2026-06-13.md",
+        content: "# Self Review",
+        rationale: "Write a self-review note."
+      },
+      result: {
+        accepted: true,
+        side_effect_executed: false,
+        side_effect: "none",
+        execution: {
+          code: "conflict",
+          path: "/assistant/self-review/2026-06-13.md"
+        }
+      }
+    });
+
+    await expect(recordDecisionLedgerForToolCall({
+      store,
+      context,
+      toolCall,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    })).resolves.toMatchObject({ wrote: false, reason: "not_meaningful" });
+    await expect(store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md")).resolves.toBeUndefined();
   });
 
   it("keeps the local tool client as a deterministic compatibility fallback", async () => {

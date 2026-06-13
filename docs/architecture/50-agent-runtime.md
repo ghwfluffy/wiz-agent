@@ -291,6 +291,23 @@ summary of the model response, run completion or failure, and accepted or
 rejected tool-call outcomes. These task events are for the owner-facing task
 modal; audit logs remain the broader operational record.
 
+Accepted meaningful tool calls also write deterministic decision-ledger entries
+under `/assistant/decisions/YYYY-MM.md` after the host records the tool-call
+row. The ledger covers owner-visible outbound proposals, owner clarification
+requests, cross-app approval requests, task schedule/status changes, task
+splits/follow-ups/waiting state, assistant self-review and memory-review note
+writes, owner feedback capture, list mutations, new tasks, and explicit
+observations/no-action choices. Entries link the run id, tool-call id, task or
+task-event ids, markdown path, outbound message id, approval id, and registered
+app action id when those records exist.
+
+Scheduled worker outcomes write a separate decision entry after
+`scheduled_task.outcome` or `scheduled_task.failed` is recorded. This lets the
+owner ask why a newsletter check stayed quiet, why a three-hour wake acted or
+observed, or why a self-review/memory-review task failed. These entries are
+derived from persisted task, event, run, and tool state; the runtime does not
+call the model again solely to create ledger prose.
+
 Owner inbound SMS/MMS/email handling uses the same runtime boundary. After
 sender policy classifies a message as `owner`, host code builds an inbound
 prompt that includes bounded active task, recent conversation, and saved memory

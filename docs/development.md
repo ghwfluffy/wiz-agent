@@ -107,6 +107,18 @@ indexing. Feedback is a training/review signal only; do not rewrite preference
 files or capability guidance from it unless a separate controlled tool call
 does so with clear rationale.
 
+Meaningful assistant decisions are captured by host code under
+`/assistant/decisions/YYYY-MM.md`. The ledger is written from existing
+run/task/tool/message/approval records after accepted tool calls and scheduled
+worker outcomes, so it should explain why the assistant messaged, stayed quiet,
+requested clarification, queued approval, changed a task schedule/status, or
+recorded self-review/memory-review findings without an extra model call. Inspect
+it through the Memory tab or:
+
+```text
+GET /api/v1/knowledge/files/%2Fassistant%2Fdecisions%2FYYYY-MM.md
+```
+
 Runaway guardrails are configured through host settings and shown in the
 Workers tab / `GET /api/v1/jobs`. Defaults are intentionally conservative loop
 protection: 20 agent runs per user per hour, 10 scheduled agent runs per worker

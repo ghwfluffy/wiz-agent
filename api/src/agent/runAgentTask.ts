@@ -16,6 +16,7 @@ import {
   recordGuardrailExceeded,
   runtimeSafetyPolicy
 } from "../security/safetyPolicy.js";
+import { recordDecisionLedgerForToolCall } from "../memory/decisionLedger.js";
 
 export type AgentTaskRequest = {
   prompt: string;
@@ -217,7 +218,7 @@ export async function runAgentTask(options: {
       };
     }
 
-    await options.store.recordToolCall(options.context, {
+    const toolCall = await options.store.recordToolCall(options.context, {
       runId: run.id,
       toolName: validated.toolName,
       status: "accepted",
@@ -228,6 +229,11 @@ export async function runAgentTask(options: {
         side_effect: execution.sideEffect,
         execution: execution.result
       }
+    });
+    await recordDecisionLedgerForToolCall({
+      store: options.store,
+      context: options.context,
+      toolCall
     });
     await options.store.finishAgentRun(options.context, run.id, "completed");
       return {
