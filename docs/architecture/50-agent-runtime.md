@@ -93,6 +93,7 @@ Current tool contracts:
 - `list_budget_audit_logs`
 - `write_memory`
 - `write_file`
+- `record_owner_feedback`
 - `add_memory_list_item`
 - `list_memory_items`
 - `search_memory_lists`
@@ -171,6 +172,11 @@ Current migrated agent tools:
   is intended for structured markdown memory paths such as scheduled
   self-review notes, while MCP session scoping, path normalization, audit
   events, and RAG indexing remain deterministic host responsibilities.
+- `record_owner_feedback` appends structured owner corrections to
+  `/assistant/feedback/YYYY-MM.md`. It captures correction text, original
+  behavior/context, affected ids or paths, durability, follow-up target, and
+  rationale. It is additive training/review evidence and must not automatically
+  rewrite preference files or capability guidance.
 - Personal memory list tools manage lightweight owner collections under
   `/personal/lists/*.md`. `add_memory_list_item` normalizes loose owner list
   names such as "movie night" to canonical list files, avoids duplicates with

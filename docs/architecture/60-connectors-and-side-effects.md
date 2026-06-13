@@ -65,8 +65,8 @@ model can decide whether the message is a continuation of ongoing work or new
 work. The model has MCP-backed tools to list ongoing tasks, inspect recent owner
 conversations, inspect recent bot activity/contact cadence, append a prompt to
 an existing task, write memory, create/schedule a new task, queue an outbound
-message, record an observation, or request an allowed cross-app integration
-action. The host validates every tool
+message, record owner feedback, record an observation, or request an allowed
+cross-app integration action. The host validates every tool
 call, creates a user/run-scoped MCP session with an explicit tool allowlist, and
 records the final handling action back on the inbox record.
 
@@ -87,6 +87,15 @@ uses the memory write tool. Host code scopes and audits the write. Owner
 messages should not be pre-written to memory before the agent has made that
 decision.
 
+Owner corrections use the same controlled path but are captured with
+`record_owner_feedback` instead of being treated as direct preference rewrites.
+The owner may phrase a correction inconsistently, such as "don't text me this
+early", "that was not a task", or "use my goals app for that". The tool writes
+structured markdown under `/assistant/feedback/YYYY-MM.md`. A separate
+controlled tool call with rationale is required before feedback changes
+communication preferences, newsletter preferences, task policy, list memory, or
+capability guidance.
+
 Conversational memory offload lists use the same controlled model tool/MCP path
 but have their own deterministic tools. When owner language means "save this for
 later" for a lightweight collection, even without exact words like "remember",
@@ -104,9 +113,10 @@ rationale so the agent can decide whether anything needs action or whether a
 task should be rescheduled. A twice-daily assistant self-review task inspects
 recent assistant behavior, owner-contact cadence, pending approvals, failed
 outbound delivery, failed runs, and durable communication preference memory. A
-weekly memory quality review inspects recent memory writes, personal lists,
-task outcomes, newsletter-interest notes, and self-review notes, then writes
-compact curation findings to `/assistant/memory-review/YYYY-MM.md`.
+weekly memory quality review inspects recent memory writes, owner feedback
+signals, personal lists, task outcomes, newsletter-interest notes, and
+self-review notes, then writes compact curation findings to
+`/assistant/memory-review/YYYY-MM.md`.
 The newsletter interest check runs from the schedule, not directly from inbound
 newsletter delivery. It receives newsletter excerpts as trusted knowledge data,
 must still choose a host-approved tool, and can queue an owner message only
@@ -118,8 +128,10 @@ only through MCP tools that require rationale and write task events. Self-review
 writes compact operational notes under `/assistant/self-review/YYYY-MM-DD.md`
 and may update `/assistant/preferences/communication.md` or
 `/assistant/preferences/newsletters.md` only for owner-stated preferences or
-clearly labeled tentative observations. A self-review run is not itself a reason
-to contact the owner; a memory-review run is not itself a reason to contact the
+clearly labeled tentative observations. Self-review and memory-review prompts
+include current `/assistant/feedback/YYYY-MM.md` context as evidence, not as an
+automatic mutation instruction. A self-review run is not itself a reason to
+contact the owner; a memory-review run is not itself a reason to contact the
 owner or silently delete memory. Any outbound message still has to come from a
 separate task or owner instruction and pass the normal approval/outbox path.
 

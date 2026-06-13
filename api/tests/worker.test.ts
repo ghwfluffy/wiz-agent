@@ -464,8 +464,10 @@ describe("worker loop", () => {
     expect(prompt).toContain("internal operational review");
     expect(prompt).toContain("Do not message the owner solely because this review ran");
     expect(prompt).toContain("Use get_recent_bot_activity");
+    expect(prompt).toContain("Review owner feedback signals under /assistant/feedback/");
     expect(prompt).toContain("/assistant/self-review/2026-06-13.md");
     expect(prompt).toContain("/assistant/preferences/communication.md");
+    expect(prompt).toContain("Recent owner feedback signals:");
     expect(prompt).toContain("Communication preferences:");
     expect(prompt).toContain("Preserve uncertainty");
   });
@@ -574,6 +576,10 @@ describe("worker loop", () => {
       markdown: "# Newsletter Interest\n\n- Stayed quiet because material was routine."
     });
     await store.writeMarkdownDocument(context, {
+      path: "/assistant/feedback/2026-06.md",
+      markdown: "# Owner Feedback: 2026-06\n\n## 2026-06-13 communication feedback\n\n- Owner said not to text early."
+    });
+    await store.writeMarkdownDocument(context, {
       path: "/newsletters/2026-06-13/agent-weekly.md",
       markdown: "# Agent Weekly\n\nMentions memory cleanup patterns."
     });
@@ -610,8 +616,11 @@ describe("worker loop", () => {
     expect(prompt).toContain("/assistant/memory-review/2026-06.md");
     expect(prompt).toContain("Existing finding to preserve");
     expect(prompt).toContain("never silently delete memory");
+    expect(prompt).toContain("Recent owner feedback signals:");
+    expect(prompt).toContain("Owner said not to text early.");
     expect(prompt).toContain("Recent markdown writes for memory quality review:");
     expect(prompt).toContain("/personal/profile.md");
+    expect(prompt).toContain("/assistant/feedback/2026-06.md");
     expect(prompt).toContain("/assistant/self-review/2026-06-13.md");
     expect(prompt).toContain("/assistant/newsletter-interest/2026-06.md");
     expect(prompt).toContain("/tasks/outcomes/2026-06.md");

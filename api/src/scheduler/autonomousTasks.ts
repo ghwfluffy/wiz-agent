@@ -90,12 +90,12 @@ async function upsertSchedulerMemory(options: {
     "",
     "## Assistant self-review",
     "",
-    "Purpose: inspect recent assistant behavior, owner contact cadence, delivery failures, pending approvals, and durable communication preferences. The agent writes compact operational findings to `/assistant/self-review/YYYY-MM-DD.md` and updates preference files only when evidence is durable.",
+    "Purpose: inspect recent assistant behavior, owner contact cadence, delivery failures, pending approvals, owner feedback signals, and durable communication preferences. The agent writes compact operational findings to `/assistant/self-review/YYYY-MM-DD.md` and updates preference files only when evidence is durable.",
     "Default cadence: twice daily around 09:00 and 21:00 local/server time.",
     "",
     "## Memory quality review",
     "",
-    "Purpose: inspect recent memory writes, personal lists, task outcomes, newsletter-interest notes, and self-review notes for duplicates, contradictions, stale assumptions, noisy entries, promotion candidates, and cleanup proposals. The agent writes compact findings to `/assistant/memory-review/YYYY-MM.md` without silently deleting memory.",
+    "Purpose: inspect recent memory writes, owner feedback signals, personal lists, task outcomes, newsletter-interest notes, and self-review notes for duplicates, contradictions, stale assumptions, noisy entries, promotion candidates, and cleanup proposals. The agent writes compact findings to `/assistant/memory-review/YYYY-MM.md` without silently deleting memory.",
     "Default cadence: weekly around Sunday 10:00 local/server time.",
     "",
     `Last host schedule reconciliation: ${options.now.toISOString()}`
@@ -205,10 +205,11 @@ function selfReviewPrompt(dueAt: Date): string {
     "This is an internal operational review. Do not message the owner solely because this review ran.",
     "Use get_recent_bot_activity to inspect recent outbound attempts, pending approvals, failed outbound delivery, failed runs, recent owner replies, and contact cadence.",
     "Read communication preferences from long-term memory before drawing conclusions: /assistant/preferences/communication.md and /assistant/preferences/newsletters.md.",
+    "Review owner feedback signals under /assistant/feedback/ as additive evidence, not automatic preference rewrites.",
     `Write compact findings to markdown memory at /assistant/self-review/${datePath}.md using write_file.`,
     "Preserve uncertainty. Distinguish durable owner-stated preferences from tentative observations inferred from behavior.",
     "Update /assistant/preferences/communication.md or /assistant/preferences/newsletters.md only when the owner directly stated a durable preference or evidence is strong enough to label as tentative.",
-    "Summarize loops, repeated failures, approval backlog, whether the assistant has been too noisy or too quiet, and any delivery risk.",
+    "Summarize loops, repeated failures, approval backlog, owner corrections, whether the assistant has been too noisy or too quiet, and any delivery risk.",
     "",
     `Scheduled reason: twice-daily assistant self-review at ${dueAt.toISOString()}.`,
     "Relevant memory areas: /assistant/self-review/, /assistant/preferences/communication.md, /assistant/preferences/newsletters.md, /assistant/notification-policy.md."
@@ -220,14 +221,14 @@ function memoryReviewPrompt(dueAt: Date): string {
   return [
     "You woke up for the memory quality review task.",
     "This is an internal memory-curation review. Do not message the owner solely because this review ran.",
-    "Inspect the host-provided recent memory context for duplicate or near-duplicate list entries, stale assumptions, contradictions between preference files, noisy low-value memory, memory that should be promoted into durable preferences, and memory that needs owner confirmation before cleanup.",
+    "Inspect the host-provided recent memory context for duplicate or near-duplicate list entries, owner feedback signals, stale assumptions, contradictions between preference files, noisy low-value memory, memory that should be promoted into durable preferences, and memory that needs owner confirmation before cleanup.",
     `Write compact additive findings to markdown memory at /assistant/memory-review/${monthPath}.md using write_file.`,
     "If that monthly file already has content in the prompt context, preserve it and add a new dated section or bullets instead of replacing older findings.",
     "Use evidence paths and uncertainty labels. Prefer cleanup proposals with rationale; do not silently delete memory.",
     "Use personal memory list tools only when a concrete mutation is safe, such as archiving an exact duplicate list item with clear evidence. Otherwise record findings for later owner or operator review.",
     "",
     `Scheduled reason: weekly memory quality review at ${dueAt.toISOString()}.`,
-    "Relevant memory areas: /personal/, /personal/lists/, /assistant/, /tasks/outcomes/, /newsletters/, /assistant/newsletter-interest/, /assistant/self-review/."
+    "Relevant memory areas: /personal/, /personal/lists/, /assistant/, /assistant/feedback/, /tasks/outcomes/, /newsletters/, /assistant/newsletter-interest/, /assistant/self-review/."
   ].join("\n");
 }
 
@@ -415,12 +416,14 @@ export async function buildScheduledTaskPrompt(options: {
   const communicationPreferences = await readMemoryExcerpt(options.store, options.context, COMMUNICATION_PREFERENCES_PATH, safety.maxContextExcerptChars);
   const newsletterPreferences = await readMemoryExcerpt(options.store, options.context, NEWSLETTER_PREFERENCES_PATH, safety.maxContextExcerptChars);
   const taskOutcomeMemory = await readMemoryExcerpt(options.store, options.context, taskOutcomeMemoryPath(now), safety.maxContextExcerptChars);
+  const ownerFeedback = await readMemoryExcerpt(options.store, options.context, `/assistant/feedback/${now.toISOString().slice(0, 7)}.md`, safety.maxContextExcerptChars);
   const memoryReviewPath = `/assistant/memory-review/${now.toISOString().slice(0, 7)}.md`;
   const existingMemoryReview = await readMemoryExcerpt(options.store, options.context, memoryReviewPath, safety.maxContextExcerptChars);
   const memoryReviewWrites = options.task.title === MEMORY_REVIEW_TITLE
     ? await recentMarkdownWriteExcerpts(options.store, options.context, [
         "/personal",
         "/assistant",
+        "/assistant/feedback",
         "/tasks/outcomes",
         "/newsletters",
         "/assistant/newsletter-interest"
@@ -459,6 +462,9 @@ export async function buildScheduledTaskPrompt(options: {
     "",
     "Recent task outcome memory:",
     taskOutcomeMemory,
+    "",
+    "Recent owner feedback signals:",
+    ownerFeedback,
     "",
     "Existing monthly memory-review note:",
     existingMemoryReview,

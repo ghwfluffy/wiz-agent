@@ -116,6 +116,14 @@ const memoryListGuidance = [
   "- For indirect recall such as 'what was that Antonio Banderas movie I wanted to watch?' or 'show me project ideas about the house', use search_memory_lists before broad markdown/RAG search and state uncertainty for low-confidence matches."
 ].join("\n");
 
+const ownerFeedbackGuidance = [
+  "Owner feedback signals:",
+  "- When the owner corrects your behavior, wording, timing, memory categorization, task choice, tool choice, schedule, or app choice, record that correction with record_owner_feedback.",
+  "- The owner may use inconsistent wording and may not say feedback, correction, or preference. Examples include 'don't text me this early', 'that was not a task, just remember it', 'I care about infrastructure news, not funding announcements', 'you asked me the same thing twice', and 'use my goals app for that'.",
+  "- Use durability='durable' only when the owner clearly states an ongoing rule or preference. Use durability='tentative' for likely future guidance that needs more evidence. Use durability='one_off' when the correction appears limited to the current situation.",
+  "- Feedback capture is additive review evidence. Do not automatically rewrite communication preferences, newsletter preferences, list memory, task policy, or capability guidance unless a separate controlled tool is selected with clear rationale."
+].join("\n");
+
 export async function buildOwnerInboundPrompt(options: {
   store: AgentStore;
   context: RequestContext;
@@ -131,6 +139,7 @@ export async function buildOwnerInboundPrompt(options: {
     "If it belongs to an active or completed task, use append_task_prompt with that task id and set the status back to pending/running as appropriate. If it is new work, use create_task. Use propose_outbound_message for owner replies instead of sending directly.",
     "If the owner gives durable preferences, facts, schedule rationale, project context, or instructions that should persist, use write_memory. Host code will enforce user scope.",
     memoryListGuidance,
+    ownerFeedbackGuidance,
     "When replying, only provide intent='reply' and the message body. Do not choose a recipient, phone number, email address, or carrier gateway; host code will reply to the verified owner channel.",
     "The list_ongoing_tasks, list_recent_context, and list_recent_owner_conversations tools exist for lookup, but the current active and recent context is included below so you can usually take the next action directly.",
     "",
@@ -172,6 +181,7 @@ export async function buildOwnerWebPrompt(options: {
     "Use propose_outbound_message only when a proactive owner message is useful. Do not choose a recipient, phone number, email address, or carrier gateway; host code resolves the owner destination.",
     "Use memory tools for durable preferences, facts, schedule rationale, project context, or instructions that should persist.",
     memoryListGuidance,
+    ownerFeedbackGuidance,
     "The list_ongoing_tasks, list_recent_context, and list_recent_owner_conversations tools exist for additional bounded lookup.",
     "",
     `Mode: ${options.mode ?? "normal"}`,

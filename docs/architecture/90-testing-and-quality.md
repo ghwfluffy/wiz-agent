@@ -70,6 +70,9 @@ Current tests cover:
 - trusted non-owner sender memory integration without owner-command tool
   routing.
 - owner-message memory writes through the controlled agent tool path.
+- owner feedback tool validation, MCP execution, monthly markdown writes under
+  `/assistant/feedback/`, audit/RAG enqueueing, prompt guidance for inconsistent
+  corrections, and no automatic preference rewrite from feedback capture.
 - recurring newsletter interest check and three-hour autonomous wake task
   scheduling with durable schedule rationale.
 - scheduled memory quality review task scheduling, bounded prompt context from

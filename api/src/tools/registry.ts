@@ -60,6 +60,7 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   list_budget_audit_logs: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   write_memory: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   write_file: { access: "write", risk: "medium", sideEffect: "local_persistence" },
+  record_owner_feedback: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   add_memory_list_item: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   list_memory_items: { access: "read", risk: "low", sideEffect: "none" },
   search_memory_lists: { access: "read", risk: "low", sideEffect: "none" },

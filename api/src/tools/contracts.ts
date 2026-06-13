@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { IntegrationActionIds, IntegrationAppIds } from "../integrations/capabilityRegistry.js";
+import {
+  OWNER_FEEDBACK_DURABILITY,
+  OWNER_FEEDBACK_FOLLOW_UP_TARGETS,
+  OWNER_FEEDBACK_TYPES
+} from "../memory/ownerFeedbackMemory.js";
 
 export const CreateTaskToolSchema = z.object({
   title: z.string().min(1),
@@ -235,6 +240,22 @@ export const WriteFileToolSchema = z.object({
   rationale: z.string().min(1).optional()
 });
 
+const AffectedIdListSchema = z.array(z.string().min(1).max(200)).max(20).default([]);
+
+export const RecordOwnerFeedbackToolSchema = z.object({
+  feedbackType: z.enum(OWNER_FEEDBACK_TYPES),
+  correctionText: z.string().min(1).max(4000),
+  originalBehaviorSummary: z.string().min(1).max(4000),
+  affectedMemoryPaths: z.array(z.string().min(1).max(500).regex(/^\/.*\.md$/)).max(20).default([]),
+  affectedTaskIds: AffectedIdListSchema,
+  affectedToolCallIds: AffectedIdListSchema,
+  affectedMessageIds: AffectedIdListSchema,
+  affectedAppIds: AffectedIdListSchema,
+  durability: z.enum(OWNER_FEEDBACK_DURABILITY),
+  followUpTarget: z.enum(OWNER_FEEDBACK_FOLLOW_UP_TARGETS),
+  rationale: z.string().min(1).max(2000)
+});
+
 const MemoryListPathSchema = z.string().min(1).max(500).regex(/^\/personal\/lists\/[a-z0-9][a-z0-9-]*\.md$/);
 
 export const AddMemoryListItemToolSchema = z.object({
@@ -420,6 +441,7 @@ export const ToolContracts = {
   list_budget_audit_logs: ListBudgetAuditLogsToolSchema,
   write_memory: WriteMemoryToolSchema,
   write_file: WriteFileToolSchema,
+  record_owner_feedback: RecordOwnerFeedbackToolSchema,
   add_memory_list_item: AddMemoryListItemToolSchema,
   list_memory_items: ListMemoryItemsToolSchema,
   search_memory_lists: SearchMemoryListsToolSchema,

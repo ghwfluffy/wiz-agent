@@ -13,6 +13,12 @@ import {
   updateMemoryListItem
 } from "../memory/memoryLists.js";
 import {
+  recordOwnerFeedback,
+  type OwnerFeedbackDurability,
+  type OwnerFeedbackFollowUpTarget,
+  type OwnerFeedbackType
+} from "../memory/ownerFeedbackMemory.js";
+import {
   GuardrailExceededError,
   recordGuardrailExceeded,
   runtimeSafetyPolicy
@@ -601,6 +607,42 @@ export async function executeToolCall(options: {
           version: document.version,
           rationale: options.args.rationale
         }
+      };
+    }
+    case "record_owner_feedback": {
+      const result = await recordOwnerFeedback({
+        store: options.store,
+        context: options.context,
+        runId: options.runId ?? null,
+        input: {
+          feedbackType: options.args.feedbackType as OwnerFeedbackType,
+          correctionText: String(options.args.correctionText),
+          originalBehaviorSummary: String(options.args.originalBehaviorSummary),
+          affectedMemoryPaths: Array.isArray(options.args.affectedMemoryPaths)
+            ? options.args.affectedMemoryPaths.map(String)
+            : [],
+          affectedTaskIds: Array.isArray(options.args.affectedTaskIds)
+            ? options.args.affectedTaskIds.map(String)
+            : [],
+          affectedToolCallIds: Array.isArray(options.args.affectedToolCallIds)
+            ? options.args.affectedToolCallIds.map(String)
+            : [],
+          affectedMessageIds: Array.isArray(options.args.affectedMessageIds)
+            ? options.args.affectedMessageIds.map(String)
+            : [],
+          affectedAppIds: Array.isArray(options.args.affectedAppIds)
+            ? options.args.affectedAppIds.map(String)
+            : [],
+          durability: options.args.durability as OwnerFeedbackDurability,
+          followUpTarget: options.args.followUpTarget as OwnerFeedbackFollowUpTarget,
+          rationale: String(options.args.rationale)
+        }
+      });
+      const conflict = "code" in result;
+      return {
+        executed: !conflict,
+        sideEffect: conflict ? "none" : "local_persistence",
+        result
       };
     }
     case "add_memory_list_item": {

@@ -130,6 +130,17 @@ must not silently delete source memory. Concrete list cleanup can use the
 personal memory list tools only when host validation and clear evidence make
 the mutation safe.
 
+Owner corrections are durable training signals. The `record_owner_feedback`
+tool appends structured entries under `/assistant/feedback/YYYY-MM.md` with
+feedback type, owner correction text, original behavior/context summary,
+affected memory/task/tool/message/app references when available, durability,
+follow-up target, and rationale. Feedback files are ordinary user-scoped
+markdown documents, so writes are audited, parsed into sections, and queued for
+RAG indexing. A feedback entry does not itself rewrite communication
+preferences, newsletter preferences, list memory, task policy, or capability
+guidance; those mutations must happen through a separate controlled tool with
+rationale.
+
 Inbound owner messages that the agent associates with a task also record
 `message.inbound.assigned` on that task. The inbox record stores the task id,
 task event id, agent run id, outbound review id where applicable, and handling

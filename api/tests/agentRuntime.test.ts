@@ -848,6 +848,189 @@ describe("agent task execution", () => {
     expect(prompt).toContain("use search_memory_lists before broad markdown/RAG search");
   });
 
+  it("includes intent-based owner feedback guidance in owner prompts", async () => {
+    const { context, store } = await testContext();
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-feedback-guidance",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Don't text me this early.",
+      source: "sms"
+    }, "owner");
+
+    const prompt = await buildOwnerInboundPrompt({ context, store, message });
+
+    expect(prompt).toContain("Owner feedback signals:");
+    expect(prompt).toContain("record_owner_feedback");
+    expect(prompt).toContain("The owner may use inconsistent wording");
+    expect(prompt).toContain("don't text me this early");
+    expect(prompt).toContain("Feedback capture is additive review evidence.");
+    expect(prompt).toContain("Do not automatically rewrite communication preferences");
+  });
+
+  it("rejects owner feedback records without original context", async () => {
+    const result = await validateOrRepairToolCall(
+      {
+        toolName: "record_owner_feedback",
+        arguments: {
+          feedbackType: "communication",
+          correctionText: "Don't text me this early.",
+          durability: "durable",
+          followUpTarget: "communication_preferences",
+          rationale: "Owner corrected contact timing."
+        }
+      },
+      {
+        modelClient: new MockModelClient(),
+        repairModel: "repair-model",
+        repairAttemptLimit: 0
+      }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.validationErrors.join(" ")).toContain("originalBehaviorSummary");
+    }
+  });
+
+  it("records owner feedback through MCP as monthly markdown with audit and RAG indexing", async () => {
+    const { context, store } = await testContext();
+    const app = buildMcpApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      store
+    });
+    const session = await store.createAgentMcpSession(context, {
+      ttlSeconds: 60,
+      allowedTools: ["record_owner_feedback"]
+    });
+
+    const response = await app.request("/mcp/v1/tools/record_owner_feedback/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        feedbackType: "communication",
+        correctionText: "Don't text me this early.",
+        originalBehaviorSummary: "The assistant proposed an SMS before the owner wanted contact.",
+        affectedMessageIds: ["msg-early"],
+        affectedTaskIds: ["task\nwith newline"],
+        durability: "durable",
+        followUpTarget: "communication_preferences",
+        rationale: "Owner corrected proactive contact timing."
+      })
+    });
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toMatchObject({
+      ok: true,
+      tool: "record_owner_feedback",
+      sideEffect: "local_persistence",
+      result: {
+        path: expect.stringMatching(/^\/assistant\/feedback\/\d{4}-\d{2}\.md$/),
+        feedback_type: "communication",
+        durability: "durable",
+        follow_up_target: "communication_preferences"
+      }
+    });
+    const path = String(body.result.path);
+    await expect(store.getMarkdownDocument(context, path)).resolves.toMatchObject({
+      markdown: expect.stringContaining("Don't text me this early.")
+    });
+    await expect(store.getMarkdownDocument(context, path)).resolves.toMatchObject({
+      markdown: expect.stringContaining("Do not automatically rewrite preferences")
+    });
+    await expect(store.getMarkdownDocument(context, path)).resolves.toMatchObject({
+      markdown: expect.stringContaining("  - task with newline")
+    });
+    await expect(store.listAudit(context, true)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "markdown.write" }),
+      expect.objectContaining({
+        action: "owner_feedback.recorded",
+        details: expect.objectContaining({
+          path,
+          feedback_type: "communication",
+          follow_up_target: "communication_preferences"
+        })
+      }),
+      expect.objectContaining({ action: "mcp.tool.ok" })
+    ]));
+    await expect(store.listRagIndexJobs(context, false, ["pending"])).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ jobType: "index_markdown" })
+    ]));
+  });
+
+  it("routes inconsistent owner correction wording into feedback without rewriting preferences", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const store = createMemoryStore();
+    const app = buildApp({
+      settings,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_owner_feedback",
+            arguments: {
+              feedbackType: "task",
+              correctionText: "That was not a task, just remember it.",
+              originalBehaviorSummary: "The assistant treated an owner memory offload as task creation.",
+              affectedTaskIds: ["task-wrong-kind"],
+              durability: "tentative",
+              followUpTarget: "list_memory",
+              rationale: "Owner corrected categorization of memory offload versus task work."
+            }
+          }
+        ]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: "That was not a task, just remember it.",
+        mode: "normal"
+      })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      selectedAction: "record_owner_feedback",
+      toolStatus: "accepted",
+      toolResult: {
+        path: expect.stringMatching(/^\/assistant\/feedback\/\d{4}-\d{2}\.md$/),
+        follow_up_target: "list_memory"
+      }
+    });
+    const session = await store.getSession(cookie.match(/agent_session=([^;]+)/)?.[1]);
+    expect(session).toBeTruthy();
+    const context = {
+      userId: session!.user.id,
+      actorType: "admin" as const,
+      permissions: ["user", "admin"],
+      requestId: "web-feedback-prompt-test",
+      session: session!
+    };
+    const feedbackFiles = await store.listMarkdownDirectory(context, "/assistant/feedback");
+    expect(feedbackFiles).toHaveLength(1);
+    await expect(store.getMarkdownDocument(context, feedbackFiles[0]!.path)).resolves.toMatchObject({
+      markdown: expect.stringContaining("That was not a task, just remember it.")
+    });
+    await expect(store.getMarkdownDocument(context, "/assistant/preferences/communication.md")).resolves.toBeUndefined();
+    await expect(store.getMarkdownDocument(context, "/assistant/preferences/newsletters.md")).resolves.toBeUndefined();
+  });
+
   it("routes alternate owner list wording through personal memory list tools", async () => {
     const settings = loadSettings({
       APP_ENV: "test",

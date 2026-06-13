@@ -99,6 +99,14 @@ sent as `contextTaskId`; selected memory paths and recent assistant-mailbox
 messages are folded into the prompt text as operator-selected context. Do not
 add browser-side access to write/action MCP tools for this workflow.
 
+Owner corrections should be captured through `record_owner_feedback` when the
+owner corrects behavior, wording, timing, memory categorization, task/tool/app
+choice, or schedule. The tool writes structured markdown under
+`/assistant/feedback/YYYY-MM.md`, audits the write, and queues normal RAG
+indexing. Feedback is a training/review signal only; do not rewrite preference
+files or capability guidance from it unless a separate controlled tool call
+does so with clear rationale.
+
 Runaway guardrails are configured through host settings and shown in the
 Workers tab / `GET /api/v1/jobs`. Defaults are intentionally conservative loop
 protection: 20 agent runs per user per hour, 10 scheduled agent runs per worker
@@ -135,11 +143,11 @@ The memory quality review runs around Sunday 10:00 local/server time. Its
 prompt includes bounded recent markdown writes under `/personal/`,
 `/assistant/`, `/tasks/outcomes/`, `/newsletters/`, and
 `/assistant/newsletter-interest/`, plus `/personal/lists/*.md` summaries,
-recent task outcome memory, recent self-review notes, and the current monthly
-review note. Findings are written through the normal MCP-backed `write_file`
-tool to `/assistant/memory-review/YYYY-MM.md`. The review should add compact
-evidence-backed findings and cleanup proposals, not silently delete memory or
-message the owner just because the review ran.
+recent task outcome memory, recent owner feedback signals, recent self-review
+notes, and the current monthly review note. Findings are written through the
+normal MCP-backed `write_file` tool to `/assistant/memory-review/YYYY-MM.md`.
+The review should add compact evidence-backed findings and cleanup proposals,
+not silently delete memory or message the owner just because the review ran.
 
 Live connector config can be seeded from ignored files for initial bootstrap or
 repair with:
