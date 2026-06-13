@@ -72,6 +72,10 @@ Current tests cover:
 - owner-message memory writes through the controlled agent tool path.
 - recurring newsletter interest check and three-hour autonomous wake task
   scheduling with durable schedule rationale.
+- scheduled memory quality review task scheduling, bounded prompt context from
+  recent memory/list/outcome/self-review notes, monthly review-note writes
+  through the controlled tool path, no owner messages from review alone, and
+  next-review scheduling after failed runs.
 - compact task outcome markdown memory for completed/failed work, duplicate
   prevention, source-task links, user scoping, RAG job enqueueing, and scheduled
   prompt inclusion.

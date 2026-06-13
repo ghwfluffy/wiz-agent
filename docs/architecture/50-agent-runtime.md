@@ -335,6 +335,32 @@ observation. Self-review runs must not queue owner messages unless a separate
 task or owner instruction independently justifies that contact through the
 normal approval/outbox path.
 
+## Scheduled Memory Quality Review
+
+The worker maintains a `Memory quality review` recurring task for each active
+user it reconciles. The default cadence is weekly around Sunday 10:00
+local/server time. The task is separate from autonomous wake and self-review so
+operators can distinguish task/schedule work, operational behavior review, and
+long-term memory curation.
+
+Before a memory-review run, host code assembles bounded user-scoped context
+from recent markdown writes under `/personal/`, `/assistant/`,
+`/tasks/outcomes/`, `/newsletters/`, and
+`/assistant/newsletter-interest/`; personal list summaries under
+`/personal/lists/*.md`; recent task outcome memory; recent self-review memory;
+and the current monthly review note. The prompt asks the agent to identify
+duplicate or near-duplicate list entries, stale assumptions, contradictions,
+noisy low-value memory, promotion candidates for preference files, and cleanup
+items that require owner confirmation.
+
+Findings are written through the normal MCP-backed `write_file` tool to
+`/assistant/memory-review/YYYY-MM.md`. If the monthly file already exists, the
+prompt tells the agent to preserve prior content and add a dated section or
+bullets. The review prefers additive findings and cleanup proposals; it must
+not silently delete memory. Personal memory list tools may be used only for
+concrete safe mutations such as archiving an exact duplicate with clear
+evidence. A memory-review run is not itself a reason to contact the owner.
+
 ## MCP Memory Filesystem
 
 The Phase 01 MCP boundary exposes long-term memory as a virtual markdown
@@ -390,7 +416,9 @@ two genuinely interesting discoveries. This is not a rigid digest; staying
 quiet and recording the rationale is a successful outcome. A three-hour
 autonomous wake task reviews memory, active tasks, and schedule rationale so the
 agent can decide whether to act or adjust future work timing through controlled
-tools. Before each recurring scheduled run, host code composes a fresh prompt
+tools. A weekly memory quality review inspects durable memory and writes
+curation findings under `/assistant/memory-review/YYYY-MM.md`. Before each
+recurring scheduled run, host code composes a fresh prompt
 from active tasks, `/assistant/schedule.md`, `/tasks/schedule-rationale.md`,
 `/assistant/notification-policy.md`, `/assistant/preferences/communication.md`,
 `/assistant/preferences/newsletters.md`, the current monthly task outcome memory
@@ -398,9 +426,11 @@ under `/tasks/outcomes/YYYY-MM.md`, recent owner messages, recent bot activity
 evidence, and recent newsletter knowledge. This gives the model current
 schedule context without letting newsletter content become instructions or
 loading full task logs into prompts. Newsletter timing rationale may also be
-stored under `/assistant/newsletter-interest/YYYY-MM.md`.
+stored under `/assistant/newsletter-interest/YYYY-MM.md`; memory review
+rationale is stored under `/assistant/memory-review/YYYY-MM.md`.
 The next recurring wake is created in a `finally` path, so failed wake runs
-still schedule the next roughly-three-hour review.
+still schedule the next roughly-three-hour review. Newsletter interest,
+self-review, and memory-review tasks use the same failure-rescheduling pattern.
 
 ## Task Outcome Memory
 

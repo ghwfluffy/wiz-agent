@@ -44,6 +44,13 @@ record `scheduled_task.failed` with the failure message, then the scheduler
 still creates the next self-review task so a transient model or tool outage does
 not permanently disable operational review.
 
+Scheduled memory quality reviews use the same visibility and failure behavior.
+Successful runs show the recurring task, agent run, accepted `write_file` or
+memory-list tool call, task outcome event, markdown write audit, and RAG index
+job for `/assistant/memory-review/YYYY-MM.md`. Failed runs record
+`scheduled_task.failed`, and the scheduler still creates the next weekly memory
+review so curation does not stop after a transient model or MCP outage.
+
 ## Manual Recovery
 
 RAG indexing already retries transient failures and dead-letters exhausted
@@ -84,6 +91,11 @@ Self-review prompts are treated as internal operational work. They may inspect
 recent bot activity and write assistant memory, but they explicitly prohibit
 owner contact solely because the review ran. Any owner-visible message still
 uses the normal `propose_outbound_message` approval/outbox controls.
+
+Memory-review prompts are also internal operational work. They receive bounded
+user-scoped memory/list/outcome/self-review context and may write curation
+findings or perform safe list cleanup through validated tools, but they must not
+silently delete memory or contact the owner solely because the review ran.
 
 Runaway guardrails are safety limits for accidental loops and provider abuse.
 They fail closed before side effects, record non-secret counts and limits in

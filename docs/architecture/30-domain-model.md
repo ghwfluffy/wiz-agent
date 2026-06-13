@@ -120,6 +120,16 @@ terminal updates do not duplicate the same outcome. Outcome files are ordinary
 user-scoped markdown documents, so writes are audited, parsed into sections, and
 queued for RAG indexing through the existing markdown store behavior.
 
+The scheduled memory quality review is also represented as ordinary
+user-scoped task and markdown state. The worker maintains a recurring
+`Memory quality review` task for each active user. Review findings are written
+through the controlled agent tool path to monthly markdown notes at
+`/assistant/memory-review/YYYY-MM.md`. These notes are additive curation
+findings and cleanup proposals with evidence and uncertainty; the review task
+must not silently delete source memory. Concrete list cleanup can use the
+personal memory list tools only when host validation and clear evidence make
+the mutation safe.
+
 Inbound owner messages that the agent associates with a task also record
 `message.inbound.assigned` on that task. The inbox record stores the task id,
 task event id, agent run id, outbound review id where applicable, and handling

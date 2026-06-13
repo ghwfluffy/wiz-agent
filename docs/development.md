@@ -122,13 +122,24 @@ and non-secret reasons. They should be treated as operational safety events,
 not prompt-quality feedback.
 
 Scheduled task intelligence is worker-owned. The worker maintains a daily
-newsletter synthesis task and an autonomous wake task that recurs roughly every
-three hours. Before each recurring run, host code refreshes the model prompt
-with active tasks, `/assistant/schedule.md`,
+newsletter interest check, an autonomous wake task that recurs roughly every
+three hours, a twice-daily assistant self-review task, and a weekly memory
+quality review task. Before each recurring run, host code refreshes the model
+prompt with active tasks, `/assistant/schedule.md`,
 `/tasks/schedule-rationale.md`, `/assistant/notification-policy.md`, recent
 owner messages, and recent newsletter knowledge. Schedule-changing tools require
 rationale and write task events; failed recurring wake runs still create the
 next wake.
+
+The memory quality review runs around Sunday 10:00 local/server time. Its
+prompt includes bounded recent markdown writes under `/personal/`,
+`/assistant/`, `/tasks/outcomes/`, `/newsletters/`, and
+`/assistant/newsletter-interest/`, plus `/personal/lists/*.md` summaries,
+recent task outcome memory, recent self-review notes, and the current monthly
+review note. Findings are written through the normal MCP-backed `write_file`
+tool to `/assistant/memory-review/YYYY-MM.md`. The review should add compact
+evidence-backed findings and cleanup proposals, not silently delete memory or
+message the owner just because the review ran.
 
 Live connector config can be seeded from ignored files for initial bootstrap or
 repair with:

@@ -13,7 +13,7 @@ describe("worker loop", () => {
     expect(isWorkerEntrypoint(new URL("../src/worker.ts", import.meta.url).href, "src/worker.ts")).toBe(true);
   });
 
-  it("keeps newsletter interest, autonomous wake, and self-review tasks scheduled with durable rationale", async () => {
+  it("keeps newsletter interest, autonomous wake, self-review, and memory-review tasks scheduled with durable rationale", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
       APP_ENV: "test",
@@ -55,10 +55,16 @@ describe("worker loop", () => {
         prompt: expect.stringContaining("get_recent_bot_activity"),
         scheduleRationale: "Default twice-daily self-review of assistant behavior and owner communication preferences.",
         recurrencePolicy: "twice daily around 09:00 and 21:00 local/server time"
+      }),
+      expect.objectContaining({
+        title: "Memory quality review",
+        prompt: expect.stringContaining("/assistant/memory-review/2026-06.md"),
+        scheduleRationale: "Default weekly memory quality review of durable memory, lists, task outcomes, newsletter-interest notes, and self-review notes.",
+        recurrencePolicy: "weekly around Sunday 10:00 local/server time"
       })
     ]));
     await expect(store.getMemoryDocument(context, "agent-schedule")).resolves.toMatchObject({
-      body: expect.stringContaining("Newsletter interest check")
+      body: expect.stringContaining("Memory quality review")
     });
     await expect(store.getMarkdownDocument(context, "/tasks/schedule-rationale.md")).resolves.toMatchObject({
       markdown: expect.stringContaining("Schedule Rationale")
@@ -537,6 +543,152 @@ describe("worker loop", () => {
     )).toHaveLength(1);
   });
 
+  it("builds a memory quality review prompt with recent memory, list, outcome, and self-review context", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-memory-review-prompt-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-memory-review-prompt-test",
+      session
+    };
+    await store.writeMarkdownDocument(context, {
+      path: "/personal/profile.md",
+      markdown: "# Profile\n\n- Prefers terse notes."
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/personal/lists/movies.md",
+      markdown: "# Movies\n\n<!-- memory-list:v1 -->\n\n- [ ] Arrival <!-- memory-list-item:one -->\n  - added: 2026-06-13\n- [ ] Arrival! <!-- memory-list-item:two -->\n  - added: 2026-06-13"
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/assistant/self-review/2026-06-13.md",
+      markdown: "# Self Review\n\n- Possible repeated approval backlog."
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/assistant/newsletter-interest/2026-06.md",
+      markdown: "# Newsletter Interest\n\n- Stayed quiet because material was routine."
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/newsletters/2026-06-13/agent-weekly.md",
+      markdown: "# Agent Weekly\n\nMentions memory cleanup patterns."
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/assistant/memory-review/2026-06.md",
+      markdown: "# Memory Review: 2026-06\n\n## 2026-06-08\n\n- Existing finding to preserve."
+    });
+    const completed = await store.createTask(context, {
+      title: "Finished context task",
+      prompt: "Do a thing."
+    });
+    await store.updateTask(context, completed.id, { status: "completed" });
+    await recordTaskOutcomeMemory({
+      store,
+      context,
+      taskId: completed.id,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+    const task = await store.createTask(context, {
+      title: "Memory quality review",
+      prompt: "Run memory quality review.",
+      dueAt: "2026-06-14T10:00:00.000Z"
+    });
+
+    const prompt = await buildScheduledTaskPrompt({
+      store,
+      context,
+      task,
+      settings,
+      now: new Date("2026-06-14T10:00:00.000Z")
+    });
+
+    expect(prompt).toContain("Memory quality review outcome");
+    expect(prompt).toContain("/assistant/memory-review/2026-06.md");
+    expect(prompt).toContain("Existing finding to preserve");
+    expect(prompt).toContain("never silently delete memory");
+    expect(prompt).toContain("Recent markdown writes for memory quality review:");
+    expect(prompt).toContain("/personal/profile.md");
+    expect(prompt).toContain("/assistant/self-review/2026-06-13.md");
+    expect(prompt).toContain("/assistant/newsletter-interest/2026-06.md");
+    expect(prompt).toContain("/tasks/outcomes/2026-06.md");
+    expect(prompt).toContain("/newsletters/2026-06-13/agent-weekly.md");
+    expect(prompt).toContain("Personal list summaries for memory quality review:");
+    expect(prompt).toContain("active_items=2");
+    expect(prompt).toContain("Arrival!");
+    expect(prompt).toContain("Existing monthly memory-review note:");
+    expect(prompt).toContain("Existing finding to preserve");
+  });
+
+  it("lets memory-review write a monthly markdown note through MCP without outbound messages", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-memory-review-write-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-memory-review-write-test",
+      session
+    };
+    const task = await store.createTask(context, {
+      title: "Memory quality review",
+      prompt: "Run memory quality review.",
+      dueAt: "2026-06-14T10:00:00.000Z",
+      priority: 7,
+      scheduleRationale: "Test memory quality review.",
+      recurrencePolicy: "weekly around Sunday 10:00 local/server time"
+    });
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "write_file",
+            arguments: {
+              path: "/assistant/memory-review/2026-06.md",
+              content: "# Memory Review: 2026-06\n\n## 2026-06-14\n\n- Evidence: `/personal/lists/movies.md` has near-duplicate Arrival entries.\n- Uncertainty: likely duplicate; owner confirmation needed before cleanup.",
+              rationale: "Record compact memory quality findings."
+            }
+          }
+        ]
+      }),
+      now: new Date("2026-06-14T10:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1, outboundAttempted: 0 });
+    await expect(store.getMarkdownDocument(context, "/assistant/memory-review/2026-06.md")).resolves.toMatchObject({
+      markdown: expect.stringContaining("near-duplicate Arrival entries")
+    });
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({ status: "completed" });
+    await expect(store.listToolCalls(context)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        toolName: "write_file",
+        status: "accepted",
+        result: expect.objectContaining({
+          execution: expect.objectContaining({
+            path: "/assistant/memory-review/2026-06.md"
+          })
+        })
+      })
+    ]));
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([]);
+    expect((await store.listTasks(context)).filter((entry) =>
+      entry.title === "Memory quality review" &&
+      entry.status === "pending" &&
+      entry.id !== task.id
+    )).toHaveLength(1);
+  });
+
   it("records completed scheduled task outcomes once in monthly markdown memory", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
@@ -932,6 +1084,64 @@ describe("worker loop", () => {
     await expect(store.getTask(context, review.id)).resolves.toMatchObject({ status: "failed" });
     expect((await store.listTasks(context)).filter((entry) =>
       entry.title === "Assistant self-review" &&
+      entry.status === "pending" &&
+      entry.id !== review.id
+    )).toHaveLength(1);
+    await expect(store.listTaskEvents(context, review.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventType: "scheduled_task.failed",
+        details: expect.objectContaining({
+          failure_message: "model unavailable"
+        })
+      })
+    ]));
+  });
+
+  it("schedules the next memory-review even when the review run fails", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-memory-review-failure-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-memory-review-failure-test",
+      session
+    };
+    const review = await store.createTask(context, {
+      title: "Memory quality review",
+      prompt: "Run memory quality review.",
+      dueAt: "2026-06-14T10:00:00.000Z",
+      priority: 7,
+      scheduleRationale: "Test memory quality review.",
+      recurrencePolicy: "weekly around Sunday 10:00 local/server time"
+    });
+    const failingModel = {
+      async runStructured() {
+        return {};
+      },
+      async runWithTools(_request: ToolModelRequest) {
+        throw new Error("model unavailable");
+      },
+      async repairToolArguments() {
+        return {};
+      }
+    };
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: failingModel,
+      now: new Date("2026-06-14T10:00:00.000Z")
+    });
+
+    await expect(store.getTask(context, review.id)).resolves.toMatchObject({ status: "failed" });
+    expect((await store.listTasks(context)).filter((entry) =>
+      entry.title === "Memory quality review" &&
       entry.status === "pending" &&
       entry.id !== review.id
     )).toHaveLength(1);
