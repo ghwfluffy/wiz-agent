@@ -354,15 +354,16 @@ envelope with `status: failed` so chat clients can display `failureMessage`
 instead of treating the response as a transport failure. When the model answers
 without selecting a tool, the endpoint returns the plain answer as `responseText`
 so conversational UI can show the answer instead of a generic completion status.
-When a selected read-only tool succeeds, the runtime performs a fast text-only
-synthesis pass over the owner prompt and tool result and returns that
-interpreted answer as `responseText`; the raw tool result remains available for
-audit/debug views but is not the primary chat reply.
+When a selected read-only tool succeeds, the runtime performs a text-only
+synthesis pass on the selected model tier over the owner prompt and tool result
+and returns that interpreted answer as `responseText`; the raw tool result
+remains available for audit/debug views but is not the primary chat reply.
 
-The dedicated Chat tab sends prompts with `quick_reply` mode and includes recent
-browser chat turns inside the prompt body. This keeps interactive follow-ups on
-the fast model tier while preserving enough context for pronouns and references
-to previous answers.
+The dedicated Chat tab sends prompts with `normal` mode and includes recent
+browser chat turns inside the prompt body. The production-style Nginx API proxy
+keeps reads open longer than the admin runtime budget so interactive chat can
+wait for slow but valid owner-command runs instead of forcing the agent onto a
+quick-reply path.
 
 Owner messages must not be pre-written to long-term memory by regex or other
 host heuristics. Durable owner facts, preferences, and schedule rationale should

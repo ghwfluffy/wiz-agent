@@ -241,7 +241,8 @@ export async function runAgentTask(options: {
     const responseText = ToolRegistry[validated.toolName].access === "read"
       ? await synthesizeToolResponse({
           modelClient: options.modelClient,
-          modelId: resolveModelId(modelTierConfigFromAiConfig(aiConfig), "fast"),
+          modelId,
+          tier,
           ownerPrompt: options.request.prompt,
           toolName: validated.toolName,
           toolResult: execution.result
@@ -291,6 +292,7 @@ function modelText(output: unknown): string | undefined {
 async function synthesizeToolResponse(options: {
   modelClient: AgentModelClient;
   modelId: string;
+  tier: ReturnType<typeof chooseModelTier>;
   ownerPrompt: string;
   toolName: string;
   toolResult: Record<string, unknown>;
@@ -298,7 +300,7 @@ async function synthesizeToolResponse(options: {
   try {
     const response = await options.modelClient.runText({
       model: options.modelId,
-      tier: "fast",
+      tier: options.tier,
       prompt: [
         "You are answering the owner's authenticated chat after a read-only host tool was executed.",
         "Use the owner request, any included chat context, and the tool result to answer the owner's latest question directly.",

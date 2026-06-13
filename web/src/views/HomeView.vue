@@ -843,7 +843,7 @@ async function submitAgentPrompt(source: "overview" | "chat" = "overview"): Prom
   try {
     const result = await api.submitAgentPrompt({
       prompt: requestPrompt,
-      mode: source === "chat" ? "quick_reply" : promptForm.mode,
+      mode: source === "chat" ? "normal" : promptForm.mode,
       contextTaskId: source === "chat" ? null : promptForm.contextTaskId || null
     });
     promptResult.value = result;

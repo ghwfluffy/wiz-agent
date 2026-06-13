@@ -1094,7 +1094,7 @@ describe("home view", () => {
     const promptCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/agent/prompts"));
     expect(promptCall).toBeTruthy();
     const body = JSON.parse(String((promptCall?.[1] as RequestInit).body));
-    expect(body).toMatchObject({ prompt: "Create a packing task.", mode: "quick_reply", contextTaskId: null });
+    expect(body).toMatchObject({ prompt: "Create a packing task.", mode: "normal", contextTaskId: null });
     expect(wrapper.find("#chat-prompt-mode").exists()).toBe(false);
     expect(wrapper.find("#chat-prompt-task").exists()).toBe(false);
     expect(wrapper.find("#chat-prompt-memory").exists()).toBe(false);
@@ -1114,7 +1114,7 @@ describe("home view", () => {
     const promptCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes("/agent/prompts"));
     expect(promptCalls).toHaveLength(2);
     const followUpBody = JSON.parse(String((promptCalls[1]?.[1] as RequestInit).body));
-    expect(followUpBody).toMatchObject({ mode: "quick_reply", contextTaskId: null });
+    expect(followUpBody).toMatchObject({ mode: "normal", contextTaskId: null });
     expect(followUpBody.prompt).toContain("Recent browser chat context:");
     expect(followUpBody.prompt).toContain("Owner: Create a packing task.");
     expect(followUpBody.prompt).toContain("Agent: Created task: Created task");

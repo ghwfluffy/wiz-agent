@@ -115,8 +115,10 @@ messages are folded into Overview prompt text as operator-selected context. The
 Chat tab remains a conversational surface and folds only bounded recent browser
 chat turns into follow-up prompt text. If the model answers a web prompt without
 selecting a tool, the response includes `responseText` for the UI to display
-directly. Do not add browser-side access to write/action MCP tools for this
-workflow.
+directly. The production-style Nginx service keeps API proxy reads open for 600
+seconds so slow owner-command prompt runs can return within the configured
+runtime budget. Do not add browser-side access to write/action MCP tools for
+this workflow.
 
 Owner corrections should be captured through `record_owner_feedback` when the
 owner corrects behavior, wording, timing, memory categorization, task/tool/app
