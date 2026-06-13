@@ -25,6 +25,14 @@ The response includes:
 The Workers tab consumes this endpoint and shows the same budget, queue,
 failure, and Qdrant/RAG health information.
 
+Scheduled assistant self-review runs are visible through the same task, run,
+tool-call, and audit surfaces as other scheduled tasks. Successful reviews
+record `agent.prompted`, accepted tool-call, and `scheduled_task.outcome`
+events, and their markdown writes enqueue normal RAG indexing. Failed reviews
+record `scheduled_task.failed` with the failure message, then the scheduler
+still creates the next self-review task so a transient model or tool outage does
+not permanently disable operational review.
+
 ## Manual Recovery
 
 RAG indexing already retries transient failures and dead-letters exhausted
@@ -55,3 +63,8 @@ Qdrant publicly reachable.
 MCP sessions remain short-lived, user/run scoped, and allowlisted. Browser MCP
 sessions are limited to read-only memory/search tools. Agent-created MCP
 sessions are tied to one run and the host-selected tool allowlist.
+
+Self-review prompts are treated as internal operational work. They may inspect
+recent bot activity and write assistant memory, but they explicitly prohibit
+owner contact solely because the review ran. Any owner-visible message still
+uses the normal `propose_outbound_message` approval/outbox controls.

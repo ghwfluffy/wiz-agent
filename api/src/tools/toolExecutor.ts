@@ -534,6 +534,30 @@ export async function executeToolCall(options: {
         }
       };
     }
+    case "write_file": {
+      const document = await options.store.writeMarkdownDocument(options.context, {
+        path: String(options.args.path),
+        markdown: String(options.args.content),
+        expectedVersion: typeof options.args.expectedVersion === "number" ? options.args.expectedVersion : undefined
+      });
+      if ("code" in document) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: document
+        };
+      }
+      return {
+        executed: true,
+        sideEffect: "local_persistence",
+        result: {
+          markdown_document_id: document.id,
+          path: document.path,
+          version: document.version,
+          rationale: options.args.rationale
+        }
+      };
+    }
     case "append_task_prompt": {
       const taskId = String(options.args.taskId);
       const task = await options.store.getTask(options.context, taskId);

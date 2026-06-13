@@ -92,6 +92,7 @@ Current tool contracts:
 - `list_budget_investments`
 - `list_budget_audit_logs`
 - `write_memory`
+- `write_file`
 - `append_task_prompt`
 - `update_task_schedule`
 - `update_task_status`
@@ -161,6 +162,10 @@ Current migrated agent tools:
   before changing projection data.
 - `write_memory` appends model-selected durable markdown memory under host-owned
   user scope.
+- `write_file` writes a complete markdown file under host-owned user scope. It
+  is intended for structured markdown memory paths such as scheduled
+  self-review notes, while MCP session scoping, path normalization, audit
+  events, and RAG indexing remain deterministic host responsibilities.
 - `append_task_prompt` appends owner follow-up context to an existing task,
   returns it to active work, and writes a task event.
 - `update_task_schedule` changes a user-scoped task due date, including null
@@ -264,6 +269,32 @@ Owner messages must not be pre-written to long-term memory by regex or other
 host heuristics. Durable owner facts, preferences, and schedule rationale should
 be persisted through the same controlled tool/MCP path the model uses for other
 decisions, with deterministic validation and audit records.
+
+## Scheduled Self-Review
+
+The worker maintains an `Assistant self-review` recurring task for each active
+user it reconciles. The task is separate from the three-hour autonomous wake so
+operators can distinguish general task review from operational self-inspection.
+The default cadence is twice daily around 09:00 and 21:00 local/server time.
+
+The self-review prompt is explicitly internal. It tells the agent to use
+`get_recent_bot_activity`, inspect pending approvals, failed outbound delivery,
+failed runs, owner replies, and recent outbound attempts, then write compact
+findings to `/assistant/self-review/YYYY-MM-DD.md`. It also includes current
+excerpts from durable preference files so the model can reason about whether it
+has been noisy, quiet, blocked, or failing to deliver without contacting the
+owner just because the review ran.
+
+Preference memory paths seeded by host reconciliation:
+
+- `/assistant/preferences/communication.md`
+- `/assistant/preferences/newsletters.md`
+
+The agent may update those files only when the owner directly stated a durable
+preference or when evidence is strong enough to label as a tentative
+observation. Self-review runs must not queue owner messages unless a separate
+task or owner instruction independently justifies that contact through the
+normal approval/outbox path.
 
 ## MCP Memory Filesystem
 

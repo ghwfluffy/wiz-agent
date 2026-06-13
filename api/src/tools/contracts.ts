@@ -228,6 +228,13 @@ export const WriteMemoryToolSchema = z.object({
   rationale: z.string().min(1)
 });
 
+export const WriteFileToolSchema = z.object({
+  path: z.string().min(1).max(500).regex(/^\/.*\.md$/),
+  content: z.string().min(1),
+  expectedVersion: z.number().int().positive().optional(),
+  rationale: z.string().min(1).optional()
+});
+
 export const AppendTaskPromptToolSchema = z.object({
   taskId: z.string().min(1),
   prompt: z.string().min(1),
@@ -355,6 +362,7 @@ export const ToolContracts = {
   list_budget_investments: ListBudgetInvestmentsToolSchema,
   list_budget_audit_logs: ListBudgetAuditLogsToolSchema,
   write_memory: WriteMemoryToolSchema,
+  write_file: WriteFileToolSchema,
   append_task_prompt: AppendTaskPromptToolSchema,
   update_task_schedule: UpdateTaskScheduleToolSchema,
   update_task_status: UpdateTaskStatusToolSchema,

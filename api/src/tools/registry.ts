@@ -59,6 +59,7 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   list_budget_investments: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   list_budget_audit_logs: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   write_memory: { access: "write", risk: "medium", sideEffect: "local_persistence" },
+  write_file: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   append_task_prompt: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   update_task_schedule: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   update_task_status: { access: "write", risk: "medium", sideEffect: "local_persistence" },
