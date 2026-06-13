@@ -2,7 +2,10 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { loadSettings } from "./config/settings.js";
 import { createPool } from "./db/pool.js";
-import { qdrantHealth } from "./rag/qdrant.js";
+import { createPostgresStore } from "./domain/store.js";
+import { OpenAIEmbeddingClient } from "./rag/embeddings.js";
+import { processRagIndexJobs } from "./rag/indexer.js";
+import { HttpQdrantClient } from "./rag/qdrant.js";
 
 const RAG_WORKER_INTERVAL_MS = 30_000;
 
@@ -19,17 +22,27 @@ function logRagWorker(event: string, details: Record<string, unknown> = {}): voi
 export async function ragWorkerTick(): Promise<{
   qdrantOk: boolean;
   pendingJobs: number;
+  claimed: number;
+  indexed: number;
+  deleted: number;
+  failed: number;
+  dead: number;
 }> {
   const settings = loadSettings();
   const pool = createPool(settings);
   try {
-    const [health, pending] = await Promise.all([
-      qdrantHealth(settings),
+    const store = createPostgresStore(pool);
+    const qdrant = new HttpQdrantClient(settings);
+    const embeddings = new OpenAIEmbeddingClient(settings);
+    const [health, processed, pending] = await Promise.all([
+      qdrant.health(),
+      processRagIndexJobs({ store, qdrant, embeddings, settings }),
       pool.query("SELECT count(*)::int AS count FROM rag_index_jobs WHERE status = 'pending' AND available_at <= now()")
     ]);
     return {
       qdrantOk: health.ok,
-      pendingJobs: Number(pending.rows[0]?.count ?? 0)
+      pendingJobs: Number(pending.rows[0]?.count ?? 0),
+      ...processed
     };
   } finally {
     await pool.end();

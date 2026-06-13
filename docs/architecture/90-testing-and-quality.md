@@ -75,6 +75,16 @@ Current tests cover:
 - operations dashboard rendering.
 - tabbed Carbon dashboard rendering, URL-backed active tabs, and focused tab
   polling.
+- markdown RAG chunking determinism, section metadata preservation, and
+  deterministic point IDs.
+- RAG job claiming, stale-claim recovery, indexing, transient retry,
+  dead-letter behavior, and delete-job point removal with mock Qdrant and mock
+  embeddings.
+- MCP semantic search source-handle resolution under authenticated user scope.
+
+RAG tests must not call live OpenAI or Qdrant. Use `MockEmbeddingClient` and a
+mock/fake `QdrantClient`; live vector and embedding clients are reserved for
+local manual runs and deployment.
 
 Future phases should add migration, user ownership, authorization, worker,
 tool-call, connector, and admin UI tests alongside the feature work. Tenant

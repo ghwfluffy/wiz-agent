@@ -244,6 +244,66 @@ export type MarkdownIndexStatus = {
   pendingJobs: number;
 };
 
+export type RagIndexJobType = "index_markdown" | "delete_markdown";
+
+export type RagIndexJobRecord = {
+  id: string;
+  userId: string;
+  documentId: string;
+  requestedVersion: number | null;
+  requestedContentHash: string | null;
+  jobType: RagIndexJobType;
+  status: string;
+  attempts: number;
+  lastError: string | null;
+  availableAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+};
+
+export type RagDocumentChunkInput = {
+  id: string;
+  documentVersion: number;
+  sectionId: string | null;
+  headingPath: string[];
+  chunkIndex: number;
+  content: string;
+  contentHash: string;
+  qdrantPointId: string;
+  qdrantCollection: string;
+  embeddingModel: string;
+  embeddingDimensions: number;
+  indexedAt?: string | null;
+};
+
+export type RagDocumentChunkRecord = RagDocumentChunkInput & {
+  userId: string;
+  documentId: string;
+  createdAt: string;
+};
+
+export type RagIndexHealthInput = {
+  collectionExists?: boolean;
+  qdrantPointCount?: number | null;
+  healthStatus?: string;
+  lastError?: string | null;
+  embeddingModel?: string;
+  embeddingDimensions?: number;
+  reconciliationStartedAt?: string | null;
+  reconciliationCompletedAt?: string | null;
+};
+
+export type MarkdownSemanticSearchResult = {
+  path: string;
+  version: number;
+  sectionId: string | null;
+  headingPath: string[];
+  chunkIndex: number;
+  score: number;
+  excerpt: string;
+};
+
 export type AgentMcpSession = {
   id: string;
   token: string;
@@ -328,6 +388,11 @@ export type AgentStore = {
   }): Promise<MemoryDocumentRecord>;
   listMarkdownDirectory(context: RequestContext, path: string): Promise<MarkdownDirectoryEntry[]>;
   getMarkdownDocument(context: RequestContext, path: string, version?: number): Promise<MarkdownDocumentRecord | undefined>;
+  getMarkdownDocumentById(
+    context: Pick<RequestContext, "userId">,
+    documentId: string,
+    version?: number
+  ): Promise<MarkdownDocumentRecord | undefined>;
   writeMarkdownDocument(
     context: RequestContext,
     input: MarkdownWriteInput
@@ -351,6 +416,12 @@ export type AgentStore = {
     expectedVersion?: number
   ): Promise<MarkdownDocumentRecord | MarkdownConflict | undefined>;
   searchMarkdownExact(context: RequestContext, query: string): Promise<MarkdownDirectoryEntry[]>;
+  searchMarkdownSemantic(context: RequestContext, input: {
+    pointIds: string[];
+    scoresByPointId: Record<string, number>;
+    pathPrefix?: string;
+    limit?: number;
+  }): Promise<MarkdownSemanticSearchResult[]>;
   searchMarkdownHeadings(context: RequestContext, input: {
     query?: string;
     pathPrefix?: string;
@@ -366,6 +437,20 @@ export type AgentStore = {
   }): Promise<Array<{ path: string; line: number; text: string; before: string[]; after: string[] }>>;
   getMarkdownIndexStatus(context: RequestContext, path?: string): Promise<MarkdownIndexStatus[]>;
   reindexMarkdownPath(context: RequestContext, path: string): Promise<MarkdownIndexStatus[]>;
+  ensureUserRagIndex(context: Pick<RequestContext, "userId">): Promise<string>;
+  enqueueRagJob(context: Pick<RequestContext, "userId">, documentId: string, jobType: RagIndexJobType): Promise<RagIndexJobRecord>;
+  claimRagIndexJobs(limit: number, now: Date): Promise<RagIndexJobRecord[]>;
+  completeRagIndexJob(jobId: string): Promise<void>;
+  failRagIndexJob(jobId: string, error: string, retryAt?: Date): Promise<void>;
+  markRagIndexJobDead(jobId: string, error: string): Promise<void>;
+  replaceDocumentChunks(
+    context: Pick<RequestContext, "userId">,
+    documentId: string,
+    chunks: RagDocumentChunkInput[],
+    indexedDocument?: { version: number; contentHash: string }
+  ): Promise<RagDocumentChunkRecord[]>;
+  listChunksForDocument(context: Pick<RequestContext, "userId">, documentId: string): Promise<RagDocumentChunkRecord[]>;
+  updateRagIndexHealth(userId: string, input: RagIndexHealthInput): Promise<void>;
   createAgentMcpSession(context: RequestContext, input: {
     runId?: string | null;
     ttlSeconds?: number;

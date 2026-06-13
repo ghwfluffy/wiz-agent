@@ -6,10 +6,15 @@ import { createPool } from "../db/pool.js";
 import { createMemoryStore, createPostgresStore } from "../domain/store.js";
 import type { AgentStore, MarkdownConflict } from "../domain/types.js";
 import { loadSettings, type Settings } from "../config/settings.js";
+import { normalizeMarkdownDirectory } from "../memory/markdownFilesystem.js";
+import { MockEmbeddingClient, OpenAIEmbeddingClient, type EmbeddingClient } from "../rag/embeddings.js";
+import { HttpQdrantClient, type QdrantClient } from "../rag/qdrant.js";
 
 export type McpAppOptions = {
   settings?: Settings;
   store?: AgentStore;
+  embeddings?: EmbeddingClient;
+  qdrant?: QdrantClient;
 };
 
 const toolNames = [
@@ -25,6 +30,9 @@ const toolNames = [
   "append_to_section",
   "search_headings",
   "grep",
+  "search_exact",
+  "search_semantic",
+  "find_backlinks",
   "get_index_status",
   "reindex_path"
 ];
@@ -78,6 +86,8 @@ function createDefaultStore(settings: Settings): AgentStore {
 export function buildMcpApp(options: McpAppOptions = {}): Hono {
   const settings = options.settings ?? loadSettings();
   const store = options.store ?? createDefaultStore(settings);
+  const embeddings = options.embeddings ?? (settings.appEnv === "test" ? new MockEmbeddingClient() : new OpenAIEmbeddingClient(settings));
+  const qdrant = options.qdrant ?? new HttpQdrantClient(settings);
   const app = new Hono();
 
   app.get("/healthz", (context) => context.json({
@@ -181,6 +191,43 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
             regex: booleanArg(args, "regex"),
             contextLines: numberArg(args, "contextLines"),
             limit: numberArg(args, "limit")
+          })
+        };
+      } else if (tool === "search_exact") {
+        const prefix = typeof args.pathPrefix === "string" ? normalizeMarkdownDirectory(args.pathPrefix) : "/";
+        const limit = Math.max(1, Math.min(numberArg(args, "limit") ?? 20, 50));
+        const matches = (await store.searchMarkdownExact(authContext, stringArg(args, "query")))
+          .filter((entry) => prefix === "/" || entry.path === prefix || entry.path.startsWith(`${prefix}/`))
+          .slice(0, limit);
+        result = { matches };
+      } else if (tool === "search_semantic") {
+        const limit = Math.max(1, Math.min(numberArg(args, "limit") ?? 10, 25));
+        const collection = await store.ensureUserRagIndex(authContext);
+        const [vector] = await embeddings.embedTexts({
+          model: settings.ragEmbeddingModel,
+          dimensions: settings.ragEmbeddingDimensions,
+          texts: [stringArg(args, "query")]
+        });
+        const hits = await qdrant.search(collection, vector ?? [], {
+          pathPrefix: typeof args.pathPrefix === "string" ? normalizeMarkdownDirectory(args.pathPrefix) : undefined,
+          limit
+        });
+        result = {
+          matches: await store.searchMarkdownSemantic(authContext, {
+            pointIds: hits.map((hit) => hit.id),
+            scoresByPointId: Object.fromEntries(hits.map((hit) => [hit.id, hit.score])),
+            pathPrefix: typeof args.pathPrefix === "string" ? args.pathPrefix : undefined,
+            limit
+          }),
+          guidance: "Read the source file or section before making significant memory edits based on semantic matches."
+        };
+      } else if (tool === "find_backlinks") {
+        const target = stringArg(args, "path");
+        result = {
+          matches: await store.grepMarkdown(authContext, {
+            pattern: target,
+            regex: false,
+            limit: numberArg(args, "limit") ?? 50
           })
         };
       } else if (tool === "get_index_status") {

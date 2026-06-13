@@ -127,3 +127,38 @@ GET /api/v1/knowledge/files/:encodedPath/sections
 
 Encode full markdown paths for `:encodedPath`, for example
 `%2Fpersonal%2Fprofile.md`.
+
+## RAG Indexing
+
+Markdown documents in Postgres are the source of truth. Writes enqueue
+`rag_index_jobs`; the `rag-worker` derives chunks and Qdrant vectors from those
+rows. Qdrant is rebuildable and uses one host-chosen collection per user, so MCP
+tools and model calls must never provide collection names.
+
+Local RAG services:
+
+```bash
+docker compose up qdrant db
+cd api
+npm run rag-worker
+```
+
+The worker uses `RAG_EMBEDDING_MODEL`, `RAG_EMBEDDING_DIMENSIONS`, and the same
+OpenAI key settings as the agent runtime: `AGENT_OPENAI_API_KEY` or
+`AGENT_OPENAI_API_KEY_FILE`. Tests use mock embedding and Qdrant clients and
+must not call live OpenAI or Qdrant.
+
+Useful MCP RAG tools:
+
+```text
+search_exact({ query, pathPrefix?, limit? })
+search_semantic({ query, pathPrefix?, limit? })
+find_backlinks({ path })
+get_index_status({ path? })
+reindex_path({ path })
+```
+
+`get_index_status` reports source-row indexing state and pending jobs.
+`reindex_path` enqueues repair jobs for the authenticated user's matching
+markdown path tree. If the worker stops mid-job, stale claimed jobs become
+claimable again after the restart grace window.

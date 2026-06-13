@@ -38,6 +38,10 @@ import type {
   MarkdownSectionRecord,
   MemoryDocumentRecord,
   OutboundMessageRecord,
+  RagDocumentChunkInput,
+  RagDocumentChunkRecord,
+  RagIndexJobRecord,
+  RagIndexJobType,
   RequestContext,
   SenderClassification,
   SenderRecord,
@@ -48,6 +52,7 @@ import type {
   TaskUpdate,
   ToolCallRecord
 } from "./types.js";
+import { qdrantCollectionForUser } from "../rag/qdrant.js";
 
 const DEFAULT_AI_CONFIG: AiConfig = {
   fastModel: "gpt-5-mini",
@@ -255,6 +260,44 @@ function markdownSectionFromRow(row: Record<string, unknown>): MarkdownSectionRe
     lineStart: Number(row.line_start),
     lineEnd: Number(row.line_end),
     contentHash: String(row.content_hash)
+  };
+}
+
+function ragIndexJobFromRow(row: Record<string, unknown>): RagIndexJobRecord {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    documentId: String(row.document_id),
+    requestedVersion: row.requested_version === null || row.requested_version === undefined ? null : Number(row.requested_version),
+    requestedContentHash: row.requested_content_hash ? String(row.requested_content_hash) : null,
+    jobType: String(row.job_type) as RagIndexJobType,
+    status: String(row.status),
+    attempts: Number(row.attempts),
+    lastError: row.last_error ? String(row.last_error) : null,
+    availableAt: row.available_at instanceof Date ? row.available_at.toISOString() : String(row.available_at),
+    startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : row.started_at ? String(row.started_at) : null,
+    completedAt: row.completed_at instanceof Date ? row.completed_at.toISOString() : row.completed_at ? String(row.completed_at) : null,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
+  };
+}
+
+function ragDocumentChunkFromRow(row: Record<string, unknown>): RagDocumentChunkRecord {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    documentId: String(row.document_id),
+    documentVersion: Number(row.document_version),
+    sectionId: row.section_id ? String(row.section_id) : null,
+    headingPath: Array.isArray(row.heading_path) ? row.heading_path.map(String) : [],
+    chunkIndex: Number(row.chunk_index),
+    content: String(row.content ?? ""),
+    contentHash: String(row.content_hash),
+    qdrantPointId: String(row.qdrant_point_id),
+    qdrantCollection: String(row.qdrant_collection),
+    embeddingModel: String(row.embedding_model),
+    embeddingDimensions: Number(row.embedding_dimensions),
+    indexedAt: row.indexed_at instanceof Date ? row.indexed_at.toISOString() : row.indexed_at ? String(row.indexed_at) : null,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
   };
 }
 
@@ -977,6 +1020,20 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return result.rows[0] ? markdownDocumentFromRow(result.rows[0]) : undefined;
     },
 
+    async getMarkdownDocumentById(context, documentId, version) {
+      const result = await pool.query(
+        version === undefined
+          ? `SELECT * FROM markdown_documents
+             WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL
+             LIMIT 1`
+          : `SELECT * FROM markdown_documents
+             WHERE user_id = $1 AND id = $2 AND version = $3 AND deleted_at IS NULL
+             LIMIT 1`,
+        version === undefined ? [context.userId, documentId] : [context.userId, documentId, version]
+      );
+      return result.rows[0] ? markdownDocumentFromRow(result.rows[0]) : undefined;
+    },
+
     async writeMarkdownDocument(context, input) {
       return writeMarkdownDocumentPostgres(pool, context, input);
     },
@@ -1157,6 +1214,44 @@ export function createPostgresStore(pool: Pool): AgentStore {
       }));
     },
 
+    async searchMarkdownSemantic(context, input) {
+      const prefix = input.pathPrefix ? normalizeMarkdownDirectory(input.pathPrefix) : "/";
+      if (input.pointIds.length === 0) {
+        return [];
+      }
+      const result = await pool.query(
+        `SELECT d.path, d.version, c.section_id, c.heading_path, c.chunk_index, c.content, c.qdrant_point_id
+         FROM markdown_document_chunks c
+         JOIN markdown_documents d ON d.user_id = c.user_id
+          AND d.id = c.document_id
+          AND d.version = c.document_version
+         WHERE c.user_id = $1
+           AND c.qdrant_point_id = ANY($2::text[])
+           AND d.deleted_at IS NULL
+           AND ($3 = '/' OR d.path = $3 OR d.path LIKE $4)`,
+        [context.userId, input.pointIds, prefix, `${prefix}/%`]
+      );
+      const byPoint = new Map((result.rows as Record<string, unknown>[]).map((row) => [String(row.qdrant_point_id), row]));
+      return input.pointIds
+        .map((pointId) => {
+          const row = byPoint.get(pointId);
+          if (!row) {
+            return undefined;
+          }
+          return {
+            path: String(row.path),
+            version: Number(row.version),
+            sectionId: row.section_id ? String(row.section_id) : null,
+            headingPath: Array.isArray(row.heading_path) ? row.heading_path.map(String) : [],
+            chunkIndex: Number(row.chunk_index),
+            score: input.scoresByPointId[pointId] ?? 0,
+            excerpt: String(row.content ?? "").replace(/\s+/g, " ").trim().slice(0, 320)
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== undefined)
+        .slice(0, Math.max(1, Math.min(input.limit ?? 10, 25)));
+    },
+
     async searchMarkdownHeadings(context, input) {
       const prefix = input.pathPrefix ? normalizeMarkdownDirectory(input.pathPrefix) : "/";
       const query = input.query?.trim().toLowerCase();
@@ -1268,6 +1363,219 @@ export function createPostgresStore(pool: Pool): AgentStore {
         await enqueueMarkdownIndexJob(pool, context, markdownDocumentFromRow(row));
       }
       return this.getMarkdownIndexStatus(context, path);
+    },
+
+    async ensureUserRagIndex(context) {
+      const collection = qdrantCollectionForUser(context.userId);
+      await pool.query(
+        `INSERT INTO rag_user_indexes (user_id, qdrant_collection)
+         VALUES ($1, $2)
+         ON CONFLICT (user_id) DO NOTHING`,
+        [context.userId, collection]
+      );
+      return collection;
+    },
+
+    async enqueueRagJob(context, documentId, jobType) {
+      const document = await pool.query(
+        `SELECT version, content_hash
+         FROM markdown_documents
+         WHERE user_id = $1 AND id = $2
+         LIMIT 1`,
+        [context.userId, documentId]
+      );
+      const row = document.rows[0] as Record<string, unknown> | undefined;
+      const result = await pool.query(
+        `INSERT INTO rag_index_jobs
+          (id, user_id, document_id, requested_version, requested_content_hash, job_type)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING *`,
+        [
+          randomUUID(),
+          context.userId,
+          documentId,
+          row?.version ?? null,
+          row?.content_hash ?? null,
+          jobType
+        ]
+      );
+      return ragIndexJobFromRow(result.rows[0]);
+    },
+
+    async claimRagIndexJobs(limit, now) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const selected = await client.query(
+          `SELECT id
+           FROM rag_index_jobs
+           WHERE (status = 'pending' AND available_at <= $1)
+              OR (status = 'claimed' AND started_at < $1::timestamptz - interval '5 minutes')
+           ORDER BY created_at ASC
+           LIMIT $2
+           FOR UPDATE SKIP LOCKED`,
+          [now.toISOString(), limit]
+        );
+        const ids = selected.rows.map((row) => String(row.id));
+        if (ids.length === 0) {
+          await client.query("COMMIT");
+          return [];
+        }
+        const updated = await client.query(
+          `UPDATE rag_index_jobs
+           SET status = 'claimed',
+               attempts = attempts + 1,
+               started_at = now()
+           WHERE id = ANY($1::text[])
+           RETURNING *`,
+          [ids]
+        );
+        await client.query("COMMIT");
+        return updated.rows.map(ragIndexJobFromRow);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async completeRagIndexJob(jobId) {
+      await pool.query(
+        `UPDATE rag_index_jobs
+         SET status = 'completed', completed_at = now()
+         WHERE id = $1`,
+        [jobId]
+      );
+    },
+
+    async failRagIndexJob(jobId, error, retryAtValue) {
+      await pool.query(
+        `UPDATE rag_index_jobs
+         SET status = $2,
+             last_error = $3,
+             available_at = COALESCE($4, available_at)
+         WHERE id = $1`,
+        [jobId, retryAtValue ? "pending" : "failed", error, retryAtValue?.toISOString() ?? null]
+      );
+    },
+
+    async markRagIndexJobDead(jobId, error) {
+      await pool.query(
+        `UPDATE rag_index_jobs
+         SET status = 'dead', last_error = $2, completed_at = now()
+         WHERE id = $1`,
+        [jobId, error]
+      );
+    },
+
+    async replaceDocumentChunks(context, documentId, chunks, indexedDocument) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `DELETE FROM markdown_document_chunks
+           WHERE user_id = $1 AND document_id = $2`,
+          [context.userId, documentId]
+        );
+        for (const chunk of chunks) {
+          await client.query(
+            `INSERT INTO markdown_document_chunks
+              (id, user_id, document_id, document_version, section_id, heading_path, chunk_index,
+               content, content_hash, qdrant_point_id, qdrant_collection, embedding_model,
+               embedding_dimensions, indexed_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+            [
+              chunk.id,
+              context.userId,
+              documentId,
+              chunk.documentVersion,
+              chunk.sectionId,
+              JSON.stringify(chunk.headingPath),
+              chunk.chunkIndex,
+              chunk.content,
+              chunk.contentHash,
+              chunk.qdrantPointId,
+              chunk.qdrantCollection,
+              chunk.embeddingModel,
+              chunk.embeddingDimensions,
+              chunk.indexedAt ?? null
+            ]
+          );
+        }
+        const latest = chunks.at(0);
+        const indexedVersion = indexedDocument?.version ?? latest?.documentVersion ?? null;
+        const indexedContentHash = indexedDocument?.contentHash ?? null;
+        await client.query(
+          `UPDATE markdown_documents
+           SET index_status = 'indexed',
+               indexed_version = COALESCE($3, indexed_version),
+               indexed_content_hash = COALESCE($4, indexed_content_hash),
+               indexed_at = now()
+           WHERE user_id = $1 AND id = $2`,
+          [context.userId, documentId, indexedVersion, indexedContentHash]
+        );
+        await client.query("COMMIT");
+        return this.listChunksForDocument(context, documentId);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+
+    async listChunksForDocument(context, documentId) {
+      const result = await pool.query(
+        `SELECT *
+         FROM markdown_document_chunks
+         WHERE user_id = $1 AND document_id = $2
+         ORDER BY chunk_index ASC`,
+        [context.userId, documentId]
+      );
+      return result.rows.map(ragDocumentChunkFromRow);
+    },
+
+    async updateRagIndexHealth(userId, input) {
+      const collection = qdrantCollectionForUser(userId);
+      await pool.query(
+        `INSERT INTO rag_user_indexes
+          (user_id, qdrant_collection, collection_exists, qdrant_point_count, health_status,
+           last_error, embedding_model, embedding_dimensions, last_reconciliation_started_at,
+           last_reconciliation_completed_at, last_collection_check_at, expected_document_count,
+           expected_chunk_count)
+         VALUES (
+           $1, $2, COALESCE($3, false), $4, COALESCE($5, 'unknown'), $6,
+           COALESCE($7, 'text-embedding-3-small'), COALESCE($8, 1536), $9, $10, now(),
+           (SELECT count(*) FROM markdown_documents WHERE user_id = $1 AND deleted_at IS NULL),
+           (SELECT count(*) FROM markdown_document_chunks WHERE user_id = $1)
+         )
+         ON CONFLICT (user_id) DO UPDATE
+           SET collection_exists = COALESCE($3, rag_user_indexes.collection_exists),
+               qdrant_point_count = COALESCE($4, rag_user_indexes.qdrant_point_count),
+               health_status = COALESCE($5, rag_user_indexes.health_status),
+               last_error = $6,
+               embedding_model = COALESCE($7, rag_user_indexes.embedding_model),
+               embedding_dimensions = COALESCE($8, rag_user_indexes.embedding_dimensions),
+               last_reconciliation_started_at = COALESCE($9, rag_user_indexes.last_reconciliation_started_at),
+               last_reconciliation_completed_at = COALESCE($10, rag_user_indexes.last_reconciliation_completed_at),
+               last_collection_check_at = now(),
+               expected_document_count = EXCLUDED.expected_document_count,
+               expected_chunk_count = EXCLUDED.expected_chunk_count,
+               updated_at = now()`,
+        [
+          userId,
+          collection,
+          input.collectionExists ?? null,
+          input.qdrantPointCount ?? null,
+          input.healthStatus ?? null,
+          input.lastError ?? null,
+          input.embeddingModel ?? null,
+          input.embeddingDimensions ?? null,
+          input.reconciliationStartedAt ?? null,
+          input.reconciliationCompletedAt ?? null
+        ]
+      );
     },
 
     async createAgentMcpSession(context, input) {
@@ -1691,7 +1999,9 @@ export function createMemoryStore(): AgentStore {
   const memoryDocuments = new Map<string, MemoryDocumentRecord>();
   const markdownDocuments = new Map<string, MarkdownDocumentRecord>();
   const markdownSections = new Map<string, MarkdownSectionRecord[]>();
-  const markdownIndexJobs: Array<{ userId: string; documentId: string; status: string }> = [];
+  const markdownIndexJobs: RagIndexJobRecord[] = [];
+  const markdownChunks = new Map<string, RagDocumentChunkRecord[]>();
+  const ragCollections = new Map<string, string>();
   const agentMcpSessions = new Map<string, AgentMcpSession>();
   const connectors = new Map<string, ConnectorRecord>();
   const inboundProviderIds = new Map<string, string>();
@@ -1759,6 +2069,31 @@ export function createMemoryStore(): AgentStore {
     );
   }
 
+  function pushRagJob(
+    context: Pick<RequestContext, "userId">,
+    document: Pick<MarkdownDocumentRecord, "id" | "version" | "contentHash">,
+    jobType: RagIndexJobType
+  ): RagIndexJobRecord {
+    const now = nowIso();
+    const job: RagIndexJobRecord = {
+      id: randomUUID(),
+      userId: context.userId,
+      documentId: document.id,
+      requestedVersion: document.version,
+      requestedContentHash: document.contentHash,
+      jobType,
+      status: "pending",
+      attempts: 0,
+      lastError: null,
+      availableAt: now,
+      startedAt: null,
+      completedAt: null,
+      createdAt: now
+    };
+    markdownIndexJobs.push(job);
+    return job;
+  }
+
   function writeMarkdownMemory(
     context: RequestContext,
     input: { path: string; markdown: string; expectedVersion?: number },
@@ -1789,7 +2124,7 @@ export function createMemoryStore(): AgentStore {
     };
     markdownDocuments.set(key, document);
     storeMarkdownSections(document);
-    markdownIndexJobs.push({ userId: context.userId, documentId: document.id, status: "pending" });
+    pushRagJob(context, document, "index_markdown");
     pushAudit(context, auditAction, "markdown_document", document.id, {
       path: document.path,
       version: document.version
@@ -2083,6 +2418,13 @@ export function createMemoryStore(): AgentStore {
       }
       return document;
     },
+    async getMarkdownDocumentById(context, documentId, version) {
+      return [...markdownDocuments.values()].find((document) => {
+        return document.userId === context.userId
+          && document.id === documentId
+          && (version === undefined || document.version === version);
+      });
+    },
     async writeMarkdownDocument(context, input) {
       return writeMarkdownMemory(context, input);
     },
@@ -2098,7 +2440,7 @@ export function createMemoryStore(): AgentStore {
       }
       markdownDocuments.delete(key);
       markdownSections.delete(document.id);
-      markdownIndexJobs.push({ userId: context.userId, documentId: document.id, status: "pending" });
+      pushRagJob(context, document, "delete_markdown");
       pushAudit(context, "markdown.delete", "markdown_document", document.id, { path: normalized });
       return true;
     },
@@ -2127,7 +2469,7 @@ export function createMemoryStore(): AgentStore {
           updatedAt: nowIso()
         };
         markdownDocuments.set(`${context.userId}:${nextPath}`, updated);
-        markdownIndexJobs.push({ userId: context.userId, documentId: updated.id, status: "pending" });
+        pushRagJob(context, updated, "index_markdown");
         moved.push(updated);
       }
       pushAudit(context, "markdown.move", "markdown_document", null, { from, to, count: moved.length });
@@ -2193,6 +2535,41 @@ export function createMemoryStore(): AgentStore {
           version: document.version,
           updatedAt: document.updatedAt
         }));
+    },
+    async searchMarkdownSemantic(context, input) {
+      const prefix = input.pathPrefix ? normalizeMarkdownDirectory(input.pathPrefix) : "/";
+      const chunksByPoint = new Map<string, RagDocumentChunkRecord>();
+      for (const chunks of markdownChunks.values()) {
+        for (const chunk of chunks) {
+          chunksByPoint.set(chunk.qdrantPointId, chunk);
+        }
+      }
+      return input.pointIds
+        .map((pointId) => {
+          const chunk = chunksByPoint.get(pointId);
+          const document = chunk
+            ? [...markdownDocuments.values()].find((entry) => {
+              return entry.userId === context.userId
+                && entry.id === chunk.documentId
+                && entry.version === chunk.documentVersion
+                && markdownPathMatchesPrefix(entry.path, prefix);
+            })
+            : undefined;
+          if (!chunk || !document) {
+            return undefined;
+          }
+          return {
+            path: document.path,
+            version: document.version,
+            sectionId: chunk.sectionId,
+            headingPath: chunk.headingPath,
+            chunkIndex: chunk.chunkIndex,
+            score: input.scoresByPointId[pointId] ?? 0,
+            excerpt: chunk.content.replace(/\s+/g, " ").trim().slice(0, 320)
+          };
+        })
+        .filter((row): row is NonNullable<typeof row> => row !== undefined)
+        .slice(0, Math.max(1, Math.min(input.limit ?? 10, 25)));
     },
     async searchMarkdownHeadings(context, input) {
       const prefix = input.pathPrefix ? normalizeMarkdownDirectory(input.pathPrefix) : "/";
@@ -2273,10 +2650,92 @@ export function createMemoryStore(): AgentStore {
       const prefix = normalizeMarkdownDirectory(path);
       for (const document of markdownDocuments.values()) {
         if (document.userId === context.userId && markdownPathMatchesPrefix(document.path, prefix)) {
-          markdownIndexJobs.push({ userId: context.userId, documentId: document.id, status: "pending" });
+          pushRagJob(context, document, "index_markdown");
         }
       }
       return this.getMarkdownIndexStatus(context, path);
+    },
+    async ensureUserRagIndex(context) {
+      const collection = qdrantCollectionForUser(context.userId);
+      ragCollections.set(context.userId, collection);
+      return collection;
+    },
+    async enqueueRagJob(context, documentId, jobType) {
+      const document = [...markdownDocuments.values()].find((entry) => entry.userId === context.userId && entry.id === documentId);
+      return pushRagJob(context, document ?? {
+        id: documentId,
+        version: 0,
+        contentHash: ""
+      }, jobType);
+    },
+    async claimRagIndexJobs(limit, now) {
+      const claimed: RagIndexJobRecord[] = [];
+      for (const job of markdownIndexJobs) {
+        if (claimed.length >= limit) {
+          break;
+        }
+        const staleClaim = job.status === "claimed"
+          && job.startedAt !== null
+          && Date.parse(job.startedAt) < now.getTime() - 5 * 60_000;
+        if ((job.status === "pending" && Date.parse(job.availableAt) <= now.getTime()) || staleClaim) {
+          job.status = "claimed";
+          job.attempts += 1;
+          job.startedAt = nowIso();
+          claimed.push({ ...job });
+        }
+      }
+      return claimed;
+    },
+    async completeRagIndexJob(jobId) {
+      const job = markdownIndexJobs.find((entry) => entry.id === jobId);
+      if (job) {
+        job.status = "completed";
+        job.completedAt = nowIso();
+      }
+    },
+    async failRagIndexJob(jobId, error, retryAtValue) {
+      const job = markdownIndexJobs.find((entry) => entry.id === jobId);
+      if (job) {
+        job.status = retryAtValue ? "pending" : "failed";
+        job.lastError = error;
+        if (retryAtValue) {
+          job.availableAt = retryAtValue.toISOString();
+        }
+      }
+    },
+    async markRagIndexJobDead(jobId, error) {
+      const job = markdownIndexJobs.find((entry) => entry.id === jobId);
+      if (job) {
+        job.status = "dead";
+        job.lastError = error;
+        job.completedAt = nowIso();
+      }
+    },
+    async replaceDocumentChunks(context, documentId, chunks, _indexedDocument) {
+      const now = nowIso();
+      const records = chunks.map((chunk): RagDocumentChunkRecord => ({
+        ...chunk,
+        userId: context.userId,
+        documentId,
+        indexedAt: chunk.indexedAt ?? now,
+        createdAt: now
+      }));
+      markdownChunks.set(`${context.userId}:${documentId}`, records);
+      for (const [key, document] of markdownDocuments.entries()) {
+        if (document.userId === context.userId && document.id === documentId) {
+          markdownDocuments.set(key, {
+            ...document,
+            indexStatus: "indexed"
+          });
+        }
+      }
+      return records;
+    },
+    async listChunksForDocument(context, documentId) {
+      return markdownChunks.get(`${context.userId}:${documentId}`) ?? [];
+    },
+    async updateRagIndexHealth() {
+      return undefined;
     },
     async createAgentMcpSession(context, input) {
       const session: AgentMcpSession = {
