@@ -2119,7 +2119,14 @@ export function createPostgresStore(pool: Pool): AgentStore {
       await pool.query(
         `INSERT INTO agent_mcp_sessions (id, token_hash, user_id, run_id, allowed_tools_json, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [id, hashSessionToken(token), context.userId, input.runId ?? null, input.allowedTools ?? null, expiresAt]
+        [
+          id,
+          hashSessionToken(token),
+          context.userId,
+          input.runId ?? null,
+          input.allowedTools ? JSON.stringify(input.allowedTools) : null,
+          expiresAt
+        ]
       );
       await recordAudit(pool, context, "mcp.session.create", "agent_mcp_session", id, {
         run_id: input.runId ?? null,
