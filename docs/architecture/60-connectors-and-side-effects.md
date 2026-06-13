@@ -91,6 +91,12 @@ redact saved passwords and expose only a `password_set` flag. A user will not
 see new mail in the Inbox unless their IMAP connector is enabled, complete, and
 the worker is running.
 
+The IMAP inbox is the assistant's dedicated mailbox, not the owner's personal
+inbox. The assistant should only poll mailboxes intentionally configured for
+agent interaction, relay, or ingestion. UI labels and help text should describe
+this as the assistant mailbox or agent inbox so future work does not imply that
+the app is reading the owner's private personal mailbox.
+
 IMAP progress is stored on the per-user IMAP connector. The poller records
 `last_received_at` and `last_uid` after handled messages, then uses that progress
 on the next tick so it searches only newer mailbox entries instead of repeatedly
