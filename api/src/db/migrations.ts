@@ -1,5 +1,6 @@
 export const COLLAPSE_TENANT_TO_USER_MIGRATION_ID = "0002_collapse_tenant_to_user";
 export const MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID = "0003_memory_markdown_backfill";
+export const MCP_TOOL_ALLOWLIST_MIGRATION_ID = "0004_mcp_tool_allowlist";
 
 const tenantOwnedTables = [
   "identities",
@@ -142,4 +143,9 @@ WHERE d.deleted_at IS NULL
       AND j.requested_version = d.version
       AND j.job_type = 'index_markdown'
   );
+`;
+
+export const MCP_TOOL_ALLOWLIST_SQL = `
+ALTER TABLE agent_mcp_sessions
+  ADD COLUMN IF NOT EXISTS allowed_tools_json JSONB;
 `;

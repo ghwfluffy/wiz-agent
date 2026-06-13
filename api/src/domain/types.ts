@@ -8,6 +8,7 @@ export type RequestContext = {
   permissions: string[];
   requestId: string;
   session: Session;
+  mcpAllowedTools?: string[] | null;
 };
 
 export type TaskRecord = {
@@ -310,6 +311,7 @@ export type AgentMcpSession = {
   userId: string;
   runId: string | null;
   expiresAt: string;
+  allowedTools: string[] | null;
 };
 
 export type AgentRunRecord = {
@@ -454,6 +456,7 @@ export type AgentStore = {
   createAgentMcpSession(context: RequestContext, input: {
     runId?: string | null;
     ttlSeconds?: number;
+    allowedTools?: string[] | null;
   }): Promise<AgentMcpSession>;
   resolveAgentMcpSession(token: string | undefined, runId?: string | null): Promise<RequestContext | undefined>;
   listConnectors(context: RequestContext): Promise<ConnectorRecord[]>;

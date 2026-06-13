@@ -9,8 +9,8 @@ import { buildAgentPrompt, modelToolDescriptors } from "./promptContext.js";
 import type { Settings } from "../config/settings.js";
 import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain/types.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
-import { executeToolCall } from "../tools/toolExecutor.js";
 import { parseToolProposal, validateOrRepairToolCall } from "../tools/validator.js";
+import { McpToolClient, type AgentToolClient } from "./toolClient.js";
 
 export type AgentTaskRequest = {
   prompt: string;
@@ -38,6 +38,7 @@ export async function runAgentTask(options: {
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
+  toolClient?: AgentToolClient;
 }): Promise<AgentTaskResult> {
   const aiConfig = await options.store.getAiConfig();
   const tier = chooseModelTier(options.request.complexity ?? {});
@@ -104,16 +105,38 @@ export async function runAgentTask(options: {
       };
     }
 
-    const execution = await executeToolCall({
-      context: options.context,
-      store: options.store,
-      toolName: validated.toolName,
-      args: validated.arguments,
-      settings: options.settings,
-      integrationTokenProvider: options.integrationTokenProvider,
-      fetchImpl: options.fetchImpl,
-      replyToMessage: options.request.replyToMessage
-    });
+    let execution;
+    try {
+      execution = await (options.toolClient ?? new McpToolClient()).execute({
+        context: options.context,
+        store: options.store,
+        runId: run.id,
+        toolName: validated.toolName,
+        args: validated.arguments,
+        settings: options.settings,
+        integrationTokenProvider: options.integrationTokenProvider,
+        fetchImpl: options.fetchImpl,
+        replyToMessage: options.request.replyToMessage
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Tool execution failed.";
+      await options.store.recordToolCall(options.context, {
+        runId: run.id,
+        toolName: validated.toolName,
+        status: "failed",
+        arguments: validated.arguments,
+        validationError: message
+      });
+      await options.store.finishAgentRun(options.context, run.id, "failed", message);
+      return {
+        status: "failed",
+        runId: run.id,
+        toolStatus: "rejected",
+        repaired: validated.repaired,
+        toolName: validated.toolName,
+        failureMessage: message
+      };
+    }
 
     await options.store.recordToolCall(options.context, {
       runId: run.id,

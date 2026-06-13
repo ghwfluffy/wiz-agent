@@ -326,6 +326,7 @@ CREATE TABLE IF NOT EXISTS agent_mcp_sessions (
   token_hash TEXT NOT NULL UNIQUE,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   run_id TEXT REFERENCES agent_runs(id) ON DELETE CASCADE,
+  allowed_tools_json JSONB,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   expires_at TIMESTAMPTZ NOT NULL,
   revoked_at TIMESTAMPTZ

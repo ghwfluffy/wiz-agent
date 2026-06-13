@@ -330,7 +330,8 @@ function contextForAgentSession(session: AgentMcpSession): RequestContext {
       },
       createdAt: nowIso(),
       expiresAt: session.expiresAt
-    }
+    },
+    mcpAllowedTools: session.allowedTools
   };
 }
 
@@ -1583,14 +1584,15 @@ export function createPostgresStore(pool: Pool): AgentStore {
       const expiresAt = new Date(Date.now() + (input.ttlSeconds ?? 900) * 1000).toISOString();
       const id = randomUUID();
       await pool.query(
-        `INSERT INTO agent_mcp_sessions (id, token_hash, user_id, run_id, expires_at)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [id, hashSessionToken(token), context.userId, input.runId ?? null, expiresAt]
+        `INSERT INTO agent_mcp_sessions (id, token_hash, user_id, run_id, allowed_tools_json, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [id, hashSessionToken(token), context.userId, input.runId ?? null, input.allowedTools ?? null, expiresAt]
       );
       await recordAudit(pool, context, "mcp.session.create", "agent_mcp_session", id, {
-        run_id: input.runId ?? null
+        run_id: input.runId ?? null,
+        allowed_tools: input.allowedTools ?? null
       });
-      return { id, token, userId: context.userId, runId: input.runId ?? null, expiresAt };
+      return { id, token, userId: context.userId, runId: input.runId ?? null, expiresAt, allowedTools: input.allowedTools ?? null };
     },
 
     async resolveAgentMcpSession(token, runId) {
@@ -1598,7 +1600,7 @@ export function createPostgresStore(pool: Pool): AgentStore {
         return undefined;
       }
       const result = await pool.query(
-        `SELECT id, user_id, run_id, expires_at
+        `SELECT id, user_id, run_id, allowed_tools_json, expires_at
          FROM agent_mcp_sessions
          WHERE token_hash = $1
            AND revoked_at IS NULL
@@ -1615,7 +1617,8 @@ export function createPostgresStore(pool: Pool): AgentStore {
         token,
         userId: String(row.user_id),
         runId: row.run_id ? String(row.run_id) : null,
-        expiresAt: row.expires_at instanceof Date ? row.expires_at.toISOString() : String(row.expires_at)
+        expiresAt: row.expires_at instanceof Date ? row.expires_at.toISOString() : String(row.expires_at),
+        allowedTools: Array.isArray(row.allowed_tools_json) ? row.allowed_tools_json.map(String) : null
       };
       if (session.runId && session.runId !== runId) {
         return undefined;
@@ -2743,11 +2746,13 @@ export function createMemoryStore(): AgentStore {
         token: randomUUID(),
         userId: context.userId,
         runId: input.runId ?? null,
-        expiresAt: new Date(Date.now() + (input.ttlSeconds ?? 900) * 1000).toISOString()
+        expiresAt: new Date(Date.now() + (input.ttlSeconds ?? 900) * 1000).toISOString(),
+        allowedTools: input.allowedTools ?? null
       };
       agentMcpSessions.set(session.token, session);
       pushAudit(context, "mcp.session.create", "agent_mcp_session", session.id, {
-        run_id: session.runId
+        run_id: session.runId,
+        allowed_tools: session.allowedTools
       });
       return session;
     },

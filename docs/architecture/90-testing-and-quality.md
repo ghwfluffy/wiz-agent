@@ -46,6 +46,10 @@ Current tests cover:
 - cross-app integration token enforcement.
 - app capability registry coverage for Goals and Fluffynomics.
 - allowlisted integration-action request resolution.
+- MCP-backed agent tool execution through the default runtime client.
+- MCP session expiration, tool allowlist rejection, and agent-tool argument
+  validation.
+- local tool executor compatibility through `LocalToolClient`.
 - frontend base-path helpers.
 - sign-in button behavior.
 - OAuth login redirect, callback failure handling, and callback session

@@ -5,7 +5,9 @@ import {
   COLLAPSE_TENANT_TO_USER_MIGRATION_ID,
   COLLAPSE_TENANT_TO_USER_SQL,
   MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID,
-  MEMORY_MARKDOWN_BACKFILL_SQL
+  MEMORY_MARKDOWN_BACKFILL_SQL,
+  MCP_TOOL_ALLOWLIST_MIGRATION_ID,
+  MCP_TOOL_ALLOWLIST_SQL
 } from "./migrations.js";
 
 export async function runMigrations(): Promise<void> {
@@ -74,6 +76,26 @@ export async function runMigrations(): Promise<void> {
         await client.query(MEMORY_MARKDOWN_BACKFILL_SQL);
         await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
           MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const mcpToolAllowlistApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      MCP_TOOL_ALLOWLIST_MIGRATION_ID
+    ]);
+    if (mcpToolAllowlistApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(MCP_TOOL_ALLOWLIST_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          MCP_TOOL_ALLOWLIST_MIGRATION_ID
         ]);
         await client.query("COMMIT");
       } catch (error) {

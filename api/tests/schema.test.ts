@@ -3,7 +3,9 @@ import {
   COLLAPSE_TENANT_TO_USER_MIGRATION_ID,
   COLLAPSE_TENANT_TO_USER_SQL,
   MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID,
-  MEMORY_MARKDOWN_BACKFILL_SQL
+  MEMORY_MARKDOWN_BACKFILL_SQL,
+  MCP_TOOL_ALLOWLIST_MIGRATION_ID,
+  MCP_TOOL_ALLOWLIST_SQL
 } from "../src/db/migrations.js";
 import { INITIAL_SCHEMA_SQL } from "../src/db/schema.js";
 
@@ -59,6 +61,7 @@ describe("initial schema", () => {
     expect(INITIAL_SCHEMA_SQL).toContain("idx_audit_log_user_created");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_agent_runs_user_started");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_agent_mcp_sessions_token");
+    expect(INITIAL_SCHEMA_SQL).toContain("allowed_tools_json JSONB");
   });
 
   it("defines the tenant-collapse migration", () => {
@@ -76,5 +79,10 @@ describe("initial schema", () => {
     expect(MEMORY_MARKDOWN_BACKFILL_SQL).toContain("WHEN m.slug = 'newsletter-preferences' THEN '/preferences/newsletters.md'");
     expect(MEMORY_MARKDOWN_BACKFILL_SQL).toContain("ON CONFLICT (user_id, path) DO NOTHING");
     expect(MEMORY_MARKDOWN_BACKFILL_SQL).toContain("NOT EXISTS");
+  });
+
+  it("defines the MCP tool allowlist migration", () => {
+    expect(MCP_TOOL_ALLOWLIST_MIGRATION_ID).toBe("0004_mcp_tool_allowlist");
+    expect(MCP_TOOL_ALLOWLIST_SQL).toContain("ADD COLUMN IF NOT EXISTS allowed_tools_json JSONB");
   });
 });

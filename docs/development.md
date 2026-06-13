@@ -110,10 +110,20 @@ npm run mcp
 ```
 
 Host code creates a short-lived MCP bearer token for the current authenticated
-user with `POST /api/v1/agent/mcp-sessions`. The MCP service then accepts JSON
-tool calls at `POST /mcp/v1/tools/:tool` with `Authorization: Bearer <token>`.
-Agents and tests should pass file paths and content only; they must not pass
-`userId`, tenant, Qdrant collection, connector credential, or recipient fields.
+user/run. Runtime-created sessions include an explicit allowlist of agent tool
+names. The MCP service lists tools at `GET /mcp/v1/tools` and accepts structured
+JSON calls at `POST /mcp/v1/tools/:tool/call` with
+`Authorization: Bearer <token>` and, for run-bound sessions,
+`X-Agent-Run-Id: <run id>`. The legacy `POST /mcp/v1/tools/:tool` endpoint is
+kept for existing memory/RAG callers that expect `{ result }` responses.
+
+Agents and tests should pass only tool arguments such as file paths, content,
+task ids, and message bodies. They must not pass `userId`, tenant, Qdrant
+collection, connector credential, or recipient fields. Owner-reply recipient
+resolution uses verified host context passed into MCP, not model arguments.
+
+The production runtime path uses `McpToolClient`. `LocalToolClient` remains a
+deterministic compatibility wrapper for focused tests and fallback debugging.
 
 Human/UI knowledge inspection uses:
 

@@ -56,11 +56,12 @@ policy helper directly. The processor records the message, applies sender
 policy, and for owner-classified messages invokes `runOwnerInboundAgent`. That
 prompt includes current active tasks and bounded recent owner context so the
 model can decide whether the message is a continuation of ongoing work or new
-work. The model has local tools to list ongoing tasks, inspect recent owner
+work. The model has MCP-backed tools to list ongoing tasks, inspect recent owner
 conversations, append a prompt to an existing task, write memory,
 create/schedule a new task, queue an outbound message, record an observation, or
-request an allowed cross-app integration action. The host still validates every
-tool call and records the final handling action back on the inbox record.
+request an allowed cross-app integration action. The host validates every tool
+call, creates a user/run-scoped MCP session with an explicit tool allowlist, and
+records the final handling action back on the inbox record.
 
 Owner SMS/MMS follow-ups often refer to older messages or completed tasks in a
 conversational way. The owner inbound prompt therefore includes bounded recent
@@ -202,9 +203,10 @@ table rows; owner identity is not limited to environment variables.
 The model-facing `propose_outbound_message` tool is intentionally narrow. The
 model can only request `intent = reply`, optional subject text, body text, and
 whether approval is required. It must not provide a recipient, phone number,
-email address, or carrier gateway. Deterministic host code owns recipient
-resolution, approval handling, SMTP transport configuration, delivery, status
-updates, and audit records.
+email address, or carrier gateway. Deterministic host code passes verified
+inbound owner-message context into MCP when applicable; MCP/tool execution owns
+recipient resolution, approval handling, SMTP transport configuration, delivery,
+status updates, and audit records.
 
 Owner replies are resolved by host code. For owner-classified inbound
 SMS/MMS/email, the reply goes back to the verified inbound owner address and

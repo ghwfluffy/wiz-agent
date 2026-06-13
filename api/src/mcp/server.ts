@@ -1,5 +1,5 @@
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createPool } from "../db/pool.js";
@@ -9,15 +9,22 @@ import { loadSettings, type Settings } from "../config/settings.js";
 import { normalizeMarkdownDirectory } from "../memory/markdownFilesystem.js";
 import { MockEmbeddingClient, OpenAIEmbeddingClient, type EmbeddingClient } from "../rag/embeddings.js";
 import { HttpQdrantClient, type QdrantClient } from "../rag/qdrant.js";
+import type { InboundMessageRecord } from "../domain/types.js";
+import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
+import { isToolName } from "../tools/contracts.js";
+import { mcpToolDescriptors, ToolRegistry } from "../tools/registry.js";
 
 export type McpAppOptions = {
   settings?: Settings;
   store?: AgentStore;
   embeddings?: EmbeddingClient;
   qdrant?: QdrantClient;
+  integrationTokenProvider?: IntegrationTokenProvider;
+  fetchImpl?: typeof fetch;
+  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
 };
 
-const toolNames = [
+const memoryToolNames = [
   "list_dir",
   "tree",
   "stat_path",
@@ -36,6 +43,7 @@ const toolNames = [
   "get_index_status",
   "reindex_path"
 ];
+const toolNames = [...memoryToolNames, ...Object.keys(ToolRegistry)];
 
 function bearerToken(header: string | undefined): string | undefined {
   const match = /^Bearer\s+(.+)$/i.exec(header ?? "");
@@ -101,8 +109,18 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
     boundary: "server_resolves_authenticated_agent_user"
   }));
 
-  app.post("/mcp/v1/tools/:tool", async (context) => {
+  app.get("/mcp/v1/tools", (context) => context.json({
+    tools: [
+      ...memoryToolNames.map((name) => ({ name, surface: "memory_rag" })),
+      ...mcpToolDescriptors()
+    ]
+  }));
+
+  const callTool = async (context: Context, structured: boolean) => {
     const tool = context.req.param("tool");
+    if (!tool) {
+      return context.json({ error: { code: "unknown_tool", message: "Unknown MCP tool." } }, 404);
+    }
     if (!toolNames.includes(tool)) {
       return context.json({ error: { code: "unknown_tool", message: "Unknown MCP tool." } }, 404);
     }
@@ -111,11 +129,36 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
     if (!authContext) {
       return context.json({ error: { code: "mcp_unauthorized", message: "Valid agent MCP session required." } }, 401);
     }
+    if (authContext.mcpAllowedTools && !authContext.mcpAllowedTools.includes(tool)) {
+      return context.json({ error: { code: "mcp_tool_forbidden", message: "MCP session is not allowed to call this tool." } }, 403);
+    }
     const args = payload(await context.req.json().catch(() => ({})));
 
     try {
       let result: unknown;
-      if (tool === "list_dir") {
+      let sideEffect: "none" | "local_persistence" | "cross_app_api" = "none";
+      let executed = true;
+      if (isToolName(tool)) {
+        const parsed = ToolRegistry[tool].schema.safeParse(args);
+        if (!parsed.success) {
+          await store.recordAudit(authContext, "mcp.tool.rejected", "mcp_tool", tool, {
+            run_id: runId,
+            validation_error: parsed.error.issues.map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`).join("; ")
+          });
+          return context.json({ error: { code: "mcp_validation_failed", message: "MCP tool arguments failed validation." } }, 400);
+        }
+        const execution = await ToolRegistry[tool].execute({
+          context: authContext,
+          store,
+          settings,
+          integrationTokenProvider: options.integrationTokenProvider,
+          fetchImpl: options.fetchImpl,
+          replyToMessage: options.replyToMessage
+        }, parsed.data);
+        result = execution.result;
+        sideEffect = execution.sideEffect;
+        executed = execution.executed;
+      } else if (tool === "list_dir") {
         result = { entries: await store.listMarkdownDirectory(authContext, stringArg(args, "path", "/")) };
       } else if (tool === "tree") {
         const root = stringArg(args, "path", "/");
@@ -238,9 +281,16 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
 
       await store.recordAudit(authContext, "mcp.tool.ok", "mcp_tool", tool, {
         path: typeof args.path === "string" ? args.path : null,
-        run_id: runId
+        run_id: runId,
+        side_effect: sideEffect,
+        executed
       });
-      return context.json(isConflict(result) ? { error: result } : { result }, isConflict(result) ? 409 : 200);
+      return context.json(isConflict(result) ? { error: result } : structured ? {
+        ok: executed,
+        tool,
+        sideEffect,
+        result
+      } : { result }, isConflict(result) ? 409 : 200);
     } catch (error) {
       await store.recordAudit(authContext, "mcp.tool.failed", "mcp_tool", tool, {
         run_id: runId,
@@ -248,7 +298,10 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
       });
       return context.json({ error: { code: "mcp_tool_failed", message: "MCP tool failed." } }, 400);
     }
-  });
+  };
+
+  app.post("/mcp/v1/tools/:tool", (context) => callTool(context, false));
+  app.post("/mcp/v1/tools/:tool/call", (context) => callTool(context, true));
 
   return app;
 }

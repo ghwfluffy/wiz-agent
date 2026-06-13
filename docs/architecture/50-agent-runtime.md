@@ -47,11 +47,17 @@ secret env files or `AGENT_OPENAI_API_KEY_FILE` to read a mounted ignored secret
 file. `AGENT_OPENAI_BASE_URL` is non-secret configuration and defaults to
 `https://api.openai.com/v1`.
 
-## Tool Contracts
+## Tool Contracts And MCP Runtime
 
-Tool contracts are Zod schemas in code. Model outputs are validated before tool
-execution. Invalid tool arguments may go through a bounded repair call that gets
-the malformed payload, expected contract shape, and validation errors.
+Tool contracts are Zod schemas in a shared tool registry. The registry produces
+model-facing descriptors, MCP descriptors, validation schemas, risk metadata,
+side-effect classifications, and host execution handlers.
+
+Model outputs are validated before tool execution. Invalid tool arguments may go
+through a bounded repair call that gets the malformed payload, expected contract
+shape, and validation errors. The MCP boundary validates the same schemas again
+after resolving the authenticated session so production execution does not
+depend on model-side or runtime-side validation alone.
 
 Current tool contracts:
 
@@ -72,7 +78,23 @@ API call.
 
 The runtime includes the app capability registry in the model prompt so the
 model knows what Goals and Fluffynomics are for and which actions are available.
-Accepted local tool calls now execute through deterministic host code:
+Accepted tool calls execute through the server-owned MCP boundary by default:
+
+1. host code creates an agent run;
+2. the MCP tool client creates a short-lived session for that user/run with an
+   explicit allowlist of agent tool names;
+3. the runtime sends the validated call to `POST /mcp/v1/tools/:tool/call`;
+4. MCP resolves the bearer token server-side, rejects expired, mismatched-run,
+   or disallowed-tool sessions, validates arguments, executes host-owned logic,
+   and writes MCP audit events;
+5. the runtime records the accepted or rejected tool-call result on the agent
+   run.
+
+The local in-process executor remains only as `LocalToolClient`, a
+compatibility wrapper for deterministic tests and emergency fallback. It is not
+the default runtime path.
+
+Current migrated agent tools:
 
 - `create_task` creates a user-scoped task.
 - `list_ongoing_tasks` returns active user-scoped tasks without side effects.
@@ -89,7 +111,9 @@ Accepted local tool calls now execute through deterministic host code:
 
 `integration_action` resolves through the registered app capability allowlist
 and then through the scoped integration gateway. It fails closed unless settings
-and signed agent-token configuration are supplied by host code.
+and signed agent-token configuration are supplied by host code. Reply tools
+receive any inbound owner-message context from host code, not from model
+arguments, so the model still cannot select recipients.
 
 ## Repair Flow
 
@@ -154,7 +178,7 @@ missing, expired, revoked, or mismatched-run sessions. Tool arguments must not
 include user IDs, tenant IDs, collection names, connector credentials, or raw
 recipient information.
 
-Initial MCP memory tools are:
+Initial MCP memory/RAG tools are:
 
 - `list_dir`, `tree`, `stat_path`
 - `read_file`, `write_file`, `delete_path`, `move_path`
@@ -162,11 +186,12 @@ Initial MCP memory tools are:
 - `search_headings`, `grep`
 - `get_index_status`, `reindex_path`
 
-Every MCP tool call records an audit event with the resolved user, tool name,
-optional run id, path when supplied, and outcome. Markdown writes update source
-rows, parse sections, and enqueue RAG index jobs. RAG indexing remains a
-deterministic host concern; the model never receives or supplies Qdrant
-collection names.
+The MCP surface also exposes the migrated agent tools listed above. Every MCP
+tool call records an audit event with the resolved user, tool name, optional run
+id, path when supplied, side-effect classification, and outcome. Markdown writes
+update source rows, parse sections, and enqueue RAG index jobs. RAG indexing
+remains a deterministic host concern; the model never receives or supplies
+Qdrant collection names.
 
 ## Host-Owned Controls
 

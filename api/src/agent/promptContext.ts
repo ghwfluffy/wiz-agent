@@ -1,5 +1,5 @@
 import { buildCapabilityContext } from "../integrations/capabilityRegistry.js";
-import { ToolContracts, type ToolName } from "../tools/contracts.js";
+export { modelToolDescriptors } from "../tools/registry.js";
 
 export function buildAgentPrompt(userPrompt: string): string {
   return [
@@ -14,11 +14,4 @@ export function buildAgentPrompt(userPrompt: string): string {
     "Owner request:",
     userPrompt
   ].join("\n");
-}
-
-export function modelToolDescriptors(): unknown[] {
-  return Object.entries(ToolContracts).map(([name, schema]) => ({
-    name: name as ToolName,
-    schema: schema.toJSONSchema()
-  }));
 }

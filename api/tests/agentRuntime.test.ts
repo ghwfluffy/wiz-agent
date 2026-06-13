@@ -4,11 +4,13 @@ import { buildOwnerInboundPrompt, runOwnerInboundAgent } from "../src/agent/inbo
 import { chooseModelTier, modelTierConfigFromSettings, resolveModelId } from "../src/agent/modelTiers.js";
 import { buildAgentPrompt, modelToolDescriptors } from "../src/agent/promptContext.js";
 import { runAgentTask } from "../src/agent/runAgentTask.js";
+import { LocalToolClient } from "../src/agent/toolClient.js";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
 import { buildCapabilityContext, getIntegrationAction, listAppCapabilities } from "../src/integrations/capabilityRegistry.js";
 import { PERSONAL_PROFILE_SLUG } from "../src/memory/personalMemory.js";
+import { buildMcpApp } from "../src/mcp/server.js";
 import { validateOrRepairToolCall } from "../src/tools/validator.js";
 
 async function testContext(isAdmin = true): Promise<{ context: RequestContext; store: ReturnType<typeof createMemoryStore> }> {
@@ -175,7 +177,7 @@ describe("app capability registry", () => {
 });
 
 describe("agent task execution", () => {
-  it("executes accepted local task tool calls through deterministic host code", async () => {
+  it("executes accepted task tool calls through the default MCP client", async () => {
     const { context, store } = await testContext();
 
     const result = await runAgentTask({
@@ -214,9 +216,158 @@ describe("agent task execution", () => {
     expect(audit).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ action: "agent_run.create" }),
+        expect.objectContaining({ action: "mcp.session.create" }),
+        expect.objectContaining({ action: "mcp.tool.ok" }),
         expect.objectContaining({ action: "task.create" }),
         expect.objectContaining({ action: "tool_call.accepted" }),
         expect.objectContaining({ action: "agent_run.completed" })
+      ])
+    );
+  });
+
+  it("keeps the local tool client as a deterministic compatibility fallback", async () => {
+    const { context, store } = await testContext();
+
+    const result = await runAgentTask({
+      context,
+      store,
+      toolClient: new LocalToolClient(),
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_observation",
+            arguments: {
+              summary: "No side effects required.",
+              source: "unit-test"
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Record an observation."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "accepted",
+      sideEffect: "none",
+      executionResult: {
+        recorded: true,
+        source: "unit-test"
+      }
+    });
+    const audit = await store.listAudit(context, true);
+    expect(audit).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "mcp.session.create" })
+      ])
+    );
+  });
+
+  it("enforces MCP session auth, expiration, allowlists, and agent-tool validation", async () => {
+    const { context, store } = await testContext();
+    const app = buildMcpApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      store
+    });
+
+    const expired = await store.createAgentMcpSession(context, {
+      ttlSeconds: -1,
+      allowedTools: ["list_ongoing_tasks"]
+    });
+    const expiredResponse = await app.request("/mcp/v1/tools/list_ongoing_tasks/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${expired.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({})
+    });
+    expect(expiredResponse.status).toBe(401);
+
+    const session = await store.createAgentMcpSession(context, {
+      ttlSeconds: 60,
+      allowedTools: ["list_ongoing_tasks"]
+    });
+    const forbidden = await app.request("/mcp/v1/tools/create_task/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ title: "Blocked", prompt: "Should not run." })
+    });
+    expect(forbidden.status).toBe(403);
+
+    const malformed = await app.request("/mcp/v1/tools/list_ongoing_tasks/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ reason: "" })
+    });
+    expect(malformed.status).toBe(400);
+    await expect(malformed.json()).resolves.toMatchObject({
+      error: { code: "mcp_validation_failed" }
+    });
+
+    const ok = await app.request("/mcp/v1/tools/list_ongoing_tasks/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ reason: "Allowed lookup." })
+    });
+    expect(ok.status).toBe(200);
+    await expect(ok.json()).resolves.toMatchObject({
+      ok: true,
+      tool: "list_ongoing_tasks",
+      sideEffect: "none",
+      result: { tasks: [] }
+    });
+  });
+
+  it("records a failed tool call when the MCP boundary rejects execution", async () => {
+    const { context, store } = await testContext();
+
+    const result = await runAgentTask({
+      context,
+      store,
+      toolClient: {
+        async execute() {
+          throw new Error("MCP tool arguments failed validation.");
+        }
+      },
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "create_task",
+            arguments: {
+              title: "Boundary rejected task",
+              prompt: "This should not be created."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Create a task."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      toolStatus: "rejected",
+      toolName: "create_task",
+      failureMessage: "MCP tool arguments failed validation."
+    });
+    await expect(store.listTasks(context)).resolves.toEqual([]);
+    await expect(store.listAudit(context, true)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "tool_call.failed" }),
+        expect.objectContaining({ action: "agent_run.failed" })
       ])
     );
   });
