@@ -172,6 +172,11 @@ describe("app capability registry", () => {
     expect(tools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "list_app_capabilities", access: "read", sideEffect: "none" }),
+        expect.objectContaining({ name: "list_goals", access: "read", sideEffect: "cross_app_api" }),
+        expect.objectContaining({ name: "create_goal", access: "write", sideEffect: "local_persistence" }),
+        expect.objectContaining({ name: "list_budget_accounts", access: "read", sideEffect: "cross_app_api" }),
+        expect.objectContaining({ name: "create_budget_contract", access: "write", sideEffect: "local_persistence" }),
+        expect.objectContaining({ name: "create_budget_expense", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "integration_action" }),
         expect.objectContaining({ name: "create_task" })
       ])
@@ -369,6 +374,140 @@ describe("agent task execution", () => {
         ]
       }
     });
+  });
+
+  it("executes simplified read-only app wrapper tools through the integration gateway", async () => {
+    const { context, store } = await testContext();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      status: 200,
+      json: async () => ([{ id: "acct-1", name: "Chase" }])
+    });
+    const app = buildMcpApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "standalone",
+        BUDGET_API_BASE_URL: "https://budget.example.test/api"
+      }),
+      store,
+      integrationTokenProvider: {
+        async tokenFor(_context, appId, scope) {
+          return `${appId}:${scope}:token`;
+        }
+      },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const session = await store.createAgentMcpSession(context, {
+      ttlSeconds: 60,
+      allowedTools: ["list_budget_accounts"]
+    });
+
+    const response = await app.request("/mcp/v1/tools/list_budget_accounts/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ reason: "Find the Chase card account id." })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      tool: "list_budget_accounts",
+      sideEffect: "cross_app_api",
+      result: {
+        status: 200,
+        data: [{ id: "acct-1", name: "Chase" }]
+      }
+    });
+    expect(fetchImpl).toHaveBeenCalledWith(
+      new URL("https://budget.example.test/api/accounts"),
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          authorization: "Bearer budget:budget.list_accounts:token"
+        })
+      })
+    );
+  });
+
+  it("queues simplified budget contract and expense writes for approval", async () => {
+    const { context, store } = await testContext();
+    const app = buildMcpApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      store
+    });
+    const session = await store.createAgentMcpSession(context, {
+      ttlSeconds: 60,
+      allowedTools: ["create_budget_contract", "create_budget_expense"]
+    });
+
+    const contractResponse = await app.request("/mcp/v1/tools/create_budget_contract/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        name: "Codex",
+        type: "payment",
+        amountCents: 19900,
+        organization: "OpenAI",
+        linkedAccountId: "acct-chase",
+        paymentPeriod: "monthly",
+        paymentDay: 9,
+        billingDay: 9,
+        userIntentSummary: "Add Codex as a monthly Chase card bill."
+      })
+    });
+    expect(contractResponse.status).toBe(200);
+
+    const expenseResponse = await app.request("/mcp/v1/tools/create_budget_expense/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        name: "Taco Bell",
+        category: "Dining",
+        estimatedAmountCents: 2000,
+        linkedAccountId: "acct-chase",
+        generalFrequency: "{\"kind\":\"weekly_weekday\",\"weekday\":5}",
+        userIntentSummary: "Add observed Saturday Taco Bell spending to projected expenses."
+      })
+    });
+    expect(expenseResponse.status).toBe(200);
+
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        actionType: "cross_app_write_action",
+        sourceRef: "budget.create_contract",
+        proposedPayload: expect.objectContaining({
+          action_id: "budget.create_contract",
+          body: expect.objectContaining({
+            name: "Codex",
+            amount_cents: 19900,
+            linked_account_id: "acct-chase",
+            payment_period: "monthly",
+            payment_day: 9
+          })
+        })
+      }),
+      expect.objectContaining({
+        actionType: "cross_app_write_action",
+        sourceRef: "budget.create_expense",
+        proposedPayload: expect.objectContaining({
+          action_id: "budget.create_expense",
+          body: expect.objectContaining({
+            name: "Taco Bell",
+            estimated_amount_cents: 2000,
+            linked_account_id: "acct-chase",
+            general_frequency: "{\"kind\":\"weekly_weekday\",\"weekday\":5}"
+          })
+        })
+      })
+    ]));
   });
 
   it("records a failed tool call when the MCP boundary rejects execution", async () => {

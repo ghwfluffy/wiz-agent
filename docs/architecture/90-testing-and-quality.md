@@ -46,6 +46,8 @@ Current tests cover:
 - cross-app integration token enforcement.
 - app capability registry coverage for Goals, Fluffynomics, and Apartment Gate.
 - read-only MCP capability lookup for app registry data.
+- simplified MCP wrappers for Goals and Fluffynomics reads and write-approval
+  proposals.
 - allowlisted integration-action request resolution.
 - MCP-backed agent tool execution through the default runtime client.
 - MCP session expiration, tool allowlist rejection, and agent-tool argument

@@ -21,10 +21,12 @@ authority. Each app entry describes:
 - safety rules and response guidance.
 
 The model can query the registry through the read-only
-`list_app_capabilities` MCP tool and can propose an `integration_action` tool
-call for registered action ids. Deterministic host code still owns endpoint
-allowlisting, token lookup, user context headers, authorization, audit logging,
-redaction, and side-effect execution.
+`list_app_capabilities` MCP tool. For common workflows, model-facing wrapper
+tools expose simpler schemas and map internally to registered action ids.
+`integration_action` remains an advanced fallback for registered action ids.
+Deterministic host code still owns endpoint allowlisting, token lookup, user
+context headers, authorization, audit logging, redaction, and side-effect
+execution.
 
 The production token provider mints short-lived HMAC-signed bearer tokens from
 `AGENT_INTEGRATION_TOKEN_SECRET`. Tokens are scoped to the current central OAuth

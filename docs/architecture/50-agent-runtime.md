@@ -67,6 +67,30 @@ Current tool contracts:
 - `list_recent_owner_conversations`
 - `get_recent_bot_activity`
 - `list_app_capabilities`
+- `list_goals`
+- `create_goal`
+- `update_goal`
+- `complete_goal_checklist_item`
+- `list_goal_metrics`
+- `record_goal_metric_entry`
+- `list_goal_notifications`
+- `complete_goal_notification`
+- `list_budget_accounts`
+- `get_budget_account`
+- `record_budget_account_value`
+- `get_net_worth_history`
+- `get_net_worth_forecast`
+- `list_budget_transfers`
+- `list_budget_contracts`
+- `create_budget_contract`
+- `update_budget_contract`
+- `delete_budget_contract`
+- `list_budget_expenses`
+- `create_budget_expense`
+- `update_budget_expense`
+- `delete_budget_expense`
+- `list_budget_investments`
+- `list_budget_audit_logs`
 - `write_memory`
 - `append_task_prompt`
 - `update_task_schedule`
@@ -128,6 +152,13 @@ Current migrated agent tools:
 - `list_app_capabilities` returns the app capability registry through MCP so the
   agent can query available apps, safe action ids, and directory-only app
   boundaries at runtime.
+- Goals wrappers expose common goal, metric, checklist, and notification
+  workflows without requiring the model to build generic app API requests.
+- Fluffynomics wrappers expose account lookup, forecasts, transfers, contracts,
+  projected expenses, investments, audit logs, and account-value updates.
+  Contract and expense write wrappers are intended for owner statements such as
+  recurring bills or observed spending patterns, but they still queue approval
+  before changing projection data.
 - `write_memory` appends model-selected durable markdown memory under host-owned
   user scope.
 - `append_task_prompt` appends owner follow-up context to an existing task,

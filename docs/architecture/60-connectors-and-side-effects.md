@@ -344,6 +344,15 @@ contents without credentials. The `integration_action` MCP tool is the only
 cross-app execution path and accepts only action ids registered in the
 capability registry.
 
+Most model-facing app work should use simplified MCP wrapper tools instead of
+raw `integration_action`. Wrappers such as `list_goals`,
+`record_goal_metric_entry`, `list_budget_accounts`, `create_budget_contract`,
+and `create_budget_expense` provide task-shaped schemas and then map to the
+registered action ids internally. Read wrappers call app APIs through the
+integration gateway with scoped signed tokens. Write/delete wrappers queue
+`cross_app_write_action` approvals with the exact registered action id, path
+params, query, and body to execute after approval.
+
 The registry is also a maintenance contract. When a future request adds or
 changes an omnisite app, app API, or major user-facing capability, update the
 registry and tests in the same change so the agent's context and allowlist stay

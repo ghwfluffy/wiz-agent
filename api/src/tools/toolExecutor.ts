@@ -1,15 +1,57 @@
 import type { Settings } from "../config/settings.js";
 import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain/types.js";
-import type { IntegrationTokenProvider } from "./integrationGateway.js";
+import { callIntegrationActionApi, type IntegrationTokenProvider } from "./integrationGateway.js";
 import type { ToolName } from "./contracts.js";
 import { createCrossAppApproval, createOutboundApproval } from "../security/approvalPolicy.js";
-import { listAppCapabilities, type IntegrationAppId } from "../integrations/capabilityRegistry.js";
+import { listAppCapabilities, type IntegrationActionId, type IntegrationAppId } from "../integrations/capabilityRegistry.js";
 
 export type ToolExecutionResult = {
   executed: boolean;
   sideEffect: "none" | "local_persistence" | "cross_app_api";
   result: Record<string, unknown>;
 };
+
+function compactPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
+}
+
+function budgetContractPayload(args: Record<string, unknown>): Record<string, unknown> {
+  return compactPayload({
+    name: args.name,
+    type: args.type,
+    automatic: args.automatic,
+    amount_cents: args.amountCents,
+    organization: args.organization,
+    linked_account_id: args.linkedAccountId,
+    linked_wallet: args.linkedWallet,
+    source_account_id: args.sourceAccountId,
+    last_payment_date: args.lastPaymentDate,
+    next_payment_date: args.nextPaymentDate,
+    payment_period: args.paymentPeriod,
+    payment_day: args.paymentDay,
+    expiration_date: args.expirationDate,
+    notes: args.notes,
+    category: args.category,
+    url: args.url,
+    account_number: args.accountNumber,
+    billing_day: args.billingDay
+  });
+}
+
+function budgetExpensePayload(args: Record<string, unknown>): Record<string, unknown> {
+  return compactPayload({
+    name: args.name,
+    category: args.category,
+    notes: args.notes,
+    estimated_amount_cents: args.estimatedAmountCents,
+    linked_account_id: args.linkedAccountId,
+    enabled: args.enabled,
+    general_frequency: args.generalFrequency,
+    last_expensed_date: args.lastExpensedDate,
+    next_expensed_date: args.nextExpensedDate,
+    next_date_is_static: args.nextDateIsStatic
+  });
+}
 
 export async function executeToolCall(options: {
   context: RequestContext;
@@ -22,6 +64,73 @@ export async function executeToolCall(options: {
   fetchImpl?: typeof fetch;
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
 }): Promise<ToolExecutionResult> {
+  const callReadIntegration = async (
+    actionId: IntegrationActionId,
+    input: {
+      pathParams?: Record<string, string>;
+      query?: Record<string, string | number | boolean>;
+      body?: unknown;
+    } = {}
+  ): Promise<ToolExecutionResult> => {
+    if (!options.settings || !options.integrationTokenProvider) {
+      return {
+        executed: false,
+        sideEffect: "none",
+        result: { reason: "integration_not_configured" }
+      };
+    }
+    const result = await callIntegrationActionApi({
+      settings: options.settings,
+      context: options.context,
+      actionId,
+      pathParams: input.pathParams,
+      query: input.query,
+      body: input.body,
+      tokenProvider: options.integrationTokenProvider,
+      fetchImpl: options.fetchImpl
+    });
+    return {
+      executed: result.ok,
+      sideEffect: result.ok ? "cross_app_api" : "none",
+      result: result.ok ? { status: result.status, data: result.data } : { reason: result.reason }
+    };
+  };
+
+  const queueIntegrationApproval = async (
+    actionId: IntegrationActionId,
+    input: {
+      pathParams?: Record<string, string>;
+      query?: Record<string, string | number | boolean>;
+      body?: unknown;
+      summary: string;
+    }
+  ): Promise<ToolExecutionResult> => {
+    const approval = await createCrossAppApproval({
+      context: options.context,
+      store: options.store,
+      runId: options.runId ?? null,
+      actionId,
+      proposedPayload: {
+        action_id: actionId,
+        path_params: input.pathParams ?? {},
+        query: input.query ?? {},
+        body: input.body ?? null,
+        user_intent_summary: input.summary
+      },
+      summary: input.summary
+    });
+    return {
+      executed: true,
+      sideEffect: "local_persistence",
+      result: {
+        approval_id: approval.id,
+        status: "queued_approval",
+        approval_required: true,
+        action_id: actionId
+      }
+    };
+  };
+
   switch (options.toolName) {
     case "create_task": {
       const task = await options.store.createTask(options.context, {
@@ -255,6 +364,152 @@ export async function executeToolCall(options: {
         result: { apps }
       };
     }
+    case "list_goals":
+      return callReadIntegration("goals.list_goals", {
+        query: { include_archived: options.args.includeArchived === true }
+      });
+    case "create_goal":
+      return queueIntegrationApproval("goals.create_goal", {
+        body: compactPayload({
+          goal_type: options.args.goalType,
+          title: options.args.title,
+          description: options.args.description,
+          start_date: options.args.startDate,
+          target_date: options.args.targetDate,
+          target_value_number: options.args.targetValueNumber,
+          target_value_date: options.args.targetValueDate,
+          success_threshold_percent: options.args.successThresholdPercent,
+          exception_dates: options.args.exceptionDates,
+          checklist_items: options.args.checklistItems,
+          metric_id: options.args.metricId,
+          new_metric: options.args.newMetric && typeof options.args.newMetric === "object" ? compactPayload({
+            name: (options.args.newMetric as Record<string, unknown>).name,
+            metric_type: (options.args.newMetric as Record<string, unknown>).metricType,
+            decimal_places: (options.args.newMetric as Record<string, unknown>).decimalPlaces,
+            unit_label: (options.args.newMetric as Record<string, unknown>).unitLabel,
+            initial_number_value: (options.args.newMetric as Record<string, unknown>).initialNumberValue,
+            initial_date_value: (options.args.newMetric as Record<string, unknown>).initialDateValue,
+            recorded_at: (options.args.newMetric as Record<string, unknown>).recordedAt
+          }) : options.args.newMetric
+        }),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "update_goal":
+      return queueIntegrationApproval("goals.update_goal", {
+        pathParams: { goal_id: String(options.args.goalId) },
+        body: compactPayload({
+          title: options.args.title,
+          description: options.args.description,
+          start_date: options.args.startDate,
+          target_date: options.args.targetDate,
+          target_value_number: options.args.targetValueNumber,
+          target_value_date: options.args.targetValueDate,
+          success_threshold_percent: options.args.successThresholdPercent,
+          exception_dates: options.args.exceptionDates,
+          checklist_items: options.args.checklistItems,
+          archived: options.args.archived
+        }),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "complete_goal_checklist_item":
+      return queueIntegrationApproval("goals.complete_checklist_item", {
+        pathParams: {
+          goal_id: String(options.args.goalId),
+          item_id: String(options.args.itemId)
+        },
+        body: { completed: options.args.completed !== false },
+        summary: String(options.args.userIntentSummary)
+      });
+    case "list_goal_metrics":
+      return callReadIntegration("goals.list_metrics", {
+        query: { include_archived: options.args.includeArchived === true }
+      });
+    case "record_goal_metric_entry":
+      return queueIntegrationApproval("goals.record_metric_entry", {
+        pathParams: { metric_id: String(options.args.metricId) },
+        body: compactPayload({
+          number_value: options.args.numberValue,
+          date_value: options.args.dateValue,
+          recorded_at: options.args.recordedAt
+        }),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "list_goal_notifications":
+      return callReadIntegration("goals.list_notifications", {
+        query: { timezone: String(options.args.timezone) }
+      });
+    case "complete_goal_notification":
+      return queueIntegrationApproval("goals.complete_notification", {
+        pathParams: { notification_id: String(options.args.notificationId) },
+        body: compactPayload({
+          timezone: options.args.timezone,
+          number_value: options.args.numberValue,
+          recorded_at: options.args.recordedAt
+        }),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "list_budget_accounts":
+      return callReadIntegration("budget.list_accounts");
+    case "get_budget_account":
+      return callReadIntegration("budget.get_account", {
+        pathParams: { account_id: String(options.args.accountId) }
+      });
+    case "record_budget_account_value":
+      return queueIntegrationApproval("budget.update_account_value", {
+        pathParams: { account_id: String(options.args.accountId) },
+        body: options.args.value,
+        summary: String(options.args.userIntentSummary)
+      });
+    case "get_net_worth_history":
+      return callReadIntegration("budget.get_net_worth_history");
+    case "get_net_worth_forecast":
+      return callReadIntegration("budget.get_net_worth_forecast", {
+        query: typeof options.args.throughDate === "string" ? { through_date: options.args.throughDate } : {}
+      });
+    case "list_budget_transfers":
+      return callReadIntegration("budget.list_transfers");
+    case "list_budget_contracts":
+      return callReadIntegration("budget.list_contracts");
+    case "create_budget_contract":
+      return queueIntegrationApproval("budget.create_contract", {
+        body: budgetContractPayload(options.args),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "update_budget_contract":
+      return queueIntegrationApproval("budget.update_contract", {
+        pathParams: { contract_id: String(options.args.contractId) },
+        body: budgetContractPayload(options.args),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "delete_budget_contract":
+      return queueIntegrationApproval("budget.delete_contract", {
+        pathParams: { contract_id: String(options.args.contractId) },
+        summary: String(options.args.userIntentSummary)
+      });
+    case "list_budget_expenses":
+      return callReadIntegration("budget.list_expenses");
+    case "create_budget_expense":
+      return queueIntegrationApproval("budget.create_expense", {
+        body: budgetExpensePayload(options.args),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "update_budget_expense":
+      return queueIntegrationApproval("budget.update_expense", {
+        pathParams: { expense_id: String(options.args.expenseId) },
+        body: budgetExpensePayload(options.args),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "delete_budget_expense":
+      return queueIntegrationApproval("budget.delete_expense", {
+        pathParams: { expense_id: String(options.args.expenseId) },
+        summary: String(options.args.userIntentSummary)
+      });
+    case "list_budget_investments":
+      return callReadIntegration("budget.list_investments");
+    case "list_budget_audit_logs":
+      return callReadIntegration("budget.list_audit_logs", {
+        query: typeof options.args.limit === "number" ? { limit: options.args.limit } : {}
+      });
     case "write_memory": {
       const slug = String(options.args.slug);
       const title = String(options.args.title);

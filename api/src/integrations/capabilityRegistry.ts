@@ -15,7 +15,13 @@ export const IntegrationActionIds = [
   "budget.update_account_value",
   "budget.list_transfers",
   "budget.list_contracts",
+  "budget.create_contract",
+  "budget.update_contract",
+  "budget.delete_contract",
   "budget.list_expenses",
+  "budget.create_expense",
+  "budget.update_expense",
+  "budget.delete_expense",
   "budget.list_investments",
   "budget.list_audit_logs"
 ] as const;
@@ -328,6 +334,60 @@ const budgetActions: readonly IntegrationActionCapability[] = [
     responseUse: "Group by active/expired and call out next payment dates or unusual items."
   },
   {
+    id: "budget.create_contract",
+    app: "budget",
+    title: "Create budget contract",
+    access: "write",
+    risk: "high",
+    method: "POST",
+    pathTemplate: "/contracts",
+    bodySummary: "Contract name, type, organization, amount_cents, linked account or wallet, recurrence, dates, category, and notes.",
+    purpose: "Create a recurring income, payment, or transfer contract used by budgeting projections.",
+    whenToUse: ["The owner explicitly asks to add a recurring bill, subscription, income, or transfer."],
+    safety: [
+      "List accounts first when the payment account is named but the account id is unknown.",
+      "Do not create inferred financial commitments without clear owner intent.",
+      "Queue for approval before writing."
+    ],
+    responseUse: "Confirm the proposed contract fields, amount, cadence, account, and approval status."
+  },
+  {
+    id: "budget.update_contract",
+    app: "budget",
+    title: "Update budget contract",
+    access: "write",
+    risk: "high",
+    method: "PUT",
+    pathTemplate: "/contracts/:contract_id",
+    pathParams: ["contract_id"],
+    bodySummary: "Patchable contract fields such as amount_cents, organization, linked account, recurrence, dates, category, notes, URL, and billing day.",
+    purpose: "Update a recurring contract used by budgeting projections.",
+    whenToUse: ["The owner explicitly asks to change an existing recurring bill, subscription, income, or transfer."],
+    safety: [
+      "List contracts first when the target contract id is unknown or ambiguous.",
+      "Do not change contract type; create a new contract instead if the business meaning changes.",
+      "Queue for approval before writing."
+    ],
+    responseUse: "Confirm the proposed update fields and approval status."
+  },
+  {
+    id: "budget.delete_contract",
+    app: "budget",
+    title: "Delete budget contract",
+    access: "write",
+    risk: "high",
+    method: "DELETE",
+    pathTemplate: "/contracts/:contract_id",
+    pathParams: ["contract_id"],
+    purpose: "Delete a recurring contract from projections.",
+    whenToUse: ["The owner explicitly asks to remove or stop tracking a recurring contract."],
+    safety: [
+      "List contracts first when the target contract id is unknown or ambiguous.",
+      "Queue for approval before deleting."
+    ],
+    responseUse: "Confirm which contract is proposed for deletion and approval status."
+  },
+  {
     id: "budget.list_expenses",
     app: "budget",
     title: "List expenses",
@@ -339,6 +399,59 @@ const budgetActions: readonly IntegrationActionCapability[] = [
     whenToUse: ["The owner asks where money is going or what expenses are expected."],
     safety: ["Do not mutate expense definitions from a read-only finance question."],
     responseUse: "Summarize categories, cadence, expected amounts, and next dates."
+  },
+  {
+    id: "budget.create_expense",
+    app: "budget",
+    title: "Create projected expense",
+    access: "write",
+    risk: "high",
+    method: "POST",
+    pathTemplate: "/expenses",
+    bodySummary: "Expense name, category, estimated_amount_cents, linked account, enabled state, recurrence, dates, and notes.",
+    purpose: "Create an estimated recurring expense used in projections.",
+    whenToUse: ["The owner explicitly asks to add a recurring or observed spending pattern to projected expenses."],
+    safety: [
+      "List accounts first when the payment account is named but the account id is unknown.",
+      "Distinguish observed spending from a durable projection before creating.",
+      "Queue for approval before writing."
+    ],
+    responseUse: "Confirm the proposed expense fields, amount, cadence, account, and approval status."
+  },
+  {
+    id: "budget.update_expense",
+    app: "budget",
+    title: "Update projected expense",
+    access: "write",
+    risk: "high",
+    method: "PUT",
+    pathTemplate: "/expenses/:expense_id",
+    pathParams: ["expense_id"],
+    bodySummary: "Patchable expense fields such as name, category, estimated_amount_cents, linked account, enabled state, recurrence, dates, and notes.",
+    purpose: "Update an estimated recurring expense used in projections.",
+    whenToUse: ["The owner explicitly asks to change an existing projected expense."],
+    safety: [
+      "List expenses first when the target expense id is unknown or ambiguous.",
+      "Queue for approval before writing."
+    ],
+    responseUse: "Confirm the proposed update fields and approval status."
+  },
+  {
+    id: "budget.delete_expense",
+    app: "budget",
+    title: "Delete projected expense",
+    access: "write",
+    risk: "high",
+    method: "DELETE",
+    pathTemplate: "/expenses/:expense_id",
+    pathParams: ["expense_id"],
+    purpose: "Delete an estimated recurring expense from projections.",
+    whenToUse: ["The owner explicitly asks to remove or stop tracking a projected expense."],
+    safety: [
+      "List expenses first when the target expense id is unknown or ambiguous.",
+      "Queue for approval before deleting."
+    ],
+    responseUse: "Confirm which expense is proposed for deletion and approval status."
   },
   {
     id: "budget.list_investments",
