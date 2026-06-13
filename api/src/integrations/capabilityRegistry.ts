@@ -21,7 +21,7 @@ export const IntegrationActionIds = [
 ] as const;
 
 export type IntegrationActionId = typeof IntegrationActionIds[number];
-export type IntegrationAppId = "goals" | "budget";
+export type IntegrationAppId = "goals" | "budget" | "apartment_gate";
 export type IntegrationAccess = "read" | "write";
 export type IntegrationRisk = "low" | "medium" | "high";
 export type IntegrationHttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
@@ -49,7 +49,7 @@ export type AppCapability = {
   appPurpose: string;
   userValue: string;
   dataSensitivity: "private" | "highly_private";
-  baseUrlSetting: "GOALS_API_BASE_URL" | "BUDGET_API_BASE_URL";
+  baseUrlSetting: "GOALS_API_BASE_URL" | "BUDGET_API_BASE_URL" | "none";
   authRequirement: string;
   modelGuidance: readonly string[];
   actions: readonly IntegrationActionCapability[];
@@ -398,6 +398,21 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
       "Summarize financial data narrowly and never include raw credentials, tokens, or unrelated user data in model context."
     ],
     actions: budgetActions
+  },
+  {
+    id: "apartment_gate",
+    displayName: "Apartment Gate",
+    appPurpose: "Federated-login protected mobile web app for opening apartment community gates and doors.",
+    userValue: "Lets the owner launch a protected control page after central OAuth sign-in.",
+    dataSensitivity: "highly_private",
+    baseUrlSetting: "none",
+    authRequirement: "Human interactive access only through central OAuth; no agent API or delegated token is available.",
+    modelGuidance: [
+      "Use Apartment Gate only as directory knowledge when the owner asks where to find the gate app or how access is protected.",
+      "Do not attempt to open gates, doors, or physical access points through agent tools.",
+      "Do not request, store, summarize, or expose Gatewise credentials, refresh tokens, API keys, or generated page source."
+    ],
+    actions: []
   }
 ] as const;
 
