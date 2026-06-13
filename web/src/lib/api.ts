@@ -20,6 +20,16 @@ export type Task = {
   prompt: string;
   dueAt: string | null;
   priority: number;
+  scheduleRationale?: string | null;
+  sourceMemoryPath?: string | null;
+  sourceMessageId?: string | null;
+  sourceTaskId?: string | null;
+  recurrencePolicy?: string | null;
+  lastAgentReviewAt?: string | null;
+  nextReviewAt?: string | null;
+  waitingOn?: string | null;
+  blockedReason?: string | null;
+  ownerClarificationNeeded?: boolean;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -132,6 +142,62 @@ export type MemoryDocument = {
   updatedAt: string;
 };
 
+export type AgentPromptMode = "normal" | "quick_reply" | "planning";
+
+export type AgentPromptResponse = {
+  runId: string;
+  status: string;
+  selectedAction: string | null;
+  toolStatus: string;
+  repaired: boolean;
+  toolResult: Record<string, unknown> | null;
+  links: {
+    taskId: string | null;
+    taskEventId: string | null;
+    outboundMessageId: string | null;
+    memoryDocumentId: string | null;
+    memorySlug: string | null;
+    clarificationRequestId: string | null;
+  };
+  failureMessage: string | null;
+};
+
+export type KnowledgeEntry = {
+  path: string;
+  name: string;
+  type: "file" | "directory";
+  version?: number;
+  updatedAt?: string;
+  children?: KnowledgeEntry[];
+};
+
+export type KnowledgeDocument = {
+  id: string;
+  path: string;
+  basename: string;
+  title: string | null;
+  markdown: string;
+  contentHash: string;
+  version: number;
+  indexStatus: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type KnowledgeSection = {
+  id: string;
+  documentId: string;
+  documentVersion: number;
+  sectionId: string;
+  parentSectionId: string | null;
+  heading: string;
+  headingPath: string[];
+  level: number;
+  lineStart: number;
+  lineEnd: number;
+  contentHash: string;
+};
+
 export type ImapTestResult = {
   ok: boolean;
   configured: boolean;
@@ -227,6 +293,36 @@ export const api = {
   },
   getMemory(slug: string): Promise<{ document: MemoryDocument }> {
     return request<{ document: MemoryDocument }>(`/memory/${encodeURIComponent(slug)}`);
+  },
+  submitAgentPrompt(input: {
+    prompt: string;
+    mode: AgentPromptMode;
+    contextTaskId?: string | null;
+  }): Promise<AgentPromptResponse> {
+    return request<AgentPromptResponse>("/agent/prompts", {
+      method: "POST",
+      body: JSON.stringify(input)
+    });
+  },
+  getKnowledgeTree(path = "/", maxDepth = 6): Promise<{ path: string; entries: KnowledgeEntry[] }> {
+    return request<{ path: string; entries: KnowledgeEntry[] }>(
+      `/knowledge/tree?path=${encodeURIComponent(path)}&maxDepth=${maxDepth}`
+    );
+  },
+  listKnowledgeFiles(path: string): Promise<{ entries: KnowledgeEntry[] }> {
+    return request<{ entries: KnowledgeEntry[] }>(`/knowledge/files?path=${encodeURIComponent(path)}`);
+  },
+  getKnowledgeFile(path: string): Promise<{ document: KnowledgeDocument }> {
+    return request<{ document: KnowledgeDocument }>(`/knowledge/files/${encodeURIComponent(path)}`);
+  },
+  updateKnowledgeFile(path: string, content: string, expectedVersion?: number): Promise<{ document: KnowledgeDocument }> {
+    return request<{ document: KnowledgeDocument }>(`/knowledge/files/${encodeURIComponent(path)}`, {
+      method: "PUT",
+      body: JSON.stringify({ content, expectedVersion })
+    });
+  },
+  listKnowledgeSections(path: string): Promise<{ sections: KnowledgeSection[] }> {
+    return request<{ sections: KnowledgeSection[] }>(`/knowledge/files/${encodeURIComponent(path)}/sections`);
   },
   listSenders(): Promise<{ senders: Sender[] }> {
     return request<{ senders: Sender[] }>("/senders");

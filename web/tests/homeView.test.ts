@@ -385,50 +385,61 @@ describe("home view", () => {
       createdAt: "",
       updatedAt: ""
     };
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          authenticated: true,
-          user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ events: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ senders: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [connector] }) })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          fastModel: "gpt-5-mini",
-          smartModel: "gpt-5",
-          orchestratorModel: "gpt-5",
-          repairModel: "gpt-5-mini",
-          maxToolCalls: 10,
-          maxRuntimeSec: 120,
-          repairAttemptLimit: 1
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => connector })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [connector] }) })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          ok: false,
-          configured: true,
-          error: { response: "NO IMAP disabled" }
-        })
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          events: [{ id: "audit-1", action: "connector.imap_test.failed", entityType: "connector", entityId: "imap", details: { error: { response: "NO IMAP disabled" } }, createdAt: "" }]
-        })
-      });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
+          })
+        };
+      }
+      if (url.includes("/connectors/imap/test")) {
+        return {
+          ok: true,
+          json: async () => ({
+            ok: false,
+            configured: true,
+            error: { response: "NO IMAP disabled" }
+          })
+        };
+      }
+      if (url.includes("/connectors/imap") && init?.method === "PUT") {
+        return { ok: true, json: async () => connector };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [connector] }) };
+      }
+      if (url.includes("/audit")) {
+        return {
+          ok: true,
+          json: async () => ({
+            events: [{ id: "audit-1", action: "connector.imap_test.failed", entityType: "connector", entityId: "imap", details: { error: { response: "NO IMAP disabled" } }, createdAt: "" }]
+          })
+        };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/admin/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const { wrapper } = await mountHome("/?tab=settings");
@@ -488,5 +499,317 @@ describe("home view", () => {
     expect(fetchMock.mock.calls[0][0]).toContain("/outbox");
 
     wrapper.unmount();
+  });
+
+  it("submits direct agent prompts with selected context and renders the run result", async () => {
+    const task = { id: "task-1", title: "Plan trip", prompt: "Plan", status: "pending", dueAt: null, priority: 0 };
+    const message = {
+      id: "in-1",
+      providerMessageId: "provider-1",
+      fromAddr: "owner@example.test",
+      toAddr: "agent@example.test",
+      subject: "Trip",
+      bodyText: "remember the hotel",
+      source: "email",
+      classification: "owner",
+      handlingAction: "routed_to_agent",
+      taskId: "task-1",
+      taskEventId: null,
+      agentRunId: "run-old",
+      outboundMessageId: null,
+      receivedAt: "",
+      createdAt: ""
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/agent/prompts") && init?.method === "POST") {
+        return {
+          ok: true,
+          json: async () => ({
+            runId: "run-123",
+            status: "completed",
+            selectedAction: "create_task",
+            toolStatus: "accepted",
+            repaired: false,
+            toolResult: { task_id: "task-2" },
+            links: { taskId: "task-2", taskEventId: null, outboundMessageId: null, memoryDocumentId: null, memorySlug: null, clarificationRequestId: null },
+            failureMessage: null
+          })
+        };
+      }
+      if (url.includes("/knowledge/tree")) {
+        return {
+          ok: true,
+          json: async () => ({
+            path: "/",
+            entries: [{ path: "/assistant/context.md", name: "context.md", type: "file", version: 1, updatedAt: "" }]
+          })
+        };
+      }
+      if (url.includes("/knowledge/files/%2Fassistant%2Fcontext.md/sections")) {
+        return { ok: true, json: async () => ({ sections: [] }) };
+      }
+      if (url.includes("/knowledge/files/%2Fassistant%2Fcontext.md")) {
+        return { ok: true, json: async () => ({ document: { id: "doc-1", path: "/assistant/context.md", basename: "context.md", title: "Context", markdown: "# Context", contentHash: "hash", version: 1, indexStatus: "indexed", createdAt: "", updatedAt: "" } }) };
+      }
+      if (url.includes("/tasks/task-2/events")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [task, { ...task, id: "task-2", title: "Created task" }] }) };
+      }
+      if (url.includes("/messages")) {
+        return { ok: true, json: async () => ({ messages: [message] }) };
+      }
+      if (url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/admin/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome();
+    await flushPromises();
+
+    await wrapper.get("#tab-chat").trigger("click");
+    await flushPromises();
+    await wrapper.get("#chat-agent-prompt").setValue("Create a packing task.");
+    await wrapper.get("#chat-prompt-mode").setValue("planning");
+    await wrapper.get("#chat-prompt-task").setValue("task-1");
+    await wrapper.get("#chat-prompt-memory").setValue("/assistant/context.md");
+    await wrapper.get("#chat-prompt-message").setValue("in-1");
+    await wrapper.get("#panel-chat form").trigger("submit");
+    await flushPromises();
+
+    const promptCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/agent/prompts"));
+    expect(promptCall).toBeTruthy();
+    const body = JSON.parse(String((promptCall?.[1] as RequestInit).body));
+    expect(body).toMatchObject({ mode: "planning", contextTaskId: "task-1" });
+    expect(body.prompt).toContain("Selected memory path: /assistant/context.md");
+    expect(body.prompt).toContain("Selected recent assistant mailbox message: in-1");
+    expect(body.prompt).toContain("Create a packing task.");
+    expect(wrapper.text()).toContain("run-123");
+    expect(wrapper.text()).toContain("create_task");
+    expect(wrapper.text()).toContain("Created task");
+  });
+
+  it("shows task schedule intelligence details in the task modal", async () => {
+    const task = {
+      id: "task-1",
+      title: "Review vendor proposal",
+      prompt: "Review the quote when it arrives.",
+      status: "waiting",
+      dueAt: "2026-06-15T14:00:00.000Z",
+      priority: 4,
+      updatedAt: "",
+      scheduleRationale: "Wait until the vendor sends final pricing.",
+      nextReviewAt: "2026-06-14T14:00:00.000Z",
+      lastAgentReviewAt: "2026-06-13T14:00:00.000Z",
+      waitingOn: "vendor pricing",
+      blockedReason: "External quote missing.",
+      recurrencePolicy: "review daily until quote arrives",
+      sourceMemoryPath: "/tasks/schedule-rationale.md",
+      ownerClarificationNeeded: true
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/tasks/task-1/events")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [task] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/admin/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome("/?tab=tasks");
+    await flushPromises();
+    await wrapper.findAll("button").find((button) => button.text() === "View")!.trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Schedule intelligence");
+    expect(wrapper.text()).toContain("Wait until the vendor sends final pricing.");
+    expect(wrapper.text()).toContain("vendor pricing");
+    expect(wrapper.text()).toContain("External quote missing.");
+    expect(wrapper.text()).toContain("review daily until quote arrives");
+    expect(wrapper.text()).toContain("/tasks/schedule-rationale.md");
+    expect(wrapper.text()).toContain("Needed");
+  });
+
+  it("uses assistant mailbox language for the agent inbox", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/admin/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome("/?tab=inbox");
+    await flushPromises();
+
+    expect(wrapper.get("#tab-inbox").text()).toBe("Agent Inbox");
+    expect(wrapper.text()).toContain("No messages received by the assistant mailbox.");
+  });
+
+  it("loads knowledge tree files and saves editable assistant markdown", async () => {
+    const originalDocument = {
+      id: "doc-1",
+      path: "/assistant/instructions.md",
+      basename: "instructions.md",
+      title: "Instructions",
+      markdown: "# Instructions\n\nKeep replies concise.",
+      contentHash: "hash-1",
+      version: 1,
+      indexStatus: "indexed",
+      createdAt: "",
+      updatedAt: ""
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/knowledge/tree")) {
+        return {
+          ok: true,
+          json: async () => ({
+            path: "/",
+            entries: [{
+              path: "/assistant",
+              name: "assistant",
+              type: "directory",
+              children: [{ path: "/assistant/instructions.md", name: "instructions.md", type: "file", version: 1, updatedAt: "" }]
+            }]
+          })
+        };
+      }
+      if (url.includes("/knowledge/files/%2Fassistant%2Finstructions.md/sections")) {
+        return { ok: true, json: async () => ({ sections: [{ id: "sec-1", documentId: "doc-1", documentVersion: 1, sectionId: "instructions", parentSectionId: null, heading: "Instructions", headingPath: ["Instructions"], level: 1, lineStart: 1, lineEnd: 3, contentHash: "hash" }] }) };
+      }
+      if (url.includes("/knowledge/files/%2Fassistant%2Finstructions.md") && init?.method === "PUT") {
+        return { ok: true, json: async () => ({ document: { ...originalDocument, markdown: "# Instructions\n\nKeep replies concise.\nUse bullets.", version: 2 } }) };
+      }
+      if (url.includes("/knowledge/files/%2Fassistant%2Finstructions.md")) {
+        return { ok: true, json: async () => ({ document: originalDocument }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/admin/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome();
+    await flushPromises();
+
+    await wrapper.get("#tab-memory").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("/assistant/instructions.md");
+    expect(wrapper.text()).toContain("Keep replies concise.");
+    expect(wrapper.text()).toContain("indexed");
+
+    await wrapper.findAll("button").find((button) => button.text() === "Edit")!.trigger("click");
+    await wrapper.get("#knowledge-draft").setValue("# Instructions\n\nKeep replies concise.\nUse bullets.");
+    await wrapper.findAll("button").find((button) => button.text() === "Save file")!.trigger("click");
+    await flushPromises();
+
+    const saveCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/knowledge/files/%2Fassistant%2Finstructions.md") && (call[1] as RequestInit | undefined)?.method === "PUT");
+    expect(saveCall).toBeTruthy();
+    expect(JSON.parse(String((saveCall?.[1] as RequestInit).body))).toMatchObject({ expectedVersion: 1 });
+    expect(wrapper.text()).toContain("Use bullets.");
   });
 });

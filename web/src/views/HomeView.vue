@@ -3,6 +3,8 @@ import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   api,
+  type AgentPromptMode,
+  type AgentPromptResponse,
   type AiConfig,
   type AuditEvent,
   type Connector,
@@ -10,6 +12,9 @@ import {
   type ConnectorStatus,
   type InboundMessage,
   type JobStatus,
+  type KnowledgeDocument,
+  type KnowledgeEntry,
+  type KnowledgeSection,
   type MemoryDocument,
   type OutboxMessage,
   type Sender,
@@ -26,7 +31,8 @@ const authMode = import.meta.env.VITE_AUTH_MODE || "standalone";
 const signInLabel = computed(() => (authMode === "standalone" ? "Sign in" : "Continue with central sign-in"));
 const tabs = [
   { id: "overview", label: "Overview" },
-  { id: "inbox", label: "Inbox" },
+  { id: "chat", label: "Chat" },
+  { id: "inbox", label: "Agent Inbox" },
   { id: "outbox", label: "Outbox" },
   { id: "tasks", label: "Tasks" },
   { id: "memory", label: "Memory" },
@@ -50,12 +56,20 @@ const audit = ref<AuditEvent[]>([]);
 const senders = ref<Sender[]>([]);
 const connectors = ref<Connector[]>([]);
 const memoryDocuments = ref<MemoryDocument[]>([]);
+const knowledgeTree = ref<KnowledgeEntry[]>([]);
+const knowledgeDocument = ref<KnowledgeDocument | null>(null);
+const knowledgeSections = ref<KnowledgeSection[]>([]);
 const aiConfig = ref<AiConfig | null>(null);
 const jobs = ref<JobStatus[]>([]);
 const dashboardError = ref<string | null>(null);
+const promptError = ref<string | null>(null);
+const promptResult = ref<AgentPromptResponse | null>(null);
 const imapTestMessage = ref<string | null>(null);
 const imapTestError = ref<string | null>(null);
 const saving = ref(false);
+const sendingPrompt = ref(false);
+const loadingKnowledge = ref(false);
+const savingKnowledge = ref(false);
 const testingImap = ref(false);
 const taskPage = ref(1);
 const inboxPage = ref(1);
@@ -67,6 +81,10 @@ const selectedTask = ref<Task | null>(null);
 const selectedTaskEvents = ref<TaskEvent[]>([]);
 const selectedMemorySlug = ref("");
 const memorySearch = ref("");
+const knowledgeSearch = ref("");
+const selectedKnowledgePath = ref("");
+const knowledgeDraft = ref("");
+const knowledgeEditMode = ref(false);
 const taskStatusDraft = ref("");
 const taskFollowUpPrompt = ref("");
 const taskModalError = ref<string | null>(null);
@@ -80,6 +98,13 @@ const taskForm = reactive({
 const senderForm = reactive({
   address: "",
   status: "trusted" as Sender["status"]
+});
+const promptForm = reactive({
+  prompt: "",
+  mode: "normal" as AgentPromptMode,
+  contextTaskId: "",
+  contextMemoryPath: "",
+  contextMessageId: ""
 });
 const ownerContactForm = reactive({
   status: "enabled" as ConnectorStatus,
@@ -122,9 +147,18 @@ const configForm = reactive<AiConfig>({
 
 const taskStatuses = ["pending", "claimed", "running", "completed", "cancelled", "failed"];
 const senderStatuses: Sender["status"][] = ["owner", "newsletter", "trusted", "blocked", "untrusted"];
+const promptModes: { value: AgentPromptMode; label: string }[] = [
+  { value: "normal", label: "Normal" },
+  { value: "planning", label: "Planning" },
+  { value: "quick_reply", label: "Quick reply" }
+];
+const knowledgeRootPaths = ["/personal", "/preferences", "/assistant", "/tasks", "/projects", "/newsletters", "/legacy"];
 const activeOutbox = computed(() => outbox.value.filter((message) => ["requires_approval", "pending", "approved", "sending"].includes(message.status)));
 const outboxHistory = computed(() => outbox.value.filter((message) => ["sent", "failed"].includes(message.status)));
 const recentAudit = computed(() => audit.value.slice(0, 12));
+const agentRunEvents = computed(() => audit.value.filter((event) => event.action.startsWith("agent_run.")).slice(0, 12));
+const toolCallEvents = computed(() => audit.value.filter((event) => event.action.startsWith("tool_call.") || event.action.startsWith("mcp.tool_call.")).slice(0, 12));
+const ragJobs = computed(() => jobs.value.filter((job) => job.name.toLowerCase().includes("rag") || job.name.toLowerCase().includes("index")));
 const outboxById = computed(() => new Map(outbox.value.map((message) => [message.id, message])));
 const totalTaskPages = computed(() => Math.max(1, Math.ceil(tasks.value.length / tasksPerPage)));
 const totalInboxPages = computed(() => Math.max(1, Math.ceil(inbox.value.length / inboxPerPage)));
@@ -149,6 +183,40 @@ const taskModalTitle = computed(() => selectedTask.value?.title ?? "Task details
 const selectedMemoryDocument = computed(() =>
   memoryDocuments.value.find((document) => document.slug === selectedMemorySlug.value) ?? memoryDocuments.value[0] ?? null
 );
+const flattenedKnowledgeEntries = computed(() => {
+  const entries: KnowledgeEntry[] = [];
+  const walk = (nodes: KnowledgeEntry[]) => {
+    for (const node of nodes) {
+      entries.push(node);
+      if (node.children) {
+        walk(node.children);
+      }
+    }
+  };
+  walk(knowledgeTree.value);
+  return entries;
+});
+const knowledgeFileEntries = computed(() => flattenedKnowledgeEntries.value.filter((entry) => entry.type === "file"));
+const knowledgeTreeWithRoots = computed(() => {
+  const existingRootNames = new Set(knowledgeTree.value.map((entry) => entry.path));
+  const missingRoots = knowledgeRootPaths
+    .filter((path) => !existingRootNames.has(path))
+    .map((path) => ({ path, name: path.slice(1), type: "directory" as const, children: [] }));
+  return [...knowledgeTree.value, ...missingRoots].sort((a, b) => a.type.localeCompare(b.type) || a.path.localeCompare(b.path));
+});
+const filteredKnowledgeEntries = computed(() => {
+  const query = knowledgeSearch.value.trim().toLowerCase();
+  if (!query) {
+    return knowledgeFileEntries.value;
+  }
+  const documentMatch = knowledgeDocument.value?.markdown.toLowerCase().includes(query) ? knowledgeDocument.value.path : "";
+  return knowledgeFileEntries.value.filter((entry) =>
+    entry.path.toLowerCase().includes(query) || entry.name.toLowerCase().includes(query) || entry.path === documentMatch
+  );
+});
+const selectedMessage = computed(() => inbox.value.find((message) => message.id === promptForm.contextMessageId));
+const selectedKnowledgeForPrompt = computed(() => knowledgeFileEntries.value.find((entry) => entry.path === promptForm.contextMemoryPath));
+const editableKnowledgeDocument = computed(() => Boolean(knowledgeDocument.value?.path.startsWith("/assistant/")));
 const filteredMemoryDocuments = computed(() => {
   const query = memorySearch.value.trim().toLowerCase();
   if (!query) {
@@ -165,6 +233,20 @@ const memoryHeadings = computed(() => {
     .filter((line) => /^#{1,3}\s+\S/.test(line))
     .map((line) => line.replace(/^#{1,3}\s+/, "").trim())
     .slice(0, 12);
+});
+const knowledgeHeadingFallback = computed(() => {
+  const body = knowledgeDocument.value?.markdown ?? "";
+  return body
+    .split("\n")
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => /^#{1,4}\s+\S/.test(line))
+    .map(({ line, index }) => ({
+      id: `${knowledgeDocument.value?.id ?? "doc"}-${index}`,
+      heading: line.replace(/^#{1,4}\s+/, "").trim(),
+      level: line.match(/^#+/)?.[0].length ?? 1,
+      lineStart: index + 1
+    }))
+    .slice(0, 18);
 });
 
 function tabFromRoute(value: unknown): TabId {
@@ -251,6 +333,13 @@ function formatDate(value: string | null | undefined): string {
   return date.toLocaleString();
 }
 
+function formatId(value: string | null | undefined): string {
+  if (!value) {
+    return "none";
+  }
+  return value.length > 12 ? `${value.slice(0, 8)}...` : value;
+}
+
 function statusTagClass(status: string): string {
   if (["completed", "sent", "approved", "configured", "owner", "trusted"].includes(status)) {
     return "cds--tag--green";
@@ -297,6 +386,16 @@ function inboxActionLabel(message: InboundMessage): string {
   return "Recorded";
 }
 
+function fileTitle(path: string): string {
+  const basename = path.split("/").filter(Boolean).at(-1) ?? path;
+  return basename.replace(/\.md$/i, "").replace(/[-_]/g, " ");
+}
+
+function eventStatus(action: string): string {
+  const suffix = action.split(".").at(-1) ?? action;
+  return suffix.replace(/_/g, " ");
+}
+
 function formatDetails(details: Record<string, unknown>): string {
   if (Object.keys(details).length === 0) {
     return "";
@@ -316,6 +415,44 @@ function compactDetails(details: Record<string, unknown>): string {
   return response ?? errorResponse ?? message ?? errorMessage ?? JSON.stringify(details);
 }
 
+function detailString(details: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = details[key];
+    if (typeof value === "string" && value.trim()) {
+      return value;
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+  }
+  return "";
+}
+
+function promptContextSummary(): string {
+  const contextLines: string[] = [];
+  if (selectedKnowledgeForPrompt.value) {
+    contextLines.push(`Selected memory path: ${selectedKnowledgeForPrompt.value.path}`);
+  }
+  if (selectedMessage.value) {
+    contextLines.push([
+      `Selected recent assistant mailbox message: ${selectedMessage.value.id}`,
+      `From: ${selectedMessage.value.fromAddr}`,
+      `Subject: ${selectedMessage.value.subject ?? "(none)"}`,
+      `Excerpt: ${selectedMessage.value.bodyText.replace(/\s+/g, " ").slice(0, 500)}`
+    ].join("\n"));
+  }
+  if (contextLines.length === 0) {
+    return promptForm.prompt.trim();
+  }
+  return [
+    "Operator-selected context:",
+    contextLines.join("\n\n"),
+    "",
+    "Prompt:",
+    promptForm.prompt.trim()
+  ].join("\n");
+}
+
 function setActiveTab(tabId: TabId): void {
   activeTab.value = tabId;
   void router.replace({ query: { ...route.query, tab: tabId } });
@@ -330,6 +467,110 @@ function clampPages(): void {
   }
   if (selectedMemorySlug.value && !memoryDocuments.value.some((document) => document.slug === selectedMemorySlug.value)) {
     selectedMemorySlug.value = memoryDocuments.value[0]?.slug ?? "";
+  }
+  if (!promptForm.contextTaskId && selectedTask.value) {
+    promptForm.contextTaskId = selectedTask.value.id;
+  }
+  if (promptForm.contextTaskId && !tasks.value.some((task) => task.id === promptForm.contextTaskId)) {
+    promptForm.contextTaskId = "";
+  }
+  if (promptForm.contextMessageId && !inbox.value.some((message) => message.id === promptForm.contextMessageId)) {
+    promptForm.contextMessageId = "";
+  }
+}
+
+async function loadKnowledgeTree(): Promise<void> {
+  loadingKnowledge.value = true;
+  try {
+    const response = await api.getKnowledgeTree("/", 6);
+    knowledgeTree.value = Array.isArray(response.entries) ? response.entries : [];
+    const firstFile = knowledgeFileEntries.value[0];
+    if (!selectedKnowledgePath.value && firstFile) {
+      await openKnowledgeFile(firstFile.path);
+    } else if (selectedKnowledgePath.value && !knowledgeFileEntries.value.some((entry) => entry.path === selectedKnowledgePath.value)) {
+      const fallback = knowledgeFileEntries.value[0];
+      selectedKnowledgePath.value = "";
+      knowledgeDocument.value = null;
+      knowledgeSections.value = [];
+      if (fallback) {
+        await openKnowledgeFile(fallback.path);
+      }
+    }
+  } catch {
+    dashboardError.value = "Unable to load knowledge files.";
+  } finally {
+    loadingKnowledge.value = false;
+  }
+}
+
+async function openKnowledgeFile(path: string): Promise<void> {
+  selectedKnowledgePath.value = path;
+  knowledgeEditMode.value = false;
+  try {
+    const [documentResponse, sectionsResponse] = await Promise.all([
+      api.getKnowledgeFile(path),
+      api.listKnowledgeSections(path).catch(() => ({ sections: [] }))
+    ]);
+    knowledgeDocument.value = documentResponse.document;
+    knowledgeDraft.value = documentResponse.document.markdown;
+    knowledgeSections.value = sectionsResponse.sections;
+    dashboardError.value = null;
+  } catch {
+    knowledgeDocument.value = null;
+    knowledgeSections.value = [];
+    dashboardError.value = "Unable to load the selected knowledge file.";
+  }
+}
+
+async function saveKnowledgeFile(): Promise<void> {
+  if (!knowledgeDocument.value || !editableKnowledgeDocument.value) {
+    return;
+  }
+  savingKnowledge.value = true;
+  try {
+    const response = await api.updateKnowledgeFile(
+      knowledgeDocument.value.path,
+      knowledgeDraft.value,
+      knowledgeDocument.value.version
+    );
+    knowledgeDocument.value = response.document;
+    knowledgeDraft.value = response.document.markdown;
+    knowledgeEditMode.value = false;
+    await loadKnowledgeTree();
+    dashboardError.value = null;
+  } catch {
+    dashboardError.value = "Unable to save the knowledge file. Reload and try again.";
+  } finally {
+    savingKnowledge.value = false;
+  }
+}
+
+async function submitAgentPrompt(): Promise<void> {
+  const prompt = promptForm.prompt.trim();
+  if (!prompt) {
+    return;
+  }
+  sendingPrompt.value = true;
+  promptError.value = null;
+  promptResult.value = null;
+  try {
+    promptResult.value = await api.submitAgentPrompt({
+      prompt: promptContextSummary(),
+      mode: promptForm.mode,
+      contextTaskId: promptForm.contextTaskId || null
+    });
+    promptForm.prompt = "";
+    await loadDashboard();
+    if (promptResult.value.links.taskId) {
+      const task = tasks.value.find((candidate) => candidate.id === promptResult.value?.links.taskId);
+      if (task) {
+        await openTask(task);
+      }
+    }
+  } catch {
+    promptError.value = "Unable to send the prompt to the agent.";
+  } finally {
+    sendingPrompt.value = false;
   }
 }
 
@@ -390,6 +631,13 @@ async function loadActiveTab(): Promise<void> {
         await loadDashboard();
         return;
       }
+      case "chat": {
+        await Promise.all([
+          loadDashboard(),
+          knowledgeTree.value.length > 0 ? Promise.resolve() : loadKnowledgeTree()
+        ]);
+        return;
+      }
       case "inbox": {
         const response = await api.listInbox();
         inbox.value = response.messages;
@@ -408,7 +656,8 @@ async function loadActiveTab(): Promise<void> {
       case "memory": {
         const [memoryResponse, senderResponse] = await Promise.all([
           api.listMemory(),
-          api.listSenders()
+          api.listSenders(),
+          loadKnowledgeTree()
         ]);
         memoryDocuments.value = memoryResponse.documents;
         senders.value = senderResponse.senders;
@@ -751,18 +1000,25 @@ function signIn(): void {
   window.location.assign(apiUrl("/auth/login"));
 }
 
+async function loadAuthenticatedHome(): Promise<void> {
+  await loadDashboard();
+  if (activeTab.value !== "overview") {
+    await loadActiveTab();
+  }
+}
+
 onMounted(() => {
   if (!auth.loaded) {
     void auth.restore();
   } else if (auth.authenticated) {
-    void loadDashboard();
+    void loadAuthenticatedHome();
   }
   startDashboardPolling();
 });
 
 watch(() => auth.authenticated, (authenticated) => {
   if (authenticated) {
-    void loadDashboard();
+    void loadAuthenticatedHome();
   }
 });
 
@@ -860,7 +1116,7 @@ onUnmounted(() => {
             <p class="metric-value">{{ outbox.length }}</p>
           </section>
           <section class="metric-card">
-            <p class="label">Inbox</p>
+            <p class="label">Agent inbox</p>
             <p class="metric-value">{{ inbox.length }}</p>
           </section>
           <section class="metric-card">
@@ -872,6 +1128,84 @@ onUnmounted(() => {
             <p class="metric-value">{{ audit.length }}</p>
           </section>
         </div>
+
+        <section class="activity-section prompt-panel" aria-label="Talk to the agent">
+          <div class="section-heading">
+            <h2>Talk to the agent</h2>
+            <p class="label">Authenticated web prompt</p>
+          </div>
+          <form class="prompt-form" @submit.prevent="submitAgentPrompt">
+            <div class="cds--form-item form-wide">
+              <label class="cds--label" for="overview-agent-prompt">Prompt</label>
+              <textarea id="overview-agent-prompt" v-model="promptForm.prompt" class="cds--text-area" required rows="4" />
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="overview-prompt-mode">Mode</label>
+              <select id="overview-prompt-mode" v-model="promptForm.mode" class="cds--select-input">
+                <option v-for="mode in promptModes" :key="mode.value" :value="mode.value">{{ mode.label }}</option>
+              </select>
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="overview-prompt-task">Task context</label>
+              <select id="overview-prompt-task" v-model="promptForm.contextTaskId" class="cds--select-input">
+                <option value="">No task</option>
+                <option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.title }}</option>
+              </select>
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="overview-prompt-memory">Memory path</label>
+              <select id="overview-prompt-memory" v-model="promptForm.contextMemoryPath" class="cds--select-input">
+                <option value="">No memory path</option>
+                <option v-for="entry in knowledgeFileEntries" :key="entry.path" :value="entry.path">{{ entry.path }}</option>
+              </select>
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="overview-prompt-message">Recent message</label>
+              <select id="overview-prompt-message" v-model="promptForm.contextMessageId" class="cds--select-input">
+                <option value="">No message</option>
+                <option v-for="message in inbox.slice(0, 20)" :key="message.id" :value="message.id">
+                  {{ message.fromAddr }} - {{ message.subject || message.bodyText.slice(0, 48) }}
+                </option>
+              </select>
+            </div>
+            <div class="form-actions form-wide">
+              <button class="cds--btn cds--btn--primary" type="submit" :disabled="sendingPrompt || !promptForm.prompt.trim()">
+                Send prompt
+              </button>
+            </div>
+          </form>
+          <div v-if="promptError" class="cds--inline-notification cds--inline-notification--error" role="alert">
+            <div class="cds--inline-notification__details">
+              <div class="cds--inline-notification__text-wrapper">
+                <p class="cds--inline-notification__title">Prompt error</p>
+                <p class="cds--inline-notification__subtitle">{{ promptError }}</p>
+              </div>
+            </div>
+          </div>
+          <div v-if="promptResult" class="prompt-result" role="status">
+            <div>
+              <p class="label">Run</p>
+              <p>{{ promptResult.runId }}</p>
+            </div>
+            <div>
+              <p class="label">Status</p>
+              <p><span class="cds--tag" :class="statusTagClass(promptResult.status)">{{ promptResult.status }}</span></p>
+            </div>
+            <div>
+              <p class="label">Action</p>
+              <p>{{ promptResult.selectedAction || "none" }} / {{ promptResult.toolStatus }}</p>
+            </div>
+            <div>
+              <p class="label">Links</p>
+              <p>
+                <span v-if="promptResult.links.taskId">task {{ promptResult.links.taskId }}</span>
+                <span v-if="promptResult.links.outboundMessageId"> outbox {{ promptResult.links.outboundMessageId }}</span>
+                <span v-if="promptResult.links.memorySlug"> memory {{ promptResult.links.memorySlug }}</span>
+                <span v-if="!promptResult.links.taskId && !promptResult.links.outboundMessageId && !promptResult.links.memorySlug">none</span>
+              </p>
+            </div>
+          </div>
+        </section>
 
         <section class="activity-section" aria-label="Active outbound queue">
           <div class="section-heading">
@@ -916,13 +1250,88 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'inbox'" id="panel-inbox" class="tab-panel" role="tabpanel" aria-labelledby="tab-inbox">
-        <section class="activity-section" aria-label="Inbox">
+      <section v-show="activeTab === 'chat'" id="panel-chat" class="tab-panel" role="tabpanel" aria-labelledby="tab-chat">
+        <section class="activity-section prompt-panel" aria-label="Direct agent chat">
           <div class="section-heading">
-            <h2>Inbox</h2>
+            <h2>Agent chat</h2>
+            <p class="label">Direct owner-command loop</p>
+          </div>
+          <form class="prompt-form" @submit.prevent="submitAgentPrompt">
+            <div class="cds--form-item form-wide">
+              <label class="cds--label" for="chat-agent-prompt">Prompt</label>
+              <textarea id="chat-agent-prompt" v-model="promptForm.prompt" class="cds--text-area" required rows="8" />
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="chat-prompt-mode">Mode</label>
+              <select id="chat-prompt-mode" v-model="promptForm.mode" class="cds--select-input">
+                <option v-for="mode in promptModes" :key="mode.value" :value="mode.value">{{ mode.label }}</option>
+              </select>
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="chat-prompt-task">Task context</label>
+              <select id="chat-prompt-task" v-model="promptForm.contextTaskId" class="cds--select-input">
+                <option value="">No task</option>
+                <option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.title }}</option>
+              </select>
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="chat-prompt-memory">Memory path</label>
+              <select id="chat-prompt-memory" v-model="promptForm.contextMemoryPath" class="cds--select-input">
+                <option value="">No memory path</option>
+                <option v-for="entry in knowledgeFileEntries" :key="entry.path" :value="entry.path">{{ entry.path }}</option>
+              </select>
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="chat-prompt-message">Recent message</label>
+              <select id="chat-prompt-message" v-model="promptForm.contextMessageId" class="cds--select-input">
+                <option value="">No message</option>
+                <option v-for="message in inbox.slice(0, 20)" :key="message.id" :value="message.id">
+                  {{ message.fromAddr }} - {{ message.subject || message.bodyText.slice(0, 48) }}
+                </option>
+              </select>
+            </div>
+            <div class="form-actions form-wide">
+              <button class="cds--btn cds--btn--primary" type="submit" :disabled="sendingPrompt || !promptForm.prompt.trim()">
+                Send prompt
+              </button>
+            </div>
+          </form>
+          <div v-if="promptError" class="cds--inline-notification cds--inline-notification--error" role="alert">
+            <div class="cds--inline-notification__details">
+              <div class="cds--inline-notification__text-wrapper">
+                <p class="cds--inline-notification__title">Prompt error</p>
+                <p class="cds--inline-notification__subtitle">{{ promptError }}</p>
+              </div>
+            </div>
+          </div>
+          <div v-if="promptResult" class="prompt-result" role="status">
+            <div>
+              <p class="label">Run</p>
+              <p>{{ promptResult.runId }}</p>
+            </div>
+            <div>
+              <p class="label">Status</p>
+              <p><span class="cds--tag" :class="statusTagClass(promptResult.status)">{{ promptResult.status }}</span></p>
+            </div>
+            <div>
+              <p class="label">Selected action</p>
+              <p>{{ promptResult.selectedAction || "none" }}</p>
+            </div>
+            <div>
+              <p class="label">Tool result</p>
+              <pre>{{ formatDetails(promptResult.toolResult ?? {}) || promptResult.failureMessage || "No tool result." }}</pre>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'inbox'" id="panel-inbox" class="tab-panel" role="tabpanel" aria-labelledby="tab-inbox">
+        <section class="activity-section" aria-label="Agent inbox">
+          <div class="section-heading">
+            <h2>Agent Inbox</h2>
             <p class="label">{{ inbox.length }} messages</p>
           </div>
-          <p v-if="inbox.length === 0" class="empty">No inbound messages recorded.</p>
+          <p v-if="inbox.length === 0" class="empty">No messages received by the assistant mailbox.</p>
           <template v-else>
             <table class="cds--data-table cds--data-table--zebra">
               <thead>
@@ -1190,16 +1599,119 @@ onUnmounted(() => {
         </section>
         <section class="activity-section" aria-label="Agent memory">
           <div class="section-heading">
-            <h2>Memory</h2>
+            <h2>Memory and knowledge</h2>
+            <p class="label">{{ knowledgeFileEntries.length }} markdown files</p>
+          </div>
+          <div class="cds--form-item">
+            <label class="cds--label" for="memory-search">Exact search</label>
+            <input id="memory-search" v-model="knowledgeSearch" class="cds--text-input" type="search" placeholder="Search paths and the selected file body">
+          </div>
+          <p v-if="loadingKnowledge" class="empty">Loading knowledge files...</p>
+          <div class="memory-browser">
+            <aside class="memory-list" aria-label="Knowledge tree">
+              <div v-for="root in knowledgeTreeWithRoots" :key="root.path" class="knowledge-root">
+                <p class="label">{{ root.path }}</p>
+                <button
+                  v-for="entry in flattenedKnowledgeEntries.filter((candidate) => candidate.type === 'file' && candidate.path.startsWith(`${root.path}/`))"
+                  :key="entry.path"
+                  class="memory-list-item"
+                  :class="{ 'is-selected': selectedKnowledgePath === entry.path }"
+                  type="button"
+                  @click="openKnowledgeFile(entry.path)"
+                >
+                  <span class="memory-title">{{ fileTitle(entry.path) }}</span>
+                  <span class="label">{{ entry.path }}</span>
+                  <span class="label">v{{ entry.version ?? "?" }} · {{ formatDate(entry.updatedAt) }}</span>
+                </button>
+              </div>
+              <p v-if="knowledgeFileEntries.length === 0" class="empty">No markdown knowledge files yet.</p>
+            </aside>
+            <article class="memory-document">
+              <template v-if="knowledgeDocument">
+                <header class="memory-document-header">
+                  <div>
+                    <p class="label">{{ knowledgeDocument.path }}</p>
+                    <h3>{{ knowledgeDocument.title || knowledgeDocument.basename }}</h3>
+                  </div>
+                  <div class="memory-document-actions">
+                    <span class="cds--tag" :class="statusTagClass(knowledgeDocument.indexStatus)">
+                      {{ knowledgeDocument.indexStatus }}
+                    </span>
+                    <span class="label">v{{ knowledgeDocument.version }} · {{ formatDate(knowledgeDocument.updatedAt) }}</span>
+                    <button
+                      v-if="editableKnowledgeDocument && !knowledgeEditMode"
+                      class="cds--btn cds--btn--sm cds--btn--secondary"
+                      type="button"
+                      @click="knowledgeEditMode = true"
+                    >
+                      Edit
+                    </button>
+                  </div>
+                </header>
+                <div class="knowledge-layout">
+                  <aside class="memory-outline" aria-label="Heading outline">
+                    <p class="label">Outline</p>
+                    <span
+                      v-for="section in knowledgeSections.length > 0 ? knowledgeSections : knowledgeHeadingFallback"
+                      :key="section.id"
+                      class="cds--tag cds--tag--blue"
+                      :style="{ marginLeft: `${Math.max(0, (section.level - 1) * 8)}px` }"
+                    >
+                      {{ section.heading }}
+                    </span>
+                    <p v-if="knowledgeSections.length === 0 && knowledgeHeadingFallback.length === 0" class="empty">No headings.</p>
+                  </aside>
+                  <div class="knowledge-preview">
+                    <template v-if="knowledgeEditMode">
+                      <label class="cds--label" for="knowledge-draft">Markdown</label>
+                      <textarea id="knowledge-draft" v-model="knowledgeDraft" class="cds--text-area knowledge-editor" rows="18" />
+                      <div class="form-actions">
+                        <button class="cds--btn cds--btn--primary" type="button" :disabled="savingKnowledge" @click="saveKnowledgeFile">
+                          Save file
+                        </button>
+                        <button class="cds--btn cds--btn--ghost" type="button" :disabled="savingKnowledge" @click="knowledgeEditMode = false; knowledgeDraft = knowledgeDocument?.markdown ?? ''">
+                          Cancel
+                        </button>
+                      </div>
+                    </template>
+                    <pre v-else class="memory-body">{{ knowledgeDocument.markdown }}</pre>
+                  </div>
+                </div>
+              </template>
+              <p v-else class="empty">Select a memory or knowledge file.</p>
+            </article>
+          </div>
+          <section class="memory-search-results" aria-label="Memory search results">
+            <div class="section-heading">
+              <h3>Search results</h3>
+              <p class="label">{{ filteredKnowledgeEntries.length }} files</p>
+            </div>
+            <div class="search-result-list">
+              <button
+                v-for="entry in filteredKnowledgeEntries"
+                :key="entry.path"
+                class="link-button"
+                type="button"
+                @click="openKnowledgeFile(entry.path)"
+              >
+                {{ entry.path }}
+              </button>
+              <p v-if="filteredKnowledgeEntries.length === 0" class="empty">No matching knowledge files.</p>
+            </div>
+          </section>
+        </section>
+
+        <section v-if="memoryDocuments.length > 0" class="activity-section" aria-label="Legacy memory records">
+          <div class="section-heading">
+            <h2>Legacy memory records</h2>
             <p class="label">{{ memoryDocuments.length }} documents</p>
           </div>
           <div class="cds--form-item">
-            <label class="cds--label" for="memory-search">Search memory</label>
-            <input id="memory-search" v-model="memorySearch" class="cds--text-input" type="search" placeholder="Search titles, slugs, and body text">
+            <label class="cds--label" for="legacy-memory-search">Search legacy memory</label>
+            <input id="legacy-memory-search" v-model="memorySearch" class="cds--text-input" type="search" placeholder="Search titles, slugs, and body text">
           </div>
-          <p v-if="memoryDocuments.length === 0" class="empty">No memory documents yet.</p>
-          <div v-else class="memory-browser">
-            <aside class="memory-list" aria-label="Memory documents">
+          <div class="memory-browser">
+            <aside class="memory-list" aria-label="Legacy memory documents">
               <button
                 v-for="document in filteredMemoryDocuments"
                 :key="document.id"
@@ -1290,6 +1802,48 @@ onUnmounted(() => {
       </section>
 
       <section v-show="activeTab === 'workers'" id="panel-workers" class="tab-panel" role="tabpanel" aria-labelledby="tab-workers">
+        <section class="activity-section" aria-label="RAG index status">
+          <div class="section-heading">
+            <h2>RAG and index status</h2>
+            <p class="label">{{ knowledgeDocument ? knowledgeDocument.path : "No file selected" }}</p>
+          </div>
+          <div class="metric-grid status-grid">
+            <section class="metric-card">
+              <p class="label">Selected file</p>
+              <p class="metric-value metric-text">{{ knowledgeDocument?.indexStatus ?? "unknown" }}</p>
+            </section>
+            <section class="metric-card">
+              <p class="label">Markdown files</p>
+              <p class="metric-value">{{ knowledgeFileEntries.length }}</p>
+            </section>
+            <section class="metric-card">
+              <p class="label">Index jobs</p>
+              <p class="metric-value">{{ ragJobs.length }}</p>
+            </section>
+          </div>
+          <p v-if="ragJobs.length === 0" class="empty">No index worker status rows are available.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Pending</th>
+                <th>Failed</th>
+                <th>Last audit</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="job in ragJobs" :key="job.name">
+                <td>{{ job.name }}</td>
+                <td><span class="cds--tag" :class="statusTagClass(job.status)">{{ job.status }}</span></td>
+                <td>{{ job.pendingTasks ?? job.pendingMessages ?? 0 }}</td>
+                <td>{{ job.failedMessages ?? 0 }}</td>
+                <td>{{ formatDate(job.lastAuditAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
         <section class="activity-section" aria-label="Worker jobs">
           <div class="section-heading">
             <h2>Worker jobs</h2>
@@ -1323,6 +1877,66 @@ onUnmounted(() => {
       </section>
 
       <section v-show="activeTab === 'logs'" id="panel-logs" class="tab-panel" role="tabpanel" aria-labelledby="tab-logs">
+        <section class="activity-section" aria-label="Agent runs">
+          <div class="section-heading">
+            <h2>Agent runs</h2>
+            <p class="label">{{ agentRunEvents.length }} recent events</p>
+          </div>
+          <p v-if="agentRunEvents.length === 0" class="empty">No agent run events.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra">
+            <thead>
+              <tr>
+                <th>Run</th>
+                <th>Status</th>
+                <th>Model</th>
+                <th>Prompt</th>
+                <th>Linked source</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="event in agentRunEvents" :key="event.id">
+                <td>{{ formatId(event.entityId) }}</td>
+                <td><span class="cds--tag" :class="statusTagClass(eventStatus(event.action))">{{ eventStatus(event.action) }}</span></td>
+                <td>{{ detailString(event.details ?? {}, ["model_id", "model", "modelTier", "model_tier"]) || "unknown" }}</td>
+                <td>{{ detailString(event.details ?? {}, ["prompt_version", "promptVersion"]) || "unknown" }}</td>
+                <td>{{ detailString(event.details ?? {}, ["task_id", "message_id", "memory_path", "source"]) || "none" }}</td>
+                <td>{{ formatDate(event.createdAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="activity-section" aria-label="Tool calls">
+          <div class="section-heading">
+            <h2>Tool calls</h2>
+            <p class="label">{{ toolCallEvents.length }} recent events</p>
+          </div>
+          <p v-if="toolCallEvents.length === 0" class="empty">No tool-call events.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra">
+            <thead>
+              <tr>
+                <th>Tool</th>
+                <th>Status</th>
+                <th>Run</th>
+                <th>Side effect</th>
+                <th>Summary</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="event in toolCallEvents" :key="event.id">
+                <td>{{ detailString(event.details ?? {}, ["tool_name", "toolName", "tool"]) || event.entityId || "unknown" }}</td>
+                <td><span class="cds--tag" :class="statusTagClass(eventStatus(event.action))">{{ eventStatus(event.action) }}</span></td>
+                <td>{{ formatId(detailString(event.details ?? {}, ["run_id", "runId"]) || event.entityId) }}</td>
+                <td>{{ detailString(event.details ?? {}, ["side_effect", "sideEffect", "sideEffectClass"]) || "unknown" }}</td>
+                <td><span class="table-copy">{{ compactDetails(event.details ?? {}) || "none" }}</span></td>
+                <td>{{ formatDate(event.createdAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+
         <section class="activity-section" aria-label="Audit history">
           <div class="section-heading">
             <h2>Audit history</h2>
@@ -1578,6 +2192,44 @@ onUnmounted(() => {
               <dd>{{ selectedTask?.priority }}</dd>
             </div>
           </dl>
+
+          <section class="modal-section">
+            <h3>Schedule intelligence</h3>
+            <dl class="task-detail-grid">
+              <div>
+                <dt>Rationale</dt>
+                <dd>{{ selectedTask?.scheduleRationale || "Not recorded" }}</dd>
+              </div>
+              <div>
+                <dt>Next review</dt>
+                <dd>{{ formatDate(selectedTask?.nextReviewAt) }}</dd>
+              </div>
+              <div>
+                <dt>Last agent review</dt>
+                <dd>{{ formatDate(selectedTask?.lastAgentReviewAt) }}</dd>
+              </div>
+              <div>
+                <dt>Waiting on</dt>
+                <dd>{{ selectedTask?.waitingOn || "Not waiting" }}</dd>
+              </div>
+              <div>
+                <dt>Blocked reason</dt>
+                <dd>{{ selectedTask?.blockedReason || "Not blocked" }}</dd>
+              </div>
+              <div>
+                <dt>Recurrence</dt>
+                <dd>{{ selectedTask?.recurrencePolicy || "None" }}</dd>
+              </div>
+              <div>
+                <dt>Source memory</dt>
+                <dd>{{ selectedTask?.sourceMemoryPath || "None" }}</dd>
+              </div>
+              <div>
+                <dt>Clarification</dt>
+                <dd>{{ selectedTask?.ownerClarificationNeeded ? "Needed" : "Not needed" }}</dd>
+              </div>
+            </dl>
+          </section>
 
           <section class="modal-section">
             <h3>Prompt</h3>

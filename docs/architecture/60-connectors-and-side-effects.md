@@ -141,15 +141,35 @@ owner-review notification is pending, sent, failed, or missing. Older messages
 without a linked notification expose a Notify owner action that queues the same
 deterministic review notification after owner contact settings are configured.
 
-The operations UI also has a Memory tab. It lists user-owned memory documents,
-supports searching title, slug, and body text, shows a lightweight heading
-outline, and previews the markdown body. It also exposes trusted-contact
-management for sender classifications because sender trust is operational memory
-the owner needs to inspect and correct while reviewing agent behavior. The
-Memory tab and the Sender tab both edit the same `senders` records; deleting a
-contact removes the explicit classification so the address falls back to normal
-unknown/untrusted handling. Memory document writes still come from host-owned
-workflows such as explicit owner preference messages.
+The operations UI is the owner console for direct interaction and inspection.
+The Overview and Chat tabs expose a web prompt form that posts only to
+`POST /api/v1/agent/prompts`. The browser can select task, memory-path, and
+recent assistant-mailbox message context, but selected memory/message context is
+included as bounded prompt text; browser-created MCP sessions remain read-only
+memory/search sessions and are not minted for decision tools. Direct task,
+memory, outbox, or integration actions still come only from the authenticated
+owner-command runtime and its server-owned MCP session.
+
+The operations UI also has a Memory tab. It uses the markdown knowledge
+filesystem routes to show the standard root folders (`/personal`,
+`/preferences`, `/assistant`, `/tasks`, `/projects`, `/newsletters`, and
+`/legacy`), a file list, selected file preview, index status, and heading
+outline. Exact search is UI-side over known paths and the selected file body;
+semantic search should use read-only MCP/search sessions when added to the
+browser workflow. The owner may edit assistant-authored files under
+`/assistant/`; other knowledge writes remain host-owned workflows or
+agent-runtime writes with validation and audit. The tab keeps trusted-contact
+management visible because sender trust is operational memory the owner needs
+to inspect and correct while reviewing agent behavior. The Memory tab and the
+Sender tab both edit the same `senders` records; deleting a contact removes the
+explicit classification so the address falls back to normal unknown/untrusted
+handling.
+
+The Logs tab separates recent agent-run audit events and tool-call audit events
+from the general audit stream so an operator can trace source -> run -> tool ->
+result when the underlying audit details are present. The Workers tab shows
+queue health and selected knowledge-file index status from existing job and
+markdown metadata.
 
 ## Prompt-Injection Controls
 

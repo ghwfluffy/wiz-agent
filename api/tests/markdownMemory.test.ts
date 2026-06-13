@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { MarkdownConflict, RequestContext } from "../src/domain/types.js";
+import { buildApp } from "../src/http/app.js";
 import { buildMcpApp } from "../src/mcp/server.js";
 
 function isConflict(value: unknown): value is MarkdownConflict {
@@ -81,6 +82,56 @@ describe("markdown memory filesystem", () => {
 
     await expect(store.getMarkdownDocument(other, "/assistant/schedule.md")).resolves.toBeUndefined();
     await expect(store.listMarkdownDirectory(other, "/assistant")).resolves.toEqual([]);
+  });
+
+  it("limits web console markdown edits to assistant instruction files", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "web-knowledge-edit-login");
+    const context: RequestContext = {
+      userId: session.user.id,
+      actorType: "admin",
+      permissions: ["user", "admin"],
+      requestId: "web-knowledge-edit-test",
+      session
+    };
+    await store.writeMarkdownDocument(context, {
+      path: "/assistant/instructions.md",
+      markdown: "# Instructions\nBe concise."
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/newsletters/2026-06-13/source.md",
+      markdown: "# Source\nNewsletter content."
+    });
+    const app = buildApp({ settings, store });
+    const headers = {
+      cookie: `agent_session=${session.id}`,
+      "content-type": "application/json"
+    };
+
+    const blocked = await app.request("/api/v1/knowledge/files/%2Fnewsletters%2F2026-06-13%2Fsource.md", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ content: "# Source\nEdited." })
+    });
+    expect(blocked.status).toBe(403);
+
+    const allowed = await app.request("/api/v1/knowledge/files/%2Fassistant%2Finstructions.md", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ content: "# Instructions\nBe concise.\nUse bullets.", expectedVersion: 1 })
+    });
+    expect(allowed.status).toBe(200);
+    await expect(allowed.json()).resolves.toMatchObject({
+      document: {
+        path: "/assistant/instructions.md",
+        version: 2,
+        markdown: expect.stringContaining("Use bullets.")
+      }
+    });
   });
 
   it("replaces only the target section and returns conflicts for stale versions", async () => {

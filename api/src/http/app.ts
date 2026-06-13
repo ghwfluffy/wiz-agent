@@ -637,8 +637,12 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (!payload || typeof payload.content !== "string") {
       return context.json(errorPayload("validation_error", "File content is required.", authContext.requestId), 400);
     }
+    const path = decodePathParam(context.req.param("encodedPath"));
+    if (!path.startsWith("/assistant/")) {
+      return context.json(errorPayload("http_403", "Only assistant instruction files can be edited from the web console.", authContext.requestId), 403);
+    }
     const result = await store.writeMarkdownDocument(authContext, {
-      path: decodePathParam(context.req.param("encodedPath")),
+      path,
       markdown: payload.content,
       expectedVersion: typeof payload.expectedVersion === "number" ? payload.expectedVersion : undefined
     });

@@ -22,11 +22,13 @@ sign-in button calls `POST /api/v1/auth/dev-login` and creates a session for the
 configured development user.
 
 The home screen is the operational dashboard. It supports creating and updating
-tasks, approving or cancelling outbound messages, managing sender trust,
-inspecting worker queue status, viewing recent audit history, and editing admin
-AI model configuration when the signed-in user is an administrator. OAuth
-callback failures redirect back to the UI with an `oauth_error` token; the web
-store converts that token into a friendly message and removes it from the URL.
+tasks, talking directly to the agent through `POST /api/v1/agent/prompts`,
+approving or cancelling outbound messages, browsing markdown memory/knowledge,
+managing sender trust, inspecting worker and index status, viewing agent
+run/tool-call/audit history, and editing admin AI model configuration when the
+signed-in user is an administrator. OAuth callback failures redirect back to the
+UI with an `oauth_error` token; the web store converts that token into a
+friendly message and removes it from the URL.
 
 API and worker startup run the TypeScript migration runner before serving:
 
@@ -83,6 +85,11 @@ The JSON body is `prompt`, optional `contextTaskId`, and optional `mode`
 session cookie, creates an agent run, and executes at most one selected
 host-validated tool call through MCP. Tests should inject `MockModelClient`
 through `buildApp` instead of relying on live OpenAI credentials.
+
+The web console exposes this endpoint from Overview and Chat. Task context is
+sent as `contextTaskId`; selected memory paths and recent assistant-mailbox
+messages are folded into the prompt text as operator-selected context. Do not
+add browser-side access to write/action MCP tools for this workflow.
 
 Scheduled task intelligence is worker-owned. The worker maintains a daily
 newsletter synthesis task and an autonomous wake task that recurs roughly every
@@ -162,6 +169,12 @@ GET /api/v1/knowledge/files/:encodedPath/sections
 
 Encode full markdown paths for `:encodedPath`, for example
 `%2Fpersonal%2Fprofile.md`.
+
+The Memory tab uses these routes for the markdown knowledge browser. It shows
+the standard knowledge roots, selected file index status, heading outline, exact
+path/body search for loaded data, and raw markdown preview. Editing is limited
+to assistant-authored markdown under `/assistant/`; other durable writes should
+continue through host-owned ingestion or the validated agent runtime.
 
 ## RAG Indexing
 
