@@ -1,6 +1,6 @@
 # App Capability Registry
 
-The agent keeps durable knowledge about other GHWIZ apps in code at
+The agent keeps durable knowledge about other apps in code at
 `api/src/integrations/capabilityRegistry.ts`.
 
 This registry is the source of truth for what the agent understands about
@@ -87,7 +87,7 @@ The registry includes Apartment Gate as directory knowledge only:
 
 ## Maintenance Rule
 
-Whenever a future agent request adds or changes a GHWIZ app, app API, or major
+Whenever a future agent request adds or changes an app, app API, or major
 capability, update the registry in the same change. Do not leave the agent with
 stale app knowledge.
 

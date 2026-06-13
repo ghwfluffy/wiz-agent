@@ -27,7 +27,7 @@
   or workflow choice, update the relevant architecture or style documentation in
   the same change so future agents do not repeat the mistake.
 - Keep `api/src/integrations/capabilityRegistry.ts` current whenever the agent
-  learns about a GHWIZ app, app API, or user-facing capability. Registry updates
+  learns about an app, app API, or user-facing capability. Registry updates
   should include purpose, allowed actions, token/scope expectations, safety
   boundaries, and response guidance.
 - Do not read, print, or expose files under `secrets/` unless the user

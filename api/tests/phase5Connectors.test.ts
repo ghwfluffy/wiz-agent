@@ -1030,7 +1030,7 @@ describe("cross-app integration gateway", () => {
     expect(payload).toMatchObject({
       aud: "goals",
       exp: 1_700_000_300,
-      iss: "ghwiz-agent",
+      iss: "agent-service",
       scope: "goals.list_goals",
       sub: "central-user-1"
     });

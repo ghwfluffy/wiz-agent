@@ -34,7 +34,7 @@
 - Cross-app API access goes through a deterministic gateway with user-scoped
   tokens that are never exposed to the model.
 - The app capability registry is the source of truth for the agent's durable
-  understanding of Goals, Fluffynomics, and future GHWIZ app APIs.
+  understanding of Goals, Fluffynomics, and future app APIs.
 
 ## Open Questions
 

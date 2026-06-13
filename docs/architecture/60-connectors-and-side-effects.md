@@ -393,7 +393,7 @@ sizes; and time out aggressively before article extraction or summarization.
 
 ## Cross-App Integrations
 
-The agent understands other GHWIZ apps through the app capability registry in
+The agent understands other apps through the app capability registry in
 `api/src/integrations/capabilityRegistry.ts`. The registry currently covers
 Goals, Fluffynomics, and Apartment Gate. Goals and Fluffynomics expose
 agent-callable API actions; Apartment Gate is directory knowledge only and has

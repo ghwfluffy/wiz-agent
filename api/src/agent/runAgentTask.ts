@@ -9,6 +9,7 @@ import { buildAgentPrompt, modelToolDescriptors } from "./promptContext.js";
 import type { Settings } from "../config/settings.js";
 import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain/types.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
+import { ToolRegistry } from "../tools/registry.js";
 import { parseToolProposal, validateOrRepairToolCall } from "../tools/validator.js";
 import { McpToolClient, type AgentToolClient } from "./toolClient.js";
 import {
@@ -237,6 +238,16 @@ export async function runAgentTask(options: {
       context: options.context,
       toolCall
     });
+    const responseText = ToolRegistry[validated.toolName].access === "read"
+      ? await synthesizeToolResponse({
+          modelClient: options.modelClient,
+          modelId,
+          tier,
+          ownerPrompt: options.request.prompt,
+          toolName: validated.toolName,
+          toolResult: execution.result
+        })
+      : undefined;
     await options.store.finishAgentRun(options.context, run.id, "completed");
       return {
         status: "completed",
@@ -244,6 +255,7 @@ export async function runAgentTask(options: {
         toolStatus: "accepted",
         repaired: validated.repaired,
         toolName: validated.toolName,
+        responseText,
         sideEffect: execution.sideEffect,
         executionResult: execution.result
       };
@@ -275,4 +287,43 @@ function modelText(output: unknown): string | undefined {
     }
   }
   return undefined;
+}
+
+async function synthesizeToolResponse(options: {
+  modelClient: AgentModelClient;
+  modelId: string;
+  tier: ReturnType<typeof chooseModelTier>;
+  ownerPrompt: string;
+  toolName: string;
+  toolResult: Record<string, unknown>;
+}): Promise<string | undefined> {
+  try {
+    const response = await options.modelClient.runText({
+      model: options.modelId,
+      tier: options.tier,
+      prompt: [
+        "You are answering the owner's authenticated chat after a read-only host tool was executed.",
+        "Use the owner request, any included chat context, and the tool result to answer the owner's latest question directly.",
+        "Do not call or suggest another tool. Do not repeat a raw list unless the owner asked for a list.",
+        "If the owner asks what something means or what to do next, interpret the data and give concrete next actions.",
+        "If the tool result is insufficient, say what is missing and what you can infer.",
+        "",
+        "Owner request and context:",
+        options.ownerPrompt,
+        "",
+        `Tool executed: ${options.toolName}`,
+        "Tool result JSON:",
+        compactJson(options.toolResult),
+        "",
+        "Answer:"
+      ].join("\n")
+    });
+    return response.trim() || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function compactJson(value: unknown): string {
+  return JSON.stringify(value, null, 2).slice(0, 12000);
 }

@@ -168,7 +168,7 @@ describe("app capability registry", () => {
     const prompt = buildAgentPrompt("How are my goals and budget doing?");
     const tools = modelToolDescriptors();
 
-    expect(prompt).toContain("GHWIZ app capability registry");
+    expect(prompt).toContain("App capability registry");
     expect(prompt).toContain("goals.list_goals");
     expect(prompt).toContain("budget.list_accounts");
     expect(tools).toEqual(
@@ -2166,7 +2166,8 @@ describe("agent task execution", () => {
             toolName: "list_goals",
             arguments: {}
           }
-        ]
+        ],
+        text: ["You have one active goal: ship the deployment. The next step is to keep the rollout stable."]
       })
     });
     const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
@@ -2187,6 +2188,7 @@ describe("agent task execution", () => {
       status: "completed",
       selectedAction: "list_goals",
       toolStatus: "accepted",
+      responseText: "You have one active goal: ship the deployment. The next step is to keep the rollout stable.",
       toolResult: {
         status: 200,
         data: [{ id: "goal-1", title: "Ship the deployment" }]

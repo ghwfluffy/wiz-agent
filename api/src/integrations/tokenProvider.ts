@@ -10,6 +10,8 @@ type TokenFile = {
   default?: Partial<Record<IntegrationApp, string>>;
 };
 
+const INTEGRATION_TOKEN_ISSUER = "agent-service";
+
 function base64Url(input: string | Buffer): string {
   return Buffer.from(input).toString("base64url");
 }
@@ -61,7 +63,7 @@ export class SignedIntegrationTokenProvider implements IntegrationTokenProvider 
       aud: app,
       exp: now + 300,
       iat: now,
-      iss: "ghwiz-agent",
+      iss: INTEGRATION_TOKEN_ISSUER,
       scope,
       sub: subject
     }));

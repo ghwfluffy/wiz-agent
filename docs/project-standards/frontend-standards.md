@@ -59,6 +59,13 @@ The web app should surface failed API requests through the shared toast service 
 
 Suppressing an API error toast should be an explicit per-call choice for flows that already show the error inline, such as field-level validation, silent auth restoration, or background polling.
 
+## Polling And Forms
+
+Background polling must not overwrite an actively edited form. Long-lived admin
+or settings forms should track dirty state and apply refreshed server values to
+the display model without copying them into form inputs until the user saves,
+clears, or reloads the form.
+
 ## Timezone Boundary
 
 The frontend may display timestamps in the browser timezone. Server-side day-boundary, schedule, and compliance semantics should use the saved user profile timezone.

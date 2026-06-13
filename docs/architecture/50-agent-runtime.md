@@ -351,7 +351,10 @@ returns the run id, selected action, tool status/result, and host-derived links
 to created or updated task, outbox, memory, or clarification records. When the
 model answers without selecting a tool, the endpoint returns the plain answer as
 `responseText` so conversational UI can show the answer instead of a generic
-completion status.
+completion status. When a selected read-only tool succeeds, the runtime performs
+a second text-only synthesis pass over the owner prompt and tool result and
+returns that interpreted answer as `responseText`; the raw tool result remains
+available for audit/debug views but is not the primary chat reply.
 
 Owner messages must not be pre-written to long-term memory by regex or other
 host heuristics. Durable owner facts, preferences, and schedule rationale should

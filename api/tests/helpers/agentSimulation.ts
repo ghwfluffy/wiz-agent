@@ -3,6 +3,7 @@ import type {
   AgentModelClient,
   RepairToolArgumentsRequest,
   StructuredModelRequest,
+  TextModelRequest,
   ToolModelRequest
 } from "../../src/agent/modelClient.js";
 import { loadSettings, type Settings } from "../../src/config/settings.js";
@@ -35,7 +36,9 @@ type StagedToolCall = {
 
 export class ScenarioModelClient implements AgentModelClient {
   readonly prompts: ToolModelRequest[] = [];
+  readonly textPrompts: TextModelRequest[] = [];
   private readonly toolResponses: unknown[] = [];
+  private readonly textResponses: string[] = [];
   private readonly structuredResponses: unknown[] = [];
   private readonly repairResponses: unknown[] = [];
 
@@ -46,6 +49,11 @@ export class ScenarioModelClient implements AgentModelClient {
 
   stageNoTool(response: Record<string, unknown> = {}): this {
     this.toolResponses.push(response);
+    return this;
+  }
+
+  stageText(response: string): this {
+    this.textResponses.push(response);
     return this;
   }
 
@@ -66,6 +74,11 @@ export class ScenarioModelClient implements AgentModelClient {
   async runWithTools(request: ToolModelRequest): Promise<unknown> {
     this.prompts.push(request);
     return this.toolResponses.shift() ?? {};
+  }
+
+  async runText(request: TextModelRequest): Promise<string> {
+    this.textPrompts.push(request);
+    return this.textResponses.shift() ?? "";
   }
 
   async repairToolArguments(_request: RepairToolArgumentsRequest): Promise<unknown> {

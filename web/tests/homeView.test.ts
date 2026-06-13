@@ -156,6 +156,78 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Newsletter Preferences");
   });
 
+  it("preserves edited AI config values across admin refreshes before saving", async () => {
+    vi.useFakeTimers();
+    const savedBodies: Record<string, unknown>[] = [];
+    const serverConfig = {
+      fastModel: "gpt-5-mini",
+      smartModel: "gpt-5",
+      orchestratorModel: "gpt-5",
+      repairModel: "gpt-5-mini",
+      maxToolCalls: 10,
+      maxRuntimeSec: 120,
+      repairAttemptLimit: 1
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/admin/ai-config") && init?.method === "PUT") {
+        const body = JSON.parse(String(init.body));
+        savedBodies.push(body);
+        return { ok: true, json: async () => body };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => serverConfig };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [], budgets: {}, recentFailures: { ragJobs: [] }, ragIndexHealth: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome("/?tab=admin");
+    await flushPromises();
+    await flushPromises();
+
+    await wrapper.get("#max-tool-calls").setValue("50");
+    await wrapper.get("#max-runtime-sec").setValue("500");
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flushPromises();
+
+    expect((wrapper.get("#max-tool-calls").element as HTMLInputElement).value).toBe("50");
+    expect((wrapper.get("#max-runtime-sec").element as HTMLInputElement).value).toBe("500");
+
+    await wrapper.get("#panel-admin form").trigger("submit");
+    await flushPromises();
+
+    expect(savedBodies.at(-1)).toMatchObject({
+      maxToolCalls: 50,
+      maxRuntimeSec: 500
+    });
+    wrapper.unmount();
+  });
+
   it("renders personal assistant insight sections on the overview", async () => {
     const insightPayload = {
       generatedAt: "2026-06-13T12:00:00.000Z",

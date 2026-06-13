@@ -16,6 +16,12 @@ export type ToolModelRequest = {
   tools: unknown[];
 };
 
+export type TextModelRequest = {
+  model: string;
+  tier: ModelTier;
+  prompt: string;
+};
+
 export type RepairToolArgumentsRequest = {
   model: string;
   tier: "repair";
@@ -28,6 +34,7 @@ export type RepairToolArgumentsRequest = {
 export type AgentModelClient = {
   runStructured(request: StructuredModelRequest): Promise<unknown>;
   runWithTools(request: ToolModelRequest): Promise<unknown>;
+  runText(request: TextModelRequest): Promise<string>;
   repairToolArguments(request: RepairToolArgumentsRequest): Promise<unknown>;
 };
 
@@ -36,6 +43,7 @@ export class MockModelClient implements AgentModelClient {
     private readonly responses: {
       structured?: unknown[];
       tools?: unknown[];
+      text?: unknown[];
       repairs?: unknown[];
     } = {}
   ) {}
@@ -46,6 +54,11 @@ export class MockModelClient implements AgentModelClient {
 
   async runWithTools(): Promise<unknown> {
     return this.responses.tools?.shift() ?? {};
+  }
+
+  async runText(): Promise<string> {
+    const response = this.responses.text?.shift();
+    return typeof response === "string" ? response : "";
   }
 
   async repairToolArguments(): Promise<unknown> {
@@ -109,6 +122,14 @@ export class OpenAIModelClient implements AgentModelClient {
     return parseJsonOrTextOutput(response);
   }
 
+  async runText(request: TextModelRequest): Promise<string> {
+    const response = await this.createResponse({
+      model: request.model,
+      input: request.prompt
+    });
+    return parseTextOutput(response);
+  }
+
   async repairToolArguments(request: RepairToolArgumentsRequest): Promise<unknown> {
     const response = await this.createResponse({
       model: request.model,
@@ -161,7 +182,7 @@ function toOpenAiTool(tool: unknown): Record<string, unknown> {
   return {
     type: "function",
     name: descriptor.name,
-    description: `GHWIZ deterministic host tool: ${descriptor.name}`,
+    description: `Deterministic host tool: ${descriptor.name}`,
     strict: false,
     parameters: descriptor.schema ?? { type: "object", additionalProperties: true }
   };
@@ -243,6 +264,36 @@ function parseJsonOrTextOutput(response: Record<string, unknown>): unknown {
     }
   }
   return {};
+}
+
+function parseTextOutput(response: Record<string, unknown>): string {
+  if (typeof response.output_text === "string" && response.output_text.trim() !== "") {
+    return response.output_text.trim();
+  }
+  const output = response.output;
+  if (!Array.isArray(output)) {
+    return "";
+  }
+  const textParts: string[] = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const content = (item as Record<string, unknown>).content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const contentItem of content) {
+      if (!contentItem || typeof contentItem !== "object") {
+        continue;
+      }
+      const text = (contentItem as Record<string, unknown>).text;
+      if (typeof text === "string" && text.trim() !== "") {
+        textParts.push(text.trim());
+      }
+    }
+  }
+  return textParts.join("\n\n").trim();
 }
 
 function parseJson(value: unknown): unknown {

@@ -103,6 +103,7 @@ const loadingKnowledge = ref(false);
 const savingKnowledge = ref(false);
 const testingImap = ref(false);
 const retryingRagJobId = ref<string | null>(null);
+const aiConfigDirty = ref(false);
 const taskPage = ref(1);
 const inboxPage = ref(1);
 const outboxPage = ref(1);
@@ -310,10 +311,14 @@ function tabFromRoute(value: unknown): TabId {
 
 function applyAiConfig(config: AiConfig | null): void {
   aiConfig.value = config;
-  if (!config) {
+  if (!config || aiConfigDirty.value) {
     return;
   }
   Object.assign(configForm, config);
+}
+
+function markAiConfigDirty(): void {
+  aiConfigDirty.value = true;
 }
 
 function applyJobsResponse(response: JobsResponse): void {
@@ -1246,7 +1251,7 @@ async function deleteSender(sender: Sender): Promise<void> {
 async function saveAiConfig(): Promise<void> {
   saving.value = true;
   try {
-    applyAiConfig(await api.updateAiConfig({
+    const updatedConfig = await api.updateAiConfig({
       fastModel: configForm.fastModel,
       smartModel: configForm.smartModel,
       orchestratorModel: configForm.orchestratorModel,
@@ -1254,7 +1259,9 @@ async function saveAiConfig(): Promise<void> {
       maxToolCalls: Number(configForm.maxToolCalls),
       maxRuntimeSec: Number(configForm.maxRuntimeSec),
       repairAttemptLimit: Number(configForm.repairAttemptLimit)
-    }));
+    });
+    aiConfigDirty.value = false;
+    applyAiConfig(updatedConfig);
   } catch {
     dashboardError.value = "Unable to save AI configuration.";
   } finally {
@@ -2924,7 +2931,7 @@ onUnmounted(() => {
           <div class="section-heading">
             <h2>AI configuration</h2>
           </div>
-          <form class="form-grid config-form" @submit.prevent="saveAiConfig">
+          <form class="form-grid config-form" @submit.prevent="saveAiConfig" @input="markAiConfigDirty">
             <div class="cds--form-item">
               <label class="cds--label" for="fast-model">Fast model</label>
               <input id="fast-model" v-model="configForm.fastModel" class="cds--text-input" required type="text">
