@@ -84,6 +84,15 @@ session cookie, creates an agent run, and executes at most one selected
 host-validated tool call through MCP. Tests should inject `MockModelClient`
 through `buildApp` instead of relying on live OpenAI credentials.
 
+Scheduled task intelligence is worker-owned. The worker maintains a daily
+newsletter synthesis task and an autonomous wake task that recurs roughly every
+three hours. Before each recurring run, host code refreshes the model prompt
+with active tasks, `/assistant/schedule.md`,
+`/tasks/schedule-rationale.md`, `/assistant/notification-policy.md`, recent
+owner messages, and recent newsletter knowledge. Schedule-changing tools require
+rationale and write task events; failed recurring wake runs still create the
+next wake.
+
 Live connector config can be seeded from ignored files for initial bootstrap or
 repair with:
 
@@ -188,3 +197,18 @@ reindex_path({ path })
 `reindex_path` enqueues repair jobs for the authenticated user's matching
 markdown path tree. If the worker stops mid-job, stale claimed jobs become
 claimable again after the restart grace window.
+
+Useful MCP task/schedule tools:
+
+```text
+update_task_schedule({ taskId, dueAt, rationale, confidence, nextReviewAt? })
+update_task_status({ taskId, status, rationale, waitingOn?, blockedReason? })
+split_task({ taskId, newTasks, rationale })
+create_followup_task({ sourceTaskId?, title, prompt, dueAt?, rationale })
+mark_waiting_on({ taskId, waitingOn, rationale, nextReviewAt? })
+request_clarification({ question, relatedTaskId?, urgency, rationale })
+record_schedule_rationale({ taskId, rationale, sourceMemoryPath?, recurrencePolicy? })
+```
+
+These tools resolve user scope from the MCP session. Do not pass user ids,
+tenant ids, recipients, connector secrets, or deployment hostnames in arguments.

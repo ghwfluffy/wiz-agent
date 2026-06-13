@@ -203,12 +203,15 @@ export async function executeToolCall(options: {
         };
       }
       const updated = await options.store.updateTask(options.context, taskId, {
-        dueAt: typeof options.args.dueAt === "string" ? options.args.dueAt : null
+        dueAt: typeof options.args.dueAt === "string" ? options.args.dueAt : null,
+        scheduleRationale: String(options.args.rationale),
+        nextReviewAt: typeof options.args.nextReviewAt === "string" ? options.args.nextReviewAt : null
       });
       const event = await options.store.recordTaskEvent(options.context, taskId, "task.schedule_updated", {
         due_at: updated?.dueAt ?? null,
         rationale: String(options.args.rationale),
         confidence: String(options.args.confidence),
+        next_review_at: updated?.nextReviewAt ?? null,
         summary: "Agent updated the task schedule with rationale."
       });
       return {
@@ -220,6 +223,158 @@ export async function executeToolCall(options: {
           due_at: updated?.dueAt ?? null,
           rationale: options.args.rationale,
           confidence: options.args.confidence
+        }
+      };
+    }
+    case "update_task_status": {
+      const taskId = String(options.args.taskId);
+      const task = await options.store.getTask(options.context, taskId);
+      if (!task) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { reason: "task_not_found" }
+        };
+      }
+      const updated = await options.store.updateTask(options.context, taskId, {
+        status: String(options.args.status),
+        waitingOn: Object.hasOwn(options.args, "waitingOn")
+          ? (typeof options.args.waitingOn === "string" ? options.args.waitingOn : null)
+          : task.waitingOn,
+        blockedReason: Object.hasOwn(options.args, "blockedReason")
+          ? (typeof options.args.blockedReason === "string" ? options.args.blockedReason : null)
+          : task.blockedReason,
+        ownerClarificationNeeded: Object.hasOwn(options.args, "ownerClarificationNeeded")
+          ? options.args.ownerClarificationNeeded === true
+          : task.ownerClarificationNeeded,
+        scheduleRationale: String(options.args.rationale)
+      });
+      const event = await options.store.recordTaskEvent(options.context, taskId, "task.status_updated", {
+        status: updated?.status ?? null,
+        rationale: String(options.args.rationale),
+        waiting_on: updated?.waitingOn ?? null,
+        blocked_reason: updated?.blockedReason ?? null,
+        owner_clarification_needed: updated?.ownerClarificationNeeded ?? false,
+        summary: "Agent updated the task status with rationale."
+      });
+      return {
+        executed: Boolean(updated),
+        sideEffect: "local_persistence",
+        result: {
+          task_id: taskId,
+          task_event_id: event.id,
+          status: updated?.status ?? null,
+          rationale: options.args.rationale
+        }
+      };
+    }
+    case "split_task": {
+      const taskId = String(options.args.taskId);
+      const task = await options.store.getTask(options.context, taskId);
+      if (!task) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { reason: "task_not_found" }
+        };
+      }
+      const created = [];
+      for (const item of Array.isArray(options.args.newTasks) ? options.args.newTasks : []) {
+        const child = item as Record<string, unknown>;
+        const newTask = await options.store.createTask(options.context, {
+          title: String(child.title),
+          prompt: String(child.prompt),
+          dueAt: typeof child.dueAt === "string" ? child.dueAt : null,
+          priority: typeof child.priority === "number" ? child.priority : task.priority,
+          scheduleRationale: String(child.scheduleRationale),
+          sourceTaskId: task.id
+        });
+        created.push(newTask);
+      }
+      const event = await options.store.recordTaskEvent(options.context, taskId, "task.split", {
+        rationale: String(options.args.rationale),
+        child_task_ids: created.map((entry) => entry.id),
+        summary: "Agent split this task into follow-up tasks."
+      });
+      return {
+        executed: created.length > 0,
+        sideEffect: "local_persistence",
+        result: {
+          task_id: taskId,
+          task_event_id: event.id,
+          child_task_ids: created.map((entry) => entry.id),
+          rationale: options.args.rationale
+        }
+      };
+    }
+    case "create_followup_task": {
+      const sourceTaskId = typeof options.args.sourceTaskId === "string" ? options.args.sourceTaskId : undefined;
+      const sourceTask = sourceTaskId ? await options.store.getTask(options.context, sourceTaskId) : undefined;
+      if (sourceTaskId && !sourceTask) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { reason: "source_task_not_found" }
+        };
+      }
+      const task = await options.store.createTask(options.context, {
+        title: String(options.args.title),
+        prompt: String(options.args.prompt),
+        dueAt: typeof options.args.dueAt === "string" ? options.args.dueAt : null,
+        priority: typeof options.args.priority === "number" ? options.args.priority : sourceTask?.priority ?? 0,
+        scheduleRationale: String(options.args.rationale),
+        sourceTaskId: sourceTask?.id ?? null
+      });
+      const event = sourceTask
+        ? await options.store.recordTaskEvent(options.context, sourceTask.id, "task.followup_created", {
+          followup_task_id: task.id,
+          rationale: String(options.args.rationale),
+          summary: "Agent created a follow-up task."
+        })
+        : undefined;
+      return {
+        executed: true,
+        sideEffect: "local_persistence",
+        result: {
+          task_id: task.id,
+          source_task_id: sourceTask?.id ?? null,
+          source_task_event_id: event?.id ?? null,
+          due_at: task.dueAt,
+          rationale: options.args.rationale
+        }
+      };
+    }
+    case "mark_waiting_on": {
+      const taskId = String(options.args.taskId);
+      const task = await options.store.getTask(options.context, taskId);
+      if (!task) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { reason: "task_not_found" }
+        };
+      }
+      const updated = await options.store.updateTask(options.context, taskId, {
+        status: "waiting",
+        waitingOn: String(options.args.waitingOn),
+        scheduleRationale: String(options.args.rationale),
+        nextReviewAt: typeof options.args.nextReviewAt === "string" ? options.args.nextReviewAt : null
+      });
+      const event = await options.store.recordTaskEvent(options.context, taskId, "task.waiting_on", {
+        waiting_on: String(options.args.waitingOn),
+        rationale: String(options.args.rationale),
+        next_review_at: updated?.nextReviewAt ?? null,
+        summary: "Agent marked the task as waiting with rationale."
+      });
+      return {
+        executed: Boolean(updated),
+        sideEffect: "local_persistence",
+        result: {
+          task_id: taskId,
+          task_event_id: event.id,
+          status: updated?.status ?? null,
+          waiting_on: updated?.waitingOn ?? null,
+          rationale: options.args.rationale
         }
       };
     }
@@ -251,6 +406,7 @@ export async function executeToolCall(options: {
         }
       };
     }
+    case "request_clarification":
     case "ask_owner_clarification": {
       const urgency = String(options.args.urgency);
       if (urgency === "now") {
@@ -283,6 +439,12 @@ export async function executeToolCall(options: {
 
       const relatedTaskId = typeof options.args.relatedTaskId === "string" ? options.args.relatedTaskId : undefined;
       const relatedTask = relatedTaskId ? await options.store.getTask(options.context, relatedTaskId) : undefined;
+      if (relatedTask) {
+        await options.store.updateTask(options.context, relatedTask.id, {
+          ownerClarificationNeeded: true,
+          scheduleRationale: typeof options.args.rationale === "string" ? options.args.rationale : relatedTask.scheduleRationale
+        });
+      }
       const task = await options.store.createTask(options.context, {
         title: "Clarify owner request",
         prompt: [
@@ -297,6 +459,7 @@ export async function executeToolCall(options: {
         question: String(options.args.question),
         related_task_id: relatedTask?.id ?? null,
         urgency,
+        rationale: typeof options.args.rationale === "string" ? options.args.rationale : null,
         summary: "Agent requested owner clarification."
       });
       return {
@@ -307,6 +470,43 @@ export async function executeToolCall(options: {
           task_id: task.id,
           task_event_id: event.id,
           urgency
+        }
+      };
+    }
+    case "record_schedule_rationale": {
+      const taskId = String(options.args.taskId);
+      const task = await options.store.getTask(options.context, taskId);
+      if (!task) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { reason: "task_not_found" }
+        };
+      }
+      const updated = await options.store.updateTask(options.context, taskId, {
+        scheduleRationale: String(options.args.rationale),
+        sourceMemoryPath: typeof options.args.sourceMemoryPath === "string" ? options.args.sourceMemoryPath : task.sourceMemoryPath,
+        sourceMessageId: typeof options.args.sourceMessageId === "string" ? options.args.sourceMessageId : task.sourceMessageId,
+        sourceTaskId: typeof options.args.sourceTaskId === "string" ? options.args.sourceTaskId : task.sourceTaskId,
+        recurrencePolicy: typeof options.args.recurrencePolicy === "string" ? options.args.recurrencePolicy : task.recurrencePolicy,
+        nextReviewAt: typeof options.args.nextReviewAt === "string" ? options.args.nextReviewAt : task.nextReviewAt
+      });
+      const event = await options.store.recordTaskEvent(options.context, taskId, "task.schedule_rationale_recorded", {
+        rationale: String(options.args.rationale),
+        source_memory_path: updated?.sourceMemoryPath ?? null,
+        source_message_id: updated?.sourceMessageId ?? null,
+        source_task_id: updated?.sourceTaskId ?? null,
+        recurrence_policy: updated?.recurrencePolicy ?? null,
+        next_review_at: updated?.nextReviewAt ?? null,
+        summary: "Agent recorded schedule rationale."
+      });
+      return {
+        executed: Boolean(updated),
+        sideEffect: "local_persistence",
+        result: {
+          task_id: taskId,
+          task_event_id: event.id,
+          rationale: updated?.scheduleRationale ?? null
         }
       };
     }

@@ -73,6 +73,7 @@ function hashOauthState(state: string): string {
 }
 
 function taskFromRow(row: Record<string, unknown>): TaskRecord {
+  const scheduleContext = (row.schedule_context_json as Record<string, unknown> | null) ?? {};
   return {
     id: String(row.id),
     userId: String(row.user_id),
@@ -82,10 +83,48 @@ function taskFromRow(row: Record<string, unknown>): TaskRecord {
     prompt: String(row.prompt),
     dueAt: row.due_at instanceof Date ? row.due_at.toISOString() : row.due_at ? String(row.due_at) : null,
     priority: Number(row.priority),
+    scheduleRationale: typeof scheduleContext.schedule_rationale === "string" ? scheduleContext.schedule_rationale : null,
+    sourceMemoryPath: typeof scheduleContext.source_memory_path === "string" ? scheduleContext.source_memory_path : null,
+    sourceMessageId: typeof scheduleContext.source_message_id === "string" ? scheduleContext.source_message_id : null,
+    sourceTaskId: typeof scheduleContext.source_task_id === "string" ? scheduleContext.source_task_id : null,
+    recurrencePolicy: typeof scheduleContext.recurrence_policy === "string" ? scheduleContext.recurrence_policy : null,
+    lastAgentReviewAt: typeof scheduleContext.last_agent_review_at === "string" ? scheduleContext.last_agent_review_at : null,
+    nextReviewAt: typeof scheduleContext.next_review_at === "string" ? scheduleContext.next_review_at : null,
+    waitingOn: typeof scheduleContext.waiting_on === "string" ? scheduleContext.waiting_on : null,
+    blockedReason: typeof scheduleContext.blocked_reason === "string" ? scheduleContext.blocked_reason : null,
+    ownerClarificationNeeded: scheduleContext.owner_clarification_needed === true,
     createdBy: String(row.created_by),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
   };
+}
+
+function scheduleContextFromTaskInput(input: TaskInput): Record<string, unknown> {
+  return Object.fromEntries(Object.entries({
+    schedule_rationale: input.scheduleRationale ?? null,
+    source_memory_path: input.sourceMemoryPath ?? null,
+    source_message_id: input.sourceMessageId ?? null,
+    source_task_id: input.sourceTaskId ?? null,
+    recurrence_policy: input.recurrencePolicy ?? null,
+    next_review_at: input.nextReviewAt ?? null
+  }).filter(([, value]) => value !== null && value !== undefined));
+}
+
+function scheduleContextFromTaskUpdate(existing: TaskRecord, update: TaskUpdate): Record<string, unknown> {
+  return Object.fromEntries(Object.entries({
+    schedule_rationale: update.scheduleRationale === undefined ? existing.scheduleRationale : update.scheduleRationale,
+    source_memory_path: update.sourceMemoryPath === undefined ? existing.sourceMemoryPath : update.sourceMemoryPath,
+    source_message_id: update.sourceMessageId === undefined ? existing.sourceMessageId : update.sourceMessageId,
+    source_task_id: update.sourceTaskId === undefined ? existing.sourceTaskId : update.sourceTaskId,
+    recurrence_policy: update.recurrencePolicy === undefined ? existing.recurrencePolicy : update.recurrencePolicy,
+    last_agent_review_at: update.lastAgentReviewAt === undefined ? existing.lastAgentReviewAt : update.lastAgentReviewAt,
+    next_review_at: update.nextReviewAt === undefined ? existing.nextReviewAt : update.nextReviewAt,
+    waiting_on: update.waitingOn === undefined ? existing.waitingOn : update.waitingOn,
+    blocked_reason: update.blockedReason === undefined ? existing.blockedReason : update.blockedReason,
+    owner_clarification_needed: update.ownerClarificationNeeded === undefined
+      ? existing.ownerClarificationNeeded
+      : update.ownerClarificationNeeded
+  }).filter(([, value]) => value !== null && value !== undefined && value !== false));
 }
 
 function taskEventSummary(eventType: string, details: Record<string, unknown>): string {
@@ -730,10 +769,11 @@ export function createPostgresStore(pool: Pool): AgentStore {
 
     async createTask(context: RequestContext, input: TaskInput): Promise<TaskRecord> {
       const id = randomUUID();
+      const scheduleContext = scheduleContextFromTaskInput(input);
       const result = await pool.query(
         `INSERT INTO tasks
-          (id, user_id, title, prompt, due_at, priority, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
+          (id, user_id, title, prompt, due_at, priority, created_by, schedule_context_json)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING *`,
         [
           id,
@@ -742,14 +782,16 @@ export function createPostgresStore(pool: Pool): AgentStore {
           input.prompt,
           input.dueAt ?? null,
           input.priority ?? 0,
-          context.actorType
+          context.actorType,
+          scheduleContext
         ]
       );
       await insertTaskEvent(pool, context, id, "task.created", {
         summary: "Task created.",
         title: input.title,
         due_at: input.dueAt ?? null,
-        priority: input.priority ?? 0
+        priority: input.priority ?? 0,
+        schedule_context: scheduleContext
       });
       await recordAudit(pool, context, "task.create", "task", id);
       return taskFromRow(result.rows[0]);
@@ -783,7 +825,8 @@ export function createPostgresStore(pool: Pool): AgentStore {
         prompt: update.prompt ?? existing.prompt,
         dueAt: update.dueAt === undefined ? existing.dueAt : update.dueAt,
         priority: update.priority ?? existing.priority,
-        status: update.status ?? existing.status
+        status: update.status ?? existing.status,
+        scheduleContext: scheduleContextFromTaskUpdate(existing, update)
       };
       const result = await pool.query(
         `UPDATE tasks
@@ -792,6 +835,7 @@ export function createPostgresStore(pool: Pool): AgentStore {
              due_at = $5,
              priority = $6,
              status = $7,
+             schedule_context_json = $8,
              updated_at = now()
          WHERE id = $1 AND user_id = $2
          RETURNING *`,
@@ -802,7 +846,8 @@ export function createPostgresStore(pool: Pool): AgentStore {
           next.prompt,
           next.dueAt,
           next.priority,
-          next.status
+          next.status,
+          next.scheduleContext
         ]
       );
       const changes: Record<string, unknown> = {};
@@ -820,6 +865,9 @@ export function createPostgresStore(pool: Pool): AgentStore {
       }
       if (existing.priority !== next.priority) {
         changes.priority = { from: existing.priority, to: next.priority };
+      }
+      if (JSON.stringify(scheduleContextFromTaskUpdate(existing, {})) !== JSON.stringify(next.scheduleContext)) {
+        changes.schedule_context = next.scheduleContext;
       }
       await insertTaskEvent(pool, context, taskId, "task.updated", changes);
       await recordAudit(pool, context, "task.update", "task", taskId);
@@ -2250,6 +2298,16 @@ export function createMemoryStore(): AgentStore {
         prompt: input.prompt,
         dueAt: input.dueAt ?? null,
         priority: input.priority ?? 0,
+        scheduleRationale: input.scheduleRationale ?? null,
+        sourceMemoryPath: input.sourceMemoryPath ?? null,
+        sourceMessageId: input.sourceMessageId ?? null,
+        sourceTaskId: input.sourceTaskId ?? null,
+        recurrencePolicy: input.recurrencePolicy ?? null,
+        lastAgentReviewAt: null,
+        nextReviewAt: input.nextReviewAt ?? null,
+        waitingOn: null,
+        blockedReason: null,
+        ownerClarificationNeeded: false,
         createdBy: context.actorType,
         createdAt: now,
         updatedAt: now
@@ -2259,7 +2317,8 @@ export function createMemoryStore(): AgentStore {
         summary: "Task created.",
         title: task.title,
         due_at: task.dueAt,
-        priority: task.priority
+        priority: task.priority,
+        schedule_context: scheduleContextFromTaskInput(input)
       });
       pushAudit(context, "task.create", "task", task.id);
       return task;
@@ -2284,6 +2343,18 @@ export function createMemoryStore(): AgentStore {
         ...task,
         ...update,
         dueAt: update.dueAt === undefined ? task.dueAt : update.dueAt,
+        scheduleRationale: update.scheduleRationale === undefined ? task.scheduleRationale : update.scheduleRationale,
+        sourceMemoryPath: update.sourceMemoryPath === undefined ? task.sourceMemoryPath : update.sourceMemoryPath,
+        sourceMessageId: update.sourceMessageId === undefined ? task.sourceMessageId : update.sourceMessageId,
+        sourceTaskId: update.sourceTaskId === undefined ? task.sourceTaskId : update.sourceTaskId,
+        recurrencePolicy: update.recurrencePolicy === undefined ? task.recurrencePolicy : update.recurrencePolicy,
+        lastAgentReviewAt: update.lastAgentReviewAt === undefined ? task.lastAgentReviewAt : update.lastAgentReviewAt,
+        nextReviewAt: update.nextReviewAt === undefined ? task.nextReviewAt : update.nextReviewAt,
+        waitingOn: update.waitingOn === undefined ? task.waitingOn : update.waitingOn,
+        blockedReason: update.blockedReason === undefined ? task.blockedReason : update.blockedReason,
+        ownerClarificationNeeded: update.ownerClarificationNeeded === undefined
+          ? task.ownerClarificationNeeded
+          : update.ownerClarificationNeeded,
         updatedAt: nowIso()
       };
       tasks.set(taskId, updated);
@@ -2302,6 +2373,9 @@ export function createMemoryStore(): AgentStore {
       }
       if (previous.priority !== updated.priority) {
         changes.priority = { from: previous.priority, to: updated.priority };
+      }
+      if (JSON.stringify(scheduleContextFromTaskUpdate(previous, {})) !== JSON.stringify(scheduleContextFromTaskUpdate(updated, {}))) {
+        changes.schedule_context = scheduleContextFromTaskUpdate(updated, {});
       }
       pushTaskEvent(context, taskId, "task.updated", changes);
       pushAudit(context, "task.update", "task", taskId);

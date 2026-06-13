@@ -87,6 +87,12 @@ The worker also maintains autonomous scheduled tasks. A daily newsletter task
 reviews the accumulated newsletter knowledge. A three-hour wake task reviews
 long-term memory, active tasks, and schedule rationale so the agent can decide
 whether anything needs action or whether a task should be rescheduled.
+Newsletter synthesis runs from the schedule, not directly from inbound
+newsletter delivery. It receives newsletter excerpts as trusted knowledge data,
+must still choose a host-approved tool, and can queue an owner message only
+through the normal outbound tool. Autonomous wakes can update task schedule,
+status, waiting/blocked state, follow-up tasks, and schedule rationale only
+through MCP tools that require rationale and write task events.
 
 The worker polls enabled per-user IMAP connector records and processes unread
 mail in bounded batches. IMAP connector settings live in the database and are

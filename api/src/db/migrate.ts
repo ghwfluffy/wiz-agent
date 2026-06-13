@@ -7,7 +7,9 @@ import {
   MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID,
   MEMORY_MARKDOWN_BACKFILL_SQL,
   MCP_TOOL_ALLOWLIST_MIGRATION_ID,
-  MCP_TOOL_ALLOWLIST_SQL
+  MCP_TOOL_ALLOWLIST_SQL,
+  TASK_SCHEDULE_CONTEXT_MIGRATION_ID,
+  TASK_SCHEDULE_CONTEXT_SQL
 } from "./migrations.js";
 
 export async function runMigrations(): Promise<void> {
@@ -96,6 +98,26 @@ export async function runMigrations(): Promise<void> {
         await client.query(MCP_TOOL_ALLOWLIST_SQL);
         await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
           MCP_TOOL_ALLOWLIST_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const taskScheduleContextApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      TASK_SCHEDULE_CONTEXT_MIGRATION_ID
+    ]);
+    if (taskScheduleContextApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(TASK_SCHEDULE_CONTEXT_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          TASK_SCHEDULE_CONTEXT_MIGRATION_ID
         ]);
         await client.query("COMMIT");
       } catch (error) {

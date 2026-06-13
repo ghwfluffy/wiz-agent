@@ -68,6 +68,12 @@ Current tool contracts:
 - `write_memory`
 - `append_task_prompt`
 - `update_task_schedule`
+- `update_task_status`
+- `split_task`
+- `create_followup_task`
+- `mark_waiting_on`
+- `request_clarification`
+- `record_schedule_rationale`
 - `propose_outbound_message`
 - `ask_owner_clarification`
 - `record_observation`
@@ -117,6 +123,20 @@ Current migrated agent tools:
 - `update_task_schedule` changes a user-scoped task due date, including null
   due dates, and records the model-provided rationale and confidence as a task
   event.
+- `update_task_status` changes task lifecycle state and waiting/blocked
+  context with required rationale.
+- `split_task` creates bounded child tasks from an existing task and links the
+  split rationale back to the source task timeline.
+- `create_followup_task` creates a user-scoped follow-up task with source task
+  and schedule rationale when applicable.
+- `mark_waiting_on` moves a task into waiting state with a waiting-on value,
+  optional next review time, and required rationale.
+- `request_clarification` is the rationale-required schedule-intelligence
+  variant of owner clarification. It queues immediate owner clarification
+  through host-resolved destinations or creates a local clarification task for
+  lower urgency.
+- `record_schedule_rationale` stores durable schedule rationale and optional
+  source/recurrence/review metadata on the task.
 - `propose_outbound_message` queues an outbound message rather than sending it.
 - `ask_owner_clarification` records that the agent needs more owner input. For
   `urgency = now`, it queues an owner message through host-resolved owner
@@ -244,4 +264,11 @@ The worker maintains recurring agent wake tasks. A daily newsletter synthesis
 task reviews ingested newsletter knowledge and decides whether anything is worth
 messaging the owner about. A three-hour autonomous wake task reviews memory,
 active tasks, and schedule rationale so the agent can decide whether to act or
-adjust future work timing through controlled tools.
+adjust future work timing through controlled tools. Before each recurring
+scheduled run, host code composes a fresh prompt from active tasks,
+`/assistant/schedule.md`, `/tasks/schedule-rationale.md`,
+`/assistant/notification-policy.md`, recent owner messages, and recent
+newsletter knowledge. This gives the model current schedule context without
+letting newsletter content become instructions. The next recurring wake is
+created in a `finally` path, so failed wake runs still schedule the next
+roughly-three-hour review.

@@ -228,6 +228,37 @@ describe("domain and user ownership APIs", () => {
     });
   });
 
+  it("does not emit schedule context changes for no-op task updates", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "noop-task-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "admin" as const,
+      permissions: ["user", "admin"],
+      requestId: "noop-task-test",
+      session
+    };
+    const task = await store.createTask(context, {
+      title: "No-op task",
+      prompt: "Keep the context stable."
+    });
+
+    await store.updateTask(context, task.id, { status: "pending" });
+
+    await expect(store.listTaskEvents(context, task.id)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          eventType: "task.updated",
+          details: {}
+        })
+      ])
+    );
+  });
+
   it("lists and updates queued outbound messages for the current user", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

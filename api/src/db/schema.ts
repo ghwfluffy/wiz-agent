@@ -112,6 +112,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   last_run_at TIMESTAMPTZ,
   next_run_at TIMESTAMPTZ,
   schedule_source TEXT,
+  schedule_context_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

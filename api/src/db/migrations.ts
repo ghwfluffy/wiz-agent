@@ -1,6 +1,7 @@
 export const COLLAPSE_TENANT_TO_USER_MIGRATION_ID = "0002_collapse_tenant_to_user";
 export const MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID = "0003_memory_markdown_backfill";
 export const MCP_TOOL_ALLOWLIST_MIGRATION_ID = "0004_mcp_tool_allowlist";
+export const TASK_SCHEDULE_CONTEXT_MIGRATION_ID = "0005_task_schedule_context";
 
 const tenantOwnedTables = [
   "identities",
@@ -148,4 +149,9 @@ WHERE d.deleted_at IS NULL
 export const MCP_TOOL_ALLOWLIST_SQL = `
 ALTER TABLE agent_mcp_sessions
   ADD COLUMN IF NOT EXISTS allowed_tools_json JSONB;
+`;
+
+export const TASK_SCHEDULE_CONTEXT_SQL = `
+ALTER TABLE tasks
+  ADD COLUMN IF NOT EXISTS schedule_context_json JSONB NOT NULL DEFAULT '{}'::jsonb;
 `;

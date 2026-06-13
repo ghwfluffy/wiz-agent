@@ -20,6 +20,16 @@ export type TaskRecord = {
   prompt: string;
   dueAt: string | null;
   priority: number;
+  scheduleRationale: string | null;
+  sourceMemoryPath: string | null;
+  sourceMessageId: string | null;
+  sourceTaskId: string | null;
+  recurrencePolicy: string | null;
+  lastAgentReviewAt: string | null;
+  nextReviewAt: string | null;
+  waitingOn: string | null;
+  blockedReason: string | null;
+  ownerClarificationNeeded: boolean;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -30,10 +40,20 @@ export type TaskInput = {
   prompt: string;
   dueAt?: string | null;
   priority?: number;
+  scheduleRationale?: string | null;
+  sourceMemoryPath?: string | null;
+  sourceMessageId?: string | null;
+  sourceTaskId?: string | null;
+  recurrencePolicy?: string | null;
+  nextReviewAt?: string | null;
 };
 
 export type TaskUpdate = Partial<TaskInput> & {
   status?: string;
+  lastAgentReviewAt?: string | null;
+  waitingOn?: string | null;
+  blockedReason?: string | null;
+  ownerClarificationNeeded?: boolean;
 };
 
 export type TaskEventRecord = {

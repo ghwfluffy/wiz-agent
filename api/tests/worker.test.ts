@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ToolModelRequest } from "../src/agent/modelClient.js";
 import { MockModelClient } from "../src/agent/modelClient.js";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
@@ -37,16 +38,149 @@ describe("worker loop", () => {
     expect(tasks).toEqual(expect.arrayContaining([
       expect.objectContaining({
         title: "Daily newsletter synthesis",
-        prompt: expect.stringContaining("newsletters/")
+        prompt: expect.stringContaining("newsletters/"),
+        scheduleRationale: "Default daily review of trusted newsletter knowledge.",
+        recurrencePolicy: "daily at 17:00 local/server time"
       }),
       expect.objectContaining({
         title: "Autonomous agent wake review",
-        prompt: expect.stringContaining("default 3-hour autonomous wake")
+        prompt: expect.stringContaining("default 3-hour autonomous wake"),
+        scheduleRationale: "Default autonomous review cadence for active tasks, owner context, and schedule rationale.",
+        recurrencePolicy: "roughly every 3 hours"
       })
     ]));
     await expect(store.getMemoryDocument(context, "agent-schedule")).resolves.toMatchObject({
       body: expect.stringContaining("Default cadence: every 3 hours.")
     });
+    await expect(store.getMarkdownDocument(context, "/tasks/schedule-rationale.md")).resolves.toMatchObject({
+      markdown: expect.stringContaining("Schedule Rationale")
+    });
+  });
+
+  it("lets the autonomous wake reschedule another task with rationale and creates the next wake", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-wake-reschedule-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-wake-reschedule-test",
+      session
+    };
+    const target = await store.createTask(context, {
+      title: "Call the clinic",
+      prompt: "Check appointment availability.",
+      dueAt: "2026-06-16T14:00:00.000Z",
+      scheduleRationale: "Initial owner request."
+    });
+    await store.createTask(context, {
+      title: "Autonomous agent wake review",
+      prompt: "Wake and reassess work.",
+      dueAt: "2026-06-13T12:00:00.000Z",
+      priority: 5,
+      scheduleRationale: "Test wake.",
+      recurrencePolicy: "roughly every 3 hours"
+    });
+    const dueAt = "2026-06-14T14:00:00.000Z";
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "update_task_schedule",
+            arguments: {
+              taskId: target.id,
+              dueAt,
+              rationale: "Owner's recent context makes this worth checking before Monday.",
+              confidence: "medium"
+            }
+          }
+        ]
+      }),
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+
+    await expect(store.getTask(context, target.id)).resolves.toMatchObject({
+      dueAt,
+      scheduleRationale: "Owner's recent context makes this worth checking before Monday."
+    });
+    const tasks = await store.listTasks(context);
+    expect(tasks.filter((task) =>
+      task.title === "Autonomous agent wake review" &&
+      task.status === "pending" &&
+      task.dueAt === "2026-06-13T15:00:00.000Z"
+    )).toHaveLength(1);
+  });
+
+  it("schedules the next autonomous wake even when the wake run fails", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-wake-failure-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-wake-failure-test",
+      session
+    };
+    const wake = await store.createTask(context, {
+      title: "Autonomous agent wake review",
+      prompt: "Wake and reassess work.",
+      dueAt: "2026-06-13T12:00:00.000Z",
+      priority: 5,
+      scheduleRationale: "Test wake.",
+      recurrencePolicy: "roughly every 3 hours"
+    });
+
+    const failingModel = {
+      async runStructured() {
+        return {};
+      },
+      async runWithTools(_request: ToolModelRequest) {
+        throw new Error("model unavailable");
+      },
+      async repairToolArguments() {
+        return {};
+      }
+    };
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: failingModel,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+
+    await expect(store.getTask(context, wake.id)).resolves.toMatchObject({
+      status: "failed"
+    });
+    const tasks = await store.listTasks(context);
+    expect(tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: "Autonomous agent wake review",
+        status: "pending",
+        dueAt: "2026-06-13T15:00:00.000Z"
+      })
+    ]));
+    await expect(store.listTaskEvents(context, wake.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventType: "scheduled_task.failed",
+        details: expect.objectContaining({
+          failure_message: "model unavailable"
+        })
+      })
+    ]));
   });
 
   it("processes approved outbox records for OAuth users without a dashboard session", async () => {

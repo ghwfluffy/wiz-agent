@@ -39,7 +39,62 @@ export const UpdateTaskScheduleToolSchema = z.object({
   taskId: z.string().min(1),
   dueAt: z.string().datetime().nullable(),
   rationale: z.string().min(1),
-  confidence: z.enum(["low", "medium", "high"])
+  confidence: z.enum(["low", "medium", "high"]),
+  nextReviewAt: z.string().datetime().nullable().optional()
+});
+
+export const UpdateTaskStatusToolSchema = z.object({
+  taskId: z.string().min(1),
+  status: z.enum(["pending", "claimed", "running", "waiting", "blocked", "completed", "cancelled", "failed"]),
+  rationale: z.string().min(1),
+  waitingOn: z.string().min(1).nullable().optional(),
+  blockedReason: z.string().min(1).nullable().optional(),
+  ownerClarificationNeeded: z.boolean().optional()
+});
+
+export const SplitTaskToolSchema = z.object({
+  taskId: z.string().min(1),
+  newTasks: z.array(z.object({
+    title: z.string().min(1),
+    prompt: z.string().min(1),
+    dueAt: z.string().datetime().nullable().optional(),
+    priority: z.number().int().min(0).max(100).optional(),
+    scheduleRationale: z.string().min(1)
+  })).min(1).max(5),
+  rationale: z.string().min(1)
+});
+
+export const CreateFollowupTaskToolSchema = z.object({
+  sourceTaskId: z.string().min(1).optional(),
+  title: z.string().min(1),
+  prompt: z.string().min(1),
+  dueAt: z.string().datetime().nullable().optional(),
+  priority: z.number().int().min(0).max(100).optional(),
+  rationale: z.string().min(1)
+});
+
+export const MarkWaitingOnToolSchema = z.object({
+  taskId: z.string().min(1),
+  waitingOn: z.string().min(1),
+  rationale: z.string().min(1),
+  nextReviewAt: z.string().datetime().nullable().optional()
+});
+
+export const RequestClarificationToolSchema = z.object({
+  question: z.string().min(1),
+  relatedTaskId: z.string().min(1).optional(),
+  urgency: z.enum(["now", "daily_briefing", "next_wake"]),
+  rationale: z.string().min(1)
+});
+
+export const RecordScheduleRationaleToolSchema = z.object({
+  taskId: z.string().min(1),
+  rationale: z.string().min(1),
+  sourceMemoryPath: z.string().min(1).optional(),
+  sourceMessageId: z.string().min(1).optional(),
+  sourceTaskId: z.string().min(1).optional(),
+  recurrencePolicy: z.string().min(1).optional(),
+  nextReviewAt: z.string().datetime().nullable().optional()
 });
 
 export const ProposeOutboundMessageToolSchema = z.object({
@@ -77,6 +132,12 @@ export const ToolContracts = {
   write_memory: WriteMemoryToolSchema,
   append_task_prompt: AppendTaskPromptToolSchema,
   update_task_schedule: UpdateTaskScheduleToolSchema,
+  update_task_status: UpdateTaskStatusToolSchema,
+  split_task: SplitTaskToolSchema,
+  create_followup_task: CreateFollowupTaskToolSchema,
+  mark_waiting_on: MarkWaitingOnToolSchema,
+  request_clarification: RequestClarificationToolSchema,
+  record_schedule_rationale: RecordScheduleRationaleToolSchema,
   propose_outbound_message: ProposeOutboundMessageToolSchema,
   ask_owner_clarification: AskOwnerClarificationToolSchema,
   record_observation: RecordObservationToolSchema,

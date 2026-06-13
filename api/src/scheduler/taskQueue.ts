@@ -4,7 +4,12 @@ import { runAgentTask } from "../agent/runAgentTask.js";
 import type { Settings } from "../config/settings.js";
 import { processOutboundQueue, type MailTransport } from "../connectors/smtpSender.js";
 import { SignedIntegrationTokenProvider } from "../integrations/tokenProvider.js";
-import { ensureAutonomousTasks, scheduleNextAutonomousTask } from "./autonomousTasks.js";
+import {
+  buildScheduledTaskPrompt,
+  ensureAutonomousTasks,
+  isAutonomousRecurringTask,
+  scheduleNextAutonomousTask
+} from "./autonomousTasks.js";
 
 export async function claimDueTasks(options: {
   store: AgentStore;
@@ -42,25 +47,66 @@ export async function daemonOnce(options: {
   let ranTasks = 0;
   if (modelClient) {
     for (const task of claimed) {
-      await runAgentTask({
-        context: options.context,
-        store: options.store,
-        modelClient,
-        settings: options.settings,
-        integrationTokenProvider: options.settings ? new SignedIntegrationTokenProvider(options.settings) : undefined,
-        request: {
-          taskId: task.id,
-          prompt: task.prompt
+      let runFailed = false;
+      try {
+        const prompt = isAutonomousRecurringTask(task)
+          ? await buildScheduledTaskPrompt({
+            store: options.store,
+            context: options.context,
+            task,
+            now: options.now
+          })
+          : task.prompt;
+        const result = await runAgentTask({
+          context: options.context,
+          store: options.store,
+          modelClient,
+          settings: options.settings,
+          integrationTokenProvider: options.settings ? new SignedIntegrationTokenProvider(options.settings) : undefined,
+          request: {
+            taskId: task.id,
+            prompt
+          }
+        });
+        runFailed = result.status === "failed";
+        await options.store.updateTask(options.context, task.id, {
+          status: runFailed ? "failed" : "completed",
+          lastAgentReviewAt: (options.now ?? new Date()).toISOString()
+        });
+        if (runFailed) {
+          await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.failed", {
+            failure_message: result.failureMessage ?? null,
+            summary: "Scheduled task run failed; recurrence will still be scheduled."
+          });
+        } else {
+          const outcome = result.sideEffect && result.sideEffect !== "none" ? "acted" : "observed";
+          await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.outcome", {
+            outcome,
+            tool_name: result.toolName ?? null,
+            summary: `Scheduled task outcome: ${outcome}.`
+          });
         }
-      });
-      await options.store.updateTask(options.context, task.id, { status: "completed" });
-      await scheduleNextAutonomousTask({
-        store: options.store,
-        context: options.context,
-        task,
-        now: options.now
-      });
-      ranTasks += 1;
+      } catch (error) {
+        runFailed = true;
+        await options.store.updateTask(options.context, task.id, {
+          status: "failed",
+          lastAgentReviewAt: (options.now ?? new Date()).toISOString()
+        });
+        await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.failed", {
+          failure_message: error instanceof Error ? error.message : String(error),
+          summary: "Scheduled task run failed; recurrence will still be scheduled."
+        });
+      } finally {
+        if (isAutonomousRecurringTask(task)) {
+          await scheduleNextAutonomousTask({
+            store: options.store,
+            context: options.context,
+            task,
+            now: options.now
+          });
+        }
+        ranTasks += 1;
+      }
     }
   }
   const outbound = options.settings

@@ -68,9 +68,22 @@ status changes, worker claims, agent prompt/response summaries, agent run
 completion/failure, tool-call outcomes, and user follow-up prompts. The API
 returns only events for tasks owned by the signed-in user.
 
+Tasks also carry host-owned schedule context in `schedule_context_json`. That
+JSON stores durable rationale, source memory/message/task references,
+recurrence policy, last and next agent review times, waiting-on state, blocked
+reason, and whether owner clarification is needed. These fields are exposed on
+task records for operator inspection, but model writes must go through
+validated MCP tools that require rationale for schedule and status changes.
+
 Adding a follow-up prompt appends the new instruction to the task prompt, returns
 the task to `pending`, and records a `task.prompt_added` event so the user can
 see why the task re-entered the queue.
+
+`task.schedule_updated`, `task.status_updated`, `task.waiting_on`,
+`task.split`, `task.followup_created`, and
+`task.schedule_rationale_recorded` events preserve the visible history behind
+agent-managed schedules. Long-lived rationale may also be written under
+`/tasks/schedule-rationale.md` when it is useful beyond a single task event.
 
 Inbound owner messages that the agent associates with a task also record
 `message.inbound.assigned` on that task. The inbox record stores the task id,

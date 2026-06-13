@@ -644,6 +644,122 @@ describe("agent task execution", () => {
     );
   });
 
+  it("rejects schedule updates without rationale", async () => {
+    const result = await validateOrRepairToolCall(
+      {
+        toolName: "update_task_schedule",
+        arguments: {
+          taskId: "task-1",
+          dueAt: "2026-07-01T15:00:00.000Z",
+          confidence: "high"
+        }
+      },
+      {
+        modelClient: new MockModelClient(),
+        repairModel: "repair-model",
+        repairAttemptLimit: 0
+      }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.validationErrors.join(" ")).toContain("rationale");
+    }
+  });
+
+  it("records durable task schedule rationale through the decision tool", async () => {
+    const { context, store } = await testContext();
+    const task = await store.createTask(context, {
+      title: "Prepare quarterly review",
+      prompt: "Collect review notes."
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_schedule_rationale",
+            arguments: {
+              taskId: task.id,
+              rationale: "Review should happen after June metrics are final.",
+              sourceMemoryPath: "/assistant/schedule.md",
+              recurrencePolicy: "review during the next planning cycle",
+              nextReviewAt: "2026-06-14T15:00:00.000Z"
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Record why this task is scheduled.",
+        taskId: task.id
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "record_schedule_rationale",
+      executionResult: {
+        task_id: task.id,
+        rationale: "Review should happen after June metrics are final."
+      }
+    });
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({
+      scheduleRationale: "Review should happen after June metrics are final.",
+      sourceMemoryPath: "/assistant/schedule.md",
+      recurrencePolicy: "review during the next planning cycle",
+      nextReviewAt: "2026-06-14T15:00:00.000Z"
+    });
+  });
+
+  it("preserves waiting and blocked context when updating only task status", async () => {
+    const { context, store } = await testContext();
+    const task = await store.createTask(context, {
+      title: "Vendor follow-up",
+      prompt: "Wait for the vendor quote."
+    });
+    await store.updateTask(context, task.id, {
+      status: "waiting",
+      waitingOn: "vendor quote",
+      blockedReason: "Need external pricing.",
+      ownerClarificationNeeded: true
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "update_task_status",
+            arguments: {
+              taskId: task.id,
+              status: "pending",
+              rationale: "Wake review should check whether the vendor replied."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Resume the vendor task.",
+        taskId: task.id
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "update_task_status"
+    });
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({
+      status: "pending",
+      waitingOn: "vendor quote",
+      blockedReason: "Need external pricing.",
+      ownerClarificationNeeded: true,
+      scheduleRationale: "Wake review should check whether the vendor replied."
+    });
+  });
+
   it("turns ambiguous owner messages into clarification requests", async () => {
     const { context, store } = await testContext();
     await store.upsertConnector(context, {
