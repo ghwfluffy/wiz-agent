@@ -23,6 +23,10 @@ Targeted commands:
 
 Current tests cover:
 
+- deterministic scenario-level agent simulations with a test-only harness for
+  multi-step assistant days, including owner messages, trusted newsletter
+  ingestion, time advancement, worker ticks, staged model tool calls, and
+  memory/task/outbox/approval/decision/thread assertions.
 - API config loading.
 - status route.
 - standalone development auto-login.
@@ -118,6 +122,20 @@ Current tests cover:
   dead-letter behavior, and delete-job point removal with mock Qdrant and mock
   embeddings.
 - MCP semantic search source-handle resolution under authenticated user scope.
+
+## Agent Simulation Harness
+
+Scenario tests that need multiple assistant steps should use
+`api/tests/helpers/agentSimulation.ts`. The helper creates an in-memory
+single-user store, owner/system contexts, deterministic staged model responses,
+trusted newsletter and owner-message entry points, clock advancement, scheduled
+worker ticks, direct owner prompts, scheduled prompt builders, and common state
+snapshots.
+
+Keep the helper test-only. Do not add production flags or network-backed
+services for scenario tests. Stage model tool calls explicitly and assert
+persisted host state such as markdown memory, tasks, inbound handling,
+outbox/approvals, tool calls, audit records, and conversation threads.
 
 RAG tests must not call live OpenAI or Qdrant. Use `MockEmbeddingClient` and a
 mock/fake `QdrantClient`; live vector and embedding clients are reserved for

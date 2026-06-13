@@ -209,6 +209,22 @@ Connector and integration tests also avoid live networks. They use deterministic
 sender classification, mock fetch implementations, and outbox records instead of
 real IMAP, SMTP, SMS, MMS, or cross-app API calls.
 
+Scenario-level agent tests use the test-only harness in
+`api/tests/helpers/agentSimulation.ts`. Use it when a behavior depends on a
+sequence such as newsletter ingestion followed by a scheduled worker tick, an
+owner memory offload followed by recall, guardrail failure followed by
+self-review, owner correction followed by review context, or conversation
+thread follow-up continuity. The harness stages model tool calls
+deterministically and uses the in-memory store; it must not call live OpenAI,
+IMAP, SMTP, SMS/MMS, Qdrant, or cross-app APIs.
+
+Run only those scenarios while iterating with:
+
+```bash
+cd api
+npm test -- --run tests/agentSimulation.test.ts
+```
+
 ## MCP Local Workflow
 
 The local MCP service is the server-side memory/RAG tool boundary. It runs in
