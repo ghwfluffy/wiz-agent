@@ -440,7 +440,6 @@ export async function removeMemoryListItem(options: {
   path?: string;
   itemId?: string;
   item?: string;
-  mode?: "archive";
   reason?: string | null;
   rationale: string;
   now?: Date;
@@ -450,7 +449,6 @@ export async function removeMemoryListItem(options: {
   if (!target || !current.document) {
     return { reason: "item_not_found", path: current.path };
   }
-  const mode = options.mode ?? "archive";
   target.status = "archived";
   target.archivedAt = target.archivedAt ?? (options.now ?? new Date()).toISOString();
   target.archiveReason = options.reason ? escapeLine(options.reason) : target.archiveReason;
@@ -466,7 +464,7 @@ export async function removeMemoryListItem(options: {
     path: current.path,
     list_id: current.list.listId,
     item_id: target.id,
-    mode
+    mode: "archive"
   });
   return {
     path: written.path,
