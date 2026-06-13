@@ -21,7 +21,8 @@ export const IntegrationActionIds = [
 ] as const;
 
 export type IntegrationActionId = typeof IntegrationActionIds[number];
-export type IntegrationAppId = "goals" | "budget" | "apartment_gate";
+export const IntegrationAppIds = ["goals", "budget", "apartment_gate"] as const;
+export type IntegrationAppId = typeof IntegrationAppIds[number];
 export type IntegrationAccess = "read" | "write";
 export type IntegrationRisk = "low" | "medium" | "high";
 export type IntegrationHttpMethod = "GET" | "POST" | "PATCH" | "PUT" | "DELETE";

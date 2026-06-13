@@ -318,10 +318,12 @@ sizes; and time out aggressively before article extraction or summarization.
 
 ## Cross-App Integrations
 
-The agent understands other GHWIZ app APIs through the app capability registry
-in `api/src/integrations/capabilityRegistry.ts`. The registry currently covers
-Goals and Fluffynomics. Cross-app calls go through a deterministic integration
-gateway:
+The agent understands other GHWIZ apps through the app capability registry in
+`api/src/integrations/capabilityRegistry.ts`. The registry currently covers
+Goals, Fluffynomics, and Apartment Gate. Goals and Fluffynomics expose
+agent-callable API actions; Apartment Gate is directory knowledge only and has
+no MCP tool for opening gates or doors. Cross-app calls go through a
+deterministic integration gateway:
 
 - the model requests an allowed integration action;
 - the host chooses the target app and endpoint;
@@ -336,6 +338,11 @@ context header.
 
 Root production compose exposes other app APIs to the agent over internal
 app-specific aliases such as `goals_api` and `budget_api`.
+
+The `list_app_capabilities` MCP tool is read-only and returns the registry
+contents without credentials. The `integration_action` MCP tool is the only
+cross-app execution path and accepts only action ids registered in the
+capability registry.
 
 The registry is also a maintenance contract. When a future request adds or
 changes an omnisite app, app API, or major user-facing capability, update the

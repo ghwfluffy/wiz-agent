@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { IntegrationActionIds } from "../integrations/capabilityRegistry.js";
+import { IntegrationActionIds, IntegrationAppIds } from "../integrations/capabilityRegistry.js";
 
 export const CreateTaskToolSchema = z.object({
   title: z.string().min(1),
@@ -26,6 +26,12 @@ export const GetRecentBotActivityToolSchema = z.object({
   reason: z.string().min(1).optional(),
   lookbackHours: z.number().int().min(1).max(24 * 30).default(24 * 7),
   limit: z.number().int().min(1).max(20).default(10)
+});
+
+export const ListAppCapabilitiesToolSchema = z.object({
+  appId: z.enum(IntegrationAppIds).optional(),
+  includeActions: z.boolean().default(true),
+  reason: z.string().min(1).optional()
 });
 
 export const WriteMemoryToolSchema = z.object({
@@ -136,6 +142,7 @@ export const ToolContracts = {
   list_recent_context: ListRecentContextToolSchema,
   list_recent_owner_conversations: ListRecentOwnerConversationsToolSchema,
   get_recent_bot_activity: GetRecentBotActivityToolSchema,
+  list_app_capabilities: ListAppCapabilitiesToolSchema,
   write_memory: WriteMemoryToolSchema,
   append_task_prompt: AppendTaskPromptToolSchema,
   update_task_schedule: UpdateTaskScheduleToolSchema,

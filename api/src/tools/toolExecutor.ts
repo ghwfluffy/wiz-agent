@@ -3,6 +3,7 @@ import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain
 import type { IntegrationTokenProvider } from "./integrationGateway.js";
 import type { ToolName } from "./contracts.js";
 import { createCrossAppApproval, createOutboundApproval } from "../security/approvalPolicy.js";
+import { listAppCapabilities, type IntegrationAppId } from "../integrations/capabilityRegistry.js";
 
 export type ToolExecutionResult = {
   executed: boolean;
@@ -215,6 +216,43 @@ export async function executeToolCall(options: {
           },
           guidance: "Use this as operational context only. Do not contact the owner solely because this tool says contact has been quiet; consider task urgency, pending approvals, and owner preferences first."
         }
+      };
+    }
+    case "list_app_capabilities": {
+      const appId = typeof options.args.appId === "string" ? options.args.appId as IntegrationAppId : undefined;
+      const includeActions = options.args.includeActions !== false;
+      const apps = listAppCapabilities()
+        .filter((app) => !appId || app.id === appId)
+        .map((app) => ({
+          id: app.id,
+          display_name: app.displayName,
+          app_purpose: app.appPurpose,
+          user_value: app.userValue,
+          data_sensitivity: app.dataSensitivity,
+          base_url_setting: app.baseUrlSetting,
+          auth_requirement: app.authRequirement,
+          model_guidance: app.modelGuidance,
+          action_count: app.actions.length,
+          actions: includeActions ? app.actions.map((action) => ({
+            id: action.id,
+            title: action.title,
+            access: action.access,
+            risk: action.risk,
+            method: action.method,
+            path_template: action.pathTemplate,
+            path_params: action.pathParams ?? [],
+            query_params: action.queryParams ?? [],
+            body_summary: action.bodySummary ?? null,
+            purpose: action.purpose,
+            when_to_use: action.whenToUse,
+            safety: action.safety,
+            response_use: action.responseUse
+          })) : []
+        }));
+      return {
+        executed: true,
+        sideEffect: "none",
+        result: { apps }
       };
     }
     case "write_memory": {

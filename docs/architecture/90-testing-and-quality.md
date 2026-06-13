@@ -44,7 +44,8 @@ Current tests cover:
 - safe URL rejection.
 - MMS image sanitization policy.
 - cross-app integration token enforcement.
-- app capability registry coverage for Goals and Fluffynomics.
+- app capability registry coverage for Goals, Fluffynomics, and Apartment Gate.
+- read-only MCP capability lookup for app registry data.
 - allowlisted integration-action request resolution.
 - MCP-backed agent tool execution through the default runtime client.
 - MCP session expiration, tool allowlist rejection, and agent-tool argument

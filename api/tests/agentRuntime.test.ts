@@ -171,6 +171,7 @@ describe("app capability registry", () => {
     expect(prompt).toContain("budget.list_accounts");
     expect(tools).toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ name: "list_app_capabilities", access: "read", sideEffect: "none" }),
         expect.objectContaining({ name: "integration_action" }),
         expect.objectContaining({ name: "create_task" })
       ])
@@ -329,6 +330,44 @@ describe("agent task execution", () => {
       tool: "list_ongoing_tasks",
       sideEffect: "none",
       result: { tasks: [] }
+    });
+  });
+
+  it("exposes app capability registry through a read-only MCP tool", async () => {
+    const { context, store } = await testContext();
+    const app = buildMcpApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      store
+    });
+    const session = await store.createAgentMcpSession(context, {
+      ttlSeconds: 60,
+      allowedTools: ["list_app_capabilities"]
+    });
+
+    const response = await app.request("/mcp/v1/tools/list_app_capabilities/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ appId: "apartment_gate" })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      tool: "list_app_capabilities",
+      sideEffect: "none",
+      result: {
+        apps: [
+          expect.objectContaining({
+            id: "apartment_gate",
+            display_name: "Apartment Gate",
+            action_count: 0,
+            actions: []
+          })
+        ]
+      }
     });
   });
 

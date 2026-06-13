@@ -66,6 +66,7 @@ Current tool contracts:
 - `list_recent_context`
 - `list_recent_owner_conversations`
 - `get_recent_bot_activity`
+- `list_app_capabilities`
 - `write_memory`
 - `append_task_prompt`
 - `update_task_schedule`
@@ -86,7 +87,8 @@ sender trust, user scope, allowed app/action, and token availability before any
 API call.
 
 The runtime includes the app capability registry in the model prompt so the
-model knows what Goals and Fluffynomics are for and which actions are available.
+model knows what Goals, Fluffynomics, and Apartment Gate are for and which
+actions are available.
 Accepted tool calls execute through the server-owned MCP boundary by default:
 
 1. host code creates an agent run;
@@ -123,6 +125,9 @@ Current migrated agent tools:
   assessment helps the agent reason about whether it has been contacting the
   owner too much or too little, but it is context only; outbound contact still
   requires the normal owner-message approval path and task urgency judgment.
+- `list_app_capabilities` returns the app capability registry through MCP so the
+  agent can query available apps, safe action ids, and directory-only app
+  boundaries at runtime.
 - `write_memory` appends model-selected durable markdown memory under host-owned
   user scope.
 - `append_task_prompt` appends owner follow-up context to an existing task,

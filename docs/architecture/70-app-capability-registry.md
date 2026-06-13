@@ -20,9 +20,11 @@ authority. Each app entry describes:
 - the endpoint shape used by deterministic backend code;
 - safety rules and response guidance.
 
-The model can propose an `integration_action` tool call, but deterministic host
-code still owns endpoint allowlisting, token lookup, user context headers,
-authorization, audit logging, redaction, and side-effect execution.
+The model can query the registry through the read-only
+`list_app_capabilities` MCP tool and can propose an `integration_action` tool
+call for registered action ids. Deterministic host code still owns endpoint
+allowlisting, token lookup, user context headers, authorization, audit logging,
+redaction, and side-effect execution.
 
 The production token provider mints short-lived HMAC-signed bearer tokens from
 `AGENT_INTEGRATION_TOKEN_SECRET`. Tokens are scoped to the current central OAuth
@@ -74,7 +76,8 @@ are highly private, and there is no agent-callable API.
 The registry includes Apartment Gate as directory knowledge only:
 
 - no integration actions are available;
-- no MCP tool is exposed for opening gates or doors;
+- `list_app_capabilities` may describe the app, but no MCP tool is exposed for
+  opening gates or doors;
 - the agent may explain where the app is and how access is protected;
 - the agent must not try to open physical access points;
 - the agent must not request, store, summarize, or expose Gatewise credentials,
