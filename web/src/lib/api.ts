@@ -272,6 +272,31 @@ export type KnowledgeSection = {
   contentHash: string;
 };
 
+export type MemoryChange = {
+  id: string;
+  path: string;
+  auditAction: string;
+  actorType: string;
+  entityId: string | null;
+  documentVersion: number | null;
+  previousVersion: number | null;
+  createdAt: string;
+  beforeMarkdown: string | null;
+  afterMarkdown: string | null;
+  unifiedDiff: string | null;
+  snapshotTruncated: boolean;
+  diffTruncated: boolean;
+  addedLines: number | null;
+  removedLines: number | null;
+  linkedTaskId: string | null;
+  linkedTaskEventId: string | null;
+  linkedRunId: string | null;
+  linkedToolCallId: string | null;
+  linkedMessageId: string | null;
+  linkedApprovalId: string | null;
+  linkedOutboxMessageId: string | null;
+};
+
 export type ImapTestResult = {
   ok: boolean;
   configured: boolean;
@@ -379,6 +404,20 @@ export const api = {
   },
   getMemory(slug: string): Promise<{ document: MemoryDocument }> {
     return request<{ document: MemoryDocument }>(`/memory/${encodeURIComponent(slug)}`);
+  },
+  listMemoryChanges(input: { pathPrefix?: string; action?: string; limit?: number } = {}): Promise<{ changes: MemoryChange[] }> {
+    const params = new URLSearchParams();
+    if (input.pathPrefix) {
+      params.set("pathPrefix", input.pathPrefix);
+    }
+    if (input.action) {
+      params.set("action", input.action);
+    }
+    if (input.limit) {
+      params.set("limit", String(input.limit));
+    }
+    const query = params.toString();
+    return request<{ changes: MemoryChange[] }>(`/memory/changes/recent${query ? `?${query}` : ""}`);
   },
   submitAgentPrompt(input: {
     prompt: string;

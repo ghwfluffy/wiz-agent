@@ -246,6 +246,17 @@ path/body search for loaded data, and raw markdown preview. Editing is limited
 to assistant-authored markdown under `/assistant/`; other durable writes should
 continue through host-owned ingestion or the validated agent runtime.
 
+Recent memory writes are available from the Memory tab and:
+
+```text
+GET /api/v1/memory/changes/recent?pathPrefix=/personal&action=markdown.write&limit=50
+```
+
+The response is user-scoped and read-only. It includes the markdown path, audit
+action, actor type, version movement, linked ids when audit details have them,
+and a bounded redacted unified diff. The endpoint is for inspection; it does not
+revert, delete, or mutate memory.
+
 ## RAG Indexing
 
 Markdown documents in Postgres are the source of truth. Writes enqueue

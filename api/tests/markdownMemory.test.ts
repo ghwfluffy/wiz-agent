@@ -84,6 +84,111 @@ describe("markdown memory filesystem", () => {
     await expect(store.listMarkdownDirectory(other, "/assistant")).resolves.toEqual([]);
   });
 
+  it("returns recent memory change diffs scoped to the current user and redacts secrets", async () => {
+    const { store, context: owner } = await testContext("owner");
+    const otherSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "other",
+      DEV_USER_EMAIL: "other@example.test"
+    });
+    const otherSession = await store.createDevelopmentSession(otherSettings, "other-login");
+    const other: RequestContext = {
+      userId: otherSession.user.id,
+      actorType: "user",
+      permissions: ["user"],
+      requestId: "other-request",
+      session: otherSession
+    };
+
+    await store.writeMarkdownDocument(owner, {
+      path: "/preferences/newsletters.md",
+      markdown: "# Newsletters\n\n- Weekly security notes\napi_key: owner-secret-value"
+    });
+    await store.writeMarkdownDocument(owner, {
+      path: "/preferences/newsletters.md",
+      markdown: "# Newsletters\n\n- Weekly security notes\n- Databases\napi_key: owner-secret-value",
+      expectedVersion: 1
+    });
+    await store.writeMarkdownDocument(owner, {
+      path: "/preferences/old.md",
+      markdown: "# Old"
+    });
+    await store.deleteMarkdownPath(owner, "/preferences/old.md");
+    await store.writeMarkdownDocument(other, {
+      path: "/preferences/newsletters.md",
+      markdown: "# Other\n\n- Hidden"
+    });
+
+    const changes = await store.listMemoryChanges(owner, { pathPrefix: "/preferences", limit: 10 });
+    expect(changes.map((change) => change.auditAction)).toEqual(["markdown.write", "markdown.write", "markdown.write"]);
+    expect(changes.some((change) => change.auditAction === "markdown.delete")).toBe(false);
+    const newsletterUpdate = changes.find((change) =>
+      change.path === "/preferences/newsletters.md" && change.documentVersion === 2
+    );
+    expect(newsletterUpdate).toMatchObject({
+      path: "/preferences/newsletters.md",
+      auditAction: "markdown.write",
+      actorType: "user",
+      documentVersion: 2,
+      previousVersion: 1
+    });
+    expect(newsletterUpdate?.unifiedDiff).toContain("+- Databases");
+    expect(newsletterUpdate?.afterMarkdown).toContain("api_key: [redacted]");
+    expect(newsletterUpdate?.afterMarkdown).not.toContain("owner-secret-value");
+
+    await expect(store.listMemoryChanges(other, { pathPrefix: "/preferences", limit: 10 })).resolves.toEqual([
+      expect.objectContaining({
+        path: "/preferences/newsletters.md",
+        afterMarkdown: expect.stringContaining("# Other")
+      })
+    ]);
+  });
+
+  it("exposes recent memory changes through the authenticated API", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "memory-change-login");
+    const context: RequestContext = {
+      userId: session.user.id,
+      actorType: "user",
+      permissions: ["user"],
+      requestId: "memory-change-test",
+      session
+    };
+    await store.writeMarkdownDocument(context, {
+      path: "/personal/profile.md",
+      markdown: "# Profile\n\n- Likes quiet mornings"
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/personal/profile.md",
+      markdown: "# Profile\n\n- Likes quiet mornings\n- Prefers short updates",
+      expectedVersion: 1
+    });
+    const app = buildApp({ settings, store });
+
+    const response = await app.request("/api/v1/memory/changes/recent?pathPrefix=%2Fpersonal&limit=1", {
+      headers: {
+        cookie: `agent_session=${session.id}`
+      }
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      changes: [
+        {
+          path: "/personal/profile.md",
+          documentVersion: 2,
+          previousVersion: 1,
+          unifiedDiff: expect.stringContaining("Prefers short updates")
+        }
+      ]
+    });
+  });
+
   it("limits web console markdown edits to assistant instruction files", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

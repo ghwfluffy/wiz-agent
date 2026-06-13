@@ -18,6 +18,7 @@ import {
   replaceSectionMarkdown,
   titleFromMarkdown
 } from "../memory/markdownFilesystem.js";
+import { markdownAuditDetails } from "../memory/markdownDiff.js";
 import type {
   AgentStore,
   AgentMcpSession,
@@ -43,6 +44,8 @@ import type {
   MarkdownHeadingMatch,
   MarkdownIndexStatus,
   MarkdownSectionRecord,
+  MemoryChangeFilter,
+  MemoryChangeRecord,
   MemoryDocumentRecord,
   OutboundMessageRecord,
   RagDocumentChunkInput,
@@ -198,6 +201,62 @@ function auditFromRow(row: Record<string, unknown>): AuditRecord {
     requestId: row.request_id ? String(row.request_id) : null,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
   };
+}
+
+function detailString(details: Record<string, unknown>, key: string): string | null {
+  const value = details[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function detailNumber(details: Record<string, unknown>, key: string): number | null {
+  const value = details[key];
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function detailBoolean(details: Record<string, unknown>, key: string): boolean {
+  return details[key] === true;
+}
+
+function auditToMemoryChange(audit: AuditRecord): MemoryChangeRecord | undefined {
+  const path = detailString(audit.details, "path");
+  if (!path || audit.entityType !== "markdown_document") {
+    return undefined;
+  }
+  if (!detailString(audit.details, "unified_diff")) {
+    return undefined;
+  }
+  return {
+    id: audit.id,
+    path,
+    auditAction: audit.action,
+    actorType: audit.actorType,
+    entityId: audit.entityId,
+    documentVersion: detailNumber(audit.details, "version"),
+    previousVersion: detailNumber(audit.details, "previous_version"),
+    createdAt: audit.createdAt,
+    beforeMarkdown: detailString(audit.details, "before_markdown"),
+    afterMarkdown: detailString(audit.details, "after_markdown"),
+    unifiedDiff: detailString(audit.details, "unified_diff"),
+    snapshotTruncated: detailBoolean(audit.details, "snapshot_truncated"),
+    diffTruncated: detailBoolean(audit.details, "diff_truncated"),
+    addedLines: detailNumber(audit.details, "added_lines"),
+    removedLines: detailNumber(audit.details, "removed_lines"),
+    linkedTaskId: detailString(audit.details, "task_id"),
+    linkedTaskEventId: detailString(audit.details, "task_event_id"),
+    linkedRunId: detailString(audit.details, "run_id") ?? detailString(audit.details, "source_run_id"),
+    linkedToolCallId: detailString(audit.details, "tool_call_id"),
+    linkedMessageId: detailString(audit.details, "message_id") ?? detailString(audit.details, "source_message_id"),
+    linkedApprovalId: detailString(audit.details, "approval_id"),
+    linkedOutboxMessageId: detailString(audit.details, "outbound_message_id")
+  };
+}
+
+function memoryChangeLimit(filter?: MemoryChangeFilter): number {
+  const limit = filter?.limit;
+  if (typeof limit !== "number" || !Number.isFinite(limit)) {
+    return 50;
+  }
+  return Math.max(1, Math.min(100, Math.floor(limit)));
 }
 
 function outboundFromRow(row: Record<string, unknown>): OutboundMessageRecord {
@@ -613,6 +672,8 @@ async function writeMarkdownDocumentPostgres(
       [context.userId, path]
     );
     const existingRow = existing.rows[0] as Record<string, unknown> | undefined;
+    const previousMarkdown = existingRow ? String(existingRow.markdown ?? "") : "";
+    const previousVersion = existingRow ? Number(existingRow.version) : null;
     if (input.expectedVersion !== undefined) {
       const actualVersion = existingRow ? Number(existingRow.version) : 0;
       if (actualVersion !== input.expectedVersion) {
@@ -648,7 +709,21 @@ async function writeMarkdownDocumentPostgres(
       `INSERT INTO audit_log
         (id, user_id, actor_type, action, entity_type, entity_id, details_json, request_id)
        VALUES ($1, $2, $3, $4, 'markdown_document', $5, $6, $7)`,
-      [randomUUID(), context.userId, context.actorType, auditAction, document.id, { path, version: document.version }, context.requestId]
+      [
+        randomUUID(),
+        context.userId,
+        context.actorType,
+        auditAction,
+        document.id,
+        markdownAuditDetails({
+          path,
+          version: document.version,
+          previousVersion,
+          beforeMarkdown: previousMarkdown,
+          afterMarkdown: document.markdown
+        }),
+        context.requestId
+      ]
     );
     await client.query("COMMIT");
     return document;
@@ -1445,6 +1520,41 @@ export function createPostgresStore(pool: Pool): AgentStore {
         markdown: appendToSectionMarkdown(document.markdown, section, markdown),
         expectedVersion
       }, "markdown.section.append");
+    },
+
+    async listMemoryChanges(context, filter = {}) {
+      const limit = memoryChangeLimit(filter);
+      const params: unknown[] = [context.userId];
+      const clauses = [
+        "user_id = $1",
+        "entity_type = 'markdown_document'",
+        "details_json ? 'path'",
+        "details_json ? 'unified_diff'"
+      ];
+      if (filter.pathPrefix) {
+        const prefix = normalizeMarkdownDirectory(filter.pathPrefix);
+        if (prefix !== "/") {
+          params.push(prefix, `${prefix}/%`);
+          clauses.push(`(details_json->>'path' = $${params.length - 1} OR details_json->>'path' LIKE $${params.length})`);
+        }
+      }
+      if (filter.action) {
+        params.push(filter.action);
+        clauses.push(`action = $${params.length}`);
+      }
+      params.push(limit);
+      const result = await pool.query(
+        `SELECT *
+         FROM audit_log
+         WHERE ${clauses.join(" AND ")}
+         ORDER BY created_at DESC
+         LIMIT $${params.length}`,
+        params
+      );
+      return result.rows
+        .map(auditFromRow)
+        .map(auditToMemoryChange)
+        .filter((entry): entry is MemoryChangeRecord => entry !== undefined);
     },
 
     async searchMarkdownExact(context, query) {
@@ -2694,10 +2804,13 @@ export function createMemoryStore(): AgentStore {
     markdownDocuments.set(key, document);
     storeMarkdownSections(document);
     pushRagJob(context, document, "index_markdown");
-    pushAudit(context, auditAction, "markdown_document", document.id, {
+    pushAudit(context, auditAction, "markdown_document", document.id, markdownAuditDetails({
       path: document.path,
-      version: document.version
-    });
+      version: document.version,
+      previousVersion: existing?.version ?? null,
+      beforeMarkdown: existing?.markdown ?? "",
+      afterMarkdown: document.markdown
+    }));
     return document;
   }
 
@@ -3187,6 +3300,24 @@ export function createMemoryStore(): AgentStore {
         markdown: appendToSectionMarkdown(document.markdown, section, markdown),
         expectedVersion
       }, "markdown.section.append");
+    },
+    async listMemoryChanges(context, filter = {}) {
+      const limit = memoryChangeLimit(filter);
+      const prefix = filter.pathPrefix ? normalizeMarkdownDirectory(filter.pathPrefix) : "";
+      return audit
+        .filter((entry) => entry.userId === context.userId)
+        .map(auditToMemoryChange)
+        .filter((entry): entry is MemoryChangeRecord => entry !== undefined)
+        .filter((entry) => {
+          if (prefix && prefix !== "/" && entry.path !== prefix && !entry.path.startsWith(`${prefix}/`)) {
+            return false;
+          }
+          if (filter.action && entry.auditAction !== filter.action) {
+            return false;
+          }
+          return true;
+        })
+        .slice(0, limit);
     },
     async searchMarkdownExact(context, query) {
       const needle = query.toLowerCase();

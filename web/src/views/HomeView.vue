@@ -17,6 +17,7 @@ import {
   type KnowledgeDocument,
   type KnowledgeEntry,
   type KnowledgeSection,
+  type MemoryChange,
   type MemoryDocument,
   type OutboxMessage,
   type RagIndexHealth,
@@ -71,6 +72,7 @@ const audit = ref<AuditEvent[]>([]);
 const senders = ref<Sender[]>([]);
 const connectors = ref<Connector[]>([]);
 const memoryDocuments = ref<MemoryDocument[]>([]);
+const memoryChanges = ref<MemoryChange[]>([]);
 const knowledgeTree = ref<KnowledgeEntry[]>([]);
 const knowledgeDocument = ref<KnowledgeDocument | null>(null);
 const knowledgeSections = ref<KnowledgeSection[]>([]);
@@ -99,7 +101,10 @@ const outboxPerPage = 10;
 const selectedTask = ref<Task | null>(null);
 const selectedTaskEvents = ref<TaskEvent[]>([]);
 const selectedMemorySlug = ref("");
+const selectedMemoryChangeId = ref("");
 const memorySearch = ref("");
+const memoryChangePathFilter = ref("");
+const memoryChangeActionFilter = ref("");
 const knowledgeSearch = ref("");
 const selectedKnowledgePath = ref("");
 const knowledgeDraft = ref("");
@@ -250,6 +255,10 @@ const filteredMemoryDocuments = computed(() => {
     [document.title, document.slug, document.body].some((value) => value.toLowerCase().includes(query))
   );
 });
+const memoryChangeActions = computed(() => [...new Set(memoryChanges.value.map((change) => change.auditAction))].sort());
+const selectedMemoryChange = computed(() =>
+  memoryChanges.value.find((change) => change.id === selectedMemoryChangeId.value) ?? memoryChanges.value[0] ?? null
+);
 const memoryHeadings = computed(() => {
   const body = selectedMemoryDocument.value?.body ?? "";
   return body
@@ -508,6 +517,27 @@ function approvalExecutionSummary(approval: Approval): string {
   return approval.executionStatus.replace(/_/g, " ");
 }
 
+function memoryChangeSummary(change: MemoryChange): string {
+  const added = change.addedLines ?? 0;
+  const removed = change.removedLines ?? 0;
+  if (added === 0 && removed === 0) {
+    return "No line changes";
+  }
+  return `+${added} / -${removed}`;
+}
+
+function linkedChangeRefs(change: MemoryChange): string {
+  const refs = [
+    change.linkedRunId ? `run ${formatId(change.linkedRunId)}` : "",
+    change.linkedToolCallId ? `tool ${formatId(change.linkedToolCallId)}` : "",
+    change.linkedTaskId ? `task ${formatId(change.linkedTaskId)}` : "",
+    change.linkedMessageId ? `message ${formatId(change.linkedMessageId)}` : "",
+    change.linkedApprovalId ? `approval ${formatId(change.linkedApprovalId)}` : "",
+    change.linkedOutboxMessageId ? `outbox ${formatId(change.linkedOutboxMessageId)}` : ""
+  ].filter(Boolean);
+  return refs.length > 0 ? refs.join(" · ") : "none";
+}
+
 async function refreshApprovals(): Promise<void> {
   approvals.value = (await api.listApprovals("pending,approved,rejected,expired")).approvals;
 }
@@ -560,6 +590,25 @@ async function loadKnowledgeTree(): Promise<void> {
   } finally {
     loadingKnowledge.value = false;
   }
+}
+
+async function loadMemoryChanges(): Promise<void> {
+  const response = await api.listMemoryChanges({
+    pathPrefix: memoryChangePathFilter.value || undefined,
+    action: memoryChangeActionFilter.value || undefined,
+    limit: 50
+  });
+  memoryChanges.value = Array.isArray(response.changes) ? response.changes : [];
+  if (!selectedMemoryChangeId.value && memoryChanges.value.length > 0) {
+    selectedMemoryChangeId.value = memoryChanges.value[0]?.id ?? "";
+  }
+  if (selectedMemoryChangeId.value && !memoryChanges.value.some((change) => change.id === selectedMemoryChangeId.value)) {
+    selectedMemoryChangeId.value = memoryChanges.value[0]?.id ?? "";
+  }
+}
+
+async function openMemoryChangeFile(change: MemoryChange): Promise<void> {
+  await openKnowledgeFile(change.path);
 }
 
 async function openKnowledgeFile(path: string): Promise<void> {
@@ -720,7 +769,8 @@ async function loadActiveTab(): Promise<void> {
         const [memoryResponse, senderResponse] = await Promise.all([
           api.listMemory(),
           api.listSenders(),
-          loadKnowledgeTree()
+          loadKnowledgeTree(),
+          loadMemoryChanges()
         ]);
         memoryDocuments.value = memoryResponse.documents;
         senders.value = senderResponse.senders;
@@ -1171,6 +1221,12 @@ watch(() => route.query.tab, (tab) => {
 
 watch(activeTab, () => {
   void loadActiveTab();
+});
+
+watch([memoryChangePathFilter, memoryChangeActionFilter], () => {
+  if (activeTab.value === "memory" && auth.authenticated) {
+    void loadMemoryChanges();
+  }
 });
 
 onUnmounted(() => {
@@ -1813,6 +1869,86 @@ onUnmounted(() => {
               </tr>
             </tbody>
           </table>
+        </section>
+        <section class="activity-section" aria-label="Recent memory changes">
+          <div class="section-heading">
+            <h2>Recent memory changes</h2>
+            <p class="label">{{ memoryChanges.length }} changes</p>
+          </div>
+          <div class="form-grid compact-filter-form">
+            <div class="cds--form-item">
+              <label class="cds--label" for="memory-change-path-filter">Path prefix</label>
+              <select id="memory-change-path-filter" v-model="memoryChangePathFilter" class="cds--select-input">
+                <option value="">All paths</option>
+                <option v-for="path in knowledgeRootPaths" :key="path" :value="path">{{ path }}</option>
+              </select>
+            </div>
+            <div class="cds--form-item">
+              <label class="cds--label" for="memory-change-action-filter">Source action</label>
+              <select id="memory-change-action-filter" v-model="memoryChangeActionFilter" class="cds--select-input">
+                <option value="">All actions</option>
+                <option v-for="action in memoryChangeActions" :key="action" :value="action">{{ action }}</option>
+              </select>
+            </div>
+            <div class="form-actions">
+              <button class="cds--btn cds--btn--secondary" type="button" @click="loadMemoryChanges">
+                Refresh changes
+              </button>
+            </div>
+          </div>
+          <p v-if="memoryChanges.length === 0" class="empty">No memory changes recorded yet.</p>
+          <div v-else class="memory-change-layout">
+            <aside class="memory-list" aria-label="Recent memory change feed">
+              <button
+                v-for="change in memoryChanges"
+                :key="change.id"
+                class="memory-list-item"
+                :class="{ 'is-selected': selectedMemoryChange?.id === change.id }"
+                type="button"
+                @click="selectedMemoryChangeId = change.id"
+              >
+                <span class="memory-title">{{ fileTitle(change.path) }}</span>
+                <span class="label">{{ change.path }}</span>
+                <span class="label">{{ change.auditAction }} · {{ change.actorType }} · {{ memoryChangeSummary(change) }}</span>
+                <span class="label">{{ formatDate(change.createdAt) }}</span>
+              </button>
+            </aside>
+            <article v-if="selectedMemoryChange" class="memory-document">
+              <header class="memory-document-header">
+                <div>
+                  <p class="label">{{ selectedMemoryChange.auditAction }} / {{ selectedMemoryChange.actorType }}</p>
+                  <h3>{{ selectedMemoryChange.path }}</h3>
+                </div>
+                <div class="memory-document-actions">
+                  <span class="label">
+                    v{{ selectedMemoryChange.previousVersion ?? 0 }} -> v{{ selectedMemoryChange.documentVersion ?? "?" }}
+                  </span>
+                  <button class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="openMemoryChangeFile(selectedMemoryChange)">
+                    Read file
+                  </button>
+                </div>
+              </header>
+              <dl class="detail-list compact-details">
+                <div>
+                  <dt>Changed</dt>
+                  <dd>{{ formatDate(selectedMemoryChange.createdAt) }}</dd>
+                </div>
+                <div>
+                  <dt>Lines</dt>
+                  <dd>{{ memoryChangeSummary(selectedMemoryChange) }}</dd>
+                </div>
+                <div>
+                  <dt>Linked ids</dt>
+                  <dd>{{ linkedChangeRefs(selectedMemoryChange) }}</dd>
+                </div>
+                <div v-if="selectedMemoryChange.snapshotTruncated || selectedMemoryChange.diffTruncated">
+                  <dt>Bounds</dt>
+                  <dd>{{ selectedMemoryChange.snapshotTruncated ? "Snapshot truncated" : "" }} {{ selectedMemoryChange.diffTruncated ? "Diff truncated" : "" }}</dd>
+                </div>
+              </dl>
+              <pre class="memory-body diff-body">{{ selectedMemoryChange.unifiedDiff || selectedMemoryChange.afterMarkdown || "No diff available for this audit event." }}</pre>
+            </article>
+          </div>
         </section>
         <section class="activity-section" aria-label="Agent memory">
           <div class="section-heading">

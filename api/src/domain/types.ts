@@ -336,6 +336,37 @@ export type MarkdownConflict = {
   actualVersion: number;
 };
 
+export type MemoryChangeRecord = {
+  id: string;
+  path: string;
+  auditAction: string;
+  actorType: string;
+  entityId: string | null;
+  documentVersion: number | null;
+  previousVersion: number | null;
+  createdAt: string;
+  beforeMarkdown: string | null;
+  afterMarkdown: string | null;
+  unifiedDiff: string | null;
+  snapshotTruncated: boolean;
+  diffTruncated: boolean;
+  addedLines: number | null;
+  removedLines: number | null;
+  linkedTaskId: string | null;
+  linkedTaskEventId: string | null;
+  linkedRunId: string | null;
+  linkedToolCallId: string | null;
+  linkedMessageId: string | null;
+  linkedApprovalId: string | null;
+  linkedOutboxMessageId: string | null;
+};
+
+export type MemoryChangeFilter = {
+  pathPrefix?: string;
+  action?: string;
+  limit?: number;
+};
+
 export type MarkdownIndexStatus = {
   path: string;
   version: number;
@@ -549,6 +580,7 @@ export type AgentStore = {
     markdown: string,
     expectedVersion?: number
   ): Promise<MarkdownDocumentRecord | MarkdownConflict | undefined>;
+  listMemoryChanges(context: RequestContext, filter?: MemoryChangeFilter): Promise<MemoryChangeRecord[]>;
   searchMarkdownExact(context: RequestContext, query: string): Promise<MarkdownDirectoryEntry[]>;
   searchMarkdownSemantic(context: RequestContext, input: {
     pointIds: string[];

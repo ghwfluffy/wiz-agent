@@ -711,6 +711,25 @@ export function buildApp(options: AppOptions = {}): Hono {
     return context.json({ documents: await store.listMemoryDocuments(authContext) });
   });
 
+  app.get("/api/v1/memory/changes/recent", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const limit = numberValue({
+      limit: context.req.query("limit")
+    }, "limit");
+    const pathPrefix = context.req.query("pathPrefix") || undefined;
+    const action = context.req.query("action") || undefined;
+    return context.json({
+      changes: await store.listMemoryChanges(authContext, {
+        pathPrefix,
+        action,
+        limit
+      })
+    });
+  });
+
   app.get("/api/v1/memory/:slug", async (context) => {
     const authContext = await requireContext(context);
     if (authContext instanceof Response) {

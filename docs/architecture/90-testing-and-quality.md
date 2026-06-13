@@ -89,6 +89,9 @@ Current tests cover:
 - newsletter preference memory writes from explicit owner messages.
 - personal-profile memory injection into future owner prompts.
 - memory document API, Memory tab rendering, and trusted-contact management.
+- memory change API and Memory tab diff rendering, including user scoping,
+  path filtering, read-file links, and redaction of credential-like markdown
+  lines in audit-backed diffs.
 - owner reply tool contract without model-selected recipients.
 - conversation thread schema coverage, in-memory store round trips, bounded
   prompt context, owner follow-up thread reuse, MCP list/update/link tools, and

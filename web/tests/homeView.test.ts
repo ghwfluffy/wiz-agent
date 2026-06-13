@@ -309,6 +309,93 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Useful security writeups");
   });
 
+  it("renders recent memory changes with diff details and read-file links", async () => {
+    const change = {
+      id: "change-1",
+      path: "/personal/lists/movies.md",
+      auditAction: "markdown.write",
+      actorType: "user",
+      entityId: "doc-1",
+      documentVersion: 2,
+      previousVersion: 1,
+      createdAt: "2026-06-13T12:00:00.000Z",
+      beforeMarkdown: "# Movies\n",
+      afterMarkdown: "# Movies\n- [ ] Desperado\n",
+      unifiedDiff: " # Movies\n+- [ ] Desperado",
+      snapshotTruncated: false,
+      diffTruncated: false,
+      addedLines: 1,
+      removedLines: 0,
+      linkedTaskId: null,
+      linkedTaskEventId: null,
+      linkedRunId: "run-1",
+      linkedToolCallId: "tool-1",
+      linkedMessageId: null,
+      linkedApprovalId: null,
+      linkedOutboxMessageId: null
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/memory/changes/recent")) {
+        return { ok: true, json: async () => ({ changes: [change] }) };
+      }
+      if (url.includes("/knowledge/tree")) {
+        return { ok: true, json: async () => ({ path: "/", entries: [{ path: "/personal/lists/movies.md", name: "movies.md", type: "file", version: 2, updatedAt: "" }] }) };
+      }
+      if (url.includes("/knowledge/files/%2Fpersonal%2Flists%2Fmovies.md/sections")) {
+        return { ok: true, json: async () => ({ sections: [] }) };
+      }
+      if (url.includes("/knowledge/files/%2Fpersonal%2Flists%2Fmovies.md")) {
+        return { ok: true, json: async () => ({ document: { id: "doc-1", path: "/personal/lists/movies.md", basename: "movies.md", title: "Movies", markdown: "# Movies\n- [ ] Desperado", contentHash: "hash", version: 2, indexStatus: "pending", createdAt: "", updatedAt: "" } }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome("/?tab=memory");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Recent memory changes");
+    expect(wrapper.text()).toContain("/personal/lists/movies.md");
+    expect(wrapper.text()).toContain("markdown.write");
+    expect(wrapper.text()).toContain("+- [ ] Desperado");
+    expect(wrapper.text()).toContain("run run-1");
+
+    const readButton = wrapper.findAll("button").find((button) => button.text() === "Read file");
+    expect(readButton).toBeTruthy();
+    await readButton!.trigger("click");
+    await flushPromises();
+
+    expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/knowledge/files/%2Fpersonal%2Flists%2Fmovies.md"))).toBe(true);
+  });
+
   it("manages trusted contacts from the memory tab", async () => {
     let senderState = [{ id: "sender-1", address: "owner@example.test", status: "owner", createdAt: "", updatedAt: "" }];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {

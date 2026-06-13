@@ -253,6 +253,13 @@ Full-file and section writes use optimistic concurrency. A stale
 `expectedVersion` returns a structured conflict instead of overwriting newer
 state.
 
+Markdown write audit entries also carry a bounded, redacted before/after
+snapshot and unified line diff. `GET /api/v1/memory/changes/recent` exposes
+recent user-scoped markdown memory changes with path, audit action, actor type,
+version, linked ids when present, and the redacted diff payload. This endpoint is
+read-only and derives from audit history; it does not provide revert or delete
+controls.
+
 The legacy memory API remains available while the web UI is migrated. Legacy
 memory writes dual-write to markdown paths, and the Phase 01 migration backfills
 existing rows:

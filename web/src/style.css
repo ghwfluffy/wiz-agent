@@ -394,6 +394,12 @@ h3 {
   min-height: 420px;
 }
 
+.memory-change-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, 380px) minmax(0, 1fr);
+  gap: 16px;
+}
+
 .memory-list {
   display: grid;
   align-content: start;
@@ -471,6 +477,11 @@ h3 {
   background: #f4f4f4;
   padding: 16px;
   white-space: pre-wrap;
+}
+
+.diff-body {
+  font-family: "IBM Plex Mono", monospace;
+  line-height: 1.45;
 }
 
 .knowledge-layout {
@@ -579,6 +590,7 @@ h3 {
   .config-form,
   .connector-grid,
   .memory-browser,
+  .memory-change-layout,
   .knowledge-layout,
   .prompt-result,
   .status-grid,
