@@ -22,6 +22,12 @@ export const ListRecentOwnerConversationsToolSchema = z.object({
   limit: z.number().int().min(1).max(20).default(8)
 });
 
+export const GetRecentBotActivityToolSchema = z.object({
+  reason: z.string().min(1).optional(),
+  lookbackHours: z.number().int().min(1).max(24 * 30).default(24 * 7),
+  limit: z.number().int().min(1).max(20).default(10)
+});
+
 export const WriteMemoryToolSchema = z.object({
   slug: z.string().min(1).max(120).regex(/^[a-z0-9][a-z0-9-]*$/),
   title: z.string().min(1).max(160),
@@ -129,6 +135,7 @@ export const ToolContracts = {
   list_ongoing_tasks: ListOngoingTasksToolSchema,
   list_recent_context: ListRecentContextToolSchema,
   list_recent_owner_conversations: ListRecentOwnerConversationsToolSchema,
+  get_recent_bot_activity: GetRecentBotActivityToolSchema,
   write_memory: WriteMemoryToolSchema,
   append_task_prompt: AppendTaskPromptToolSchema,
   update_task_schedule: UpdateTaskScheduleToolSchema,

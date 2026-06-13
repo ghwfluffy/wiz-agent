@@ -60,9 +60,10 @@ policy, and for owner-classified messages invokes `runOwnerInboundAgent`. That
 prompt includes current active tasks and bounded recent owner context so the
 model can decide whether the message is a continuation of ongoing work or new
 work. The model has MCP-backed tools to list ongoing tasks, inspect recent owner
-conversations, append a prompt to an existing task, write memory,
-create/schedule a new task, queue an outbound message, record an observation, or
-request an allowed cross-app integration action. The host validates every tool
+conversations, inspect recent bot activity/contact cadence, append a prompt to
+an existing task, write memory, create/schedule a new task, queue an outbound
+message, record an observation, or request an allowed cross-app integration
+action. The host validates every tool
 call, creates a user/run-scoped MCP session with an explicit tool allowlist, and
 records the final handling action back on the inbox record.
 

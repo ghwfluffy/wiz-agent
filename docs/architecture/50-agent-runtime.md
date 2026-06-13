@@ -65,6 +65,7 @@ Current tool contracts:
 - `list_ongoing_tasks`
 - `list_recent_context`
 - `list_recent_owner_conversations`
+- `get_recent_bot_activity`
 - `write_memory`
 - `append_task_prompt`
 - `update_task_schedule`
@@ -116,6 +117,12 @@ Current migrated agent tools:
   without side effects.
 - `list_recent_owner_conversations` returns recent owner inbound/outbound
   conversation excerpts so the agent can resolve short follow-up messages.
+- `get_recent_bot_activity` returns bounded operational activity insight,
+  including owner-visible outbound counts, pending approvals, failures, recent
+  outbound excerpts, and a host-computed contact-cadence assessment. The
+  assessment helps the agent reason about whether it has been contacting the
+  owner too much or too little, but it is context only; outbound contact still
+  requires the normal owner-message approval path and task urgency judgment.
 - `write_memory` appends model-selected durable markdown memory under host-owned
   user scope.
 - `append_task_prompt` appends owner follow-up context to an existing task,

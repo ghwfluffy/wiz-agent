@@ -137,6 +137,86 @@ export async function executeToolCall(options: {
         }
       };
     }
+    case "get_recent_bot_activity": {
+      const lookbackHours = typeof options.args.lookbackHours === "number" ? options.args.lookbackHours : 24 * 7;
+      const limit = typeof options.args.limit === "number" ? options.args.limit : 10;
+      const since = new Date(Date.now() - lookbackHours * 60 * 60 * 1000);
+      const outbound = (await options.store.listOutboundMessages(options.context))
+        .filter((message) => Date.parse(message.createdAt) >= since.getTime())
+        .sort((a, b) => (b.sentAt ?? b.createdAt).localeCompare(a.sentAt ?? a.createdAt));
+      const ownerInbound = (await options.store.listInboundMessages(options.context))
+        .filter((message) => message.classification === "owner")
+        .filter((message) => Date.parse(message.receivedAt ?? message.createdAt) >= since.getTime());
+      const runs = (await options.store.listAgentRuns(options.context))
+        .filter((run) => Date.parse(run.startedAt) >= since.getTime());
+      const toolCalls = (await options.store.listToolCalls(options.context))
+        .filter((toolCall) => Date.parse(toolCall.createdAt) >= since.getTime());
+      const approvals = await options.store.listApprovals(options.context, ["pending"]);
+      const sentOrPending = outbound.filter((message) =>
+        ["requires_approval", "approved", "pending", "sending", "sent"].includes(message.status)
+      );
+      const failedRuns = runs.filter((run) => run.status === "failed");
+      const failedToolCalls = toolCalls.filter((toolCall) => ["failed", "rejected"].includes(toolCall.status));
+      const failedOutbound = outbound.filter((message) => message.status === "failed");
+      const recentOutbound = outbound.slice(0, limit).map((message) => ({
+        outbound_message_id: message.id,
+        channel: message.channel,
+        status: message.status,
+        timestamp: message.sentAt ?? message.createdAt,
+        subject: message.subject,
+        body_excerpt: excerpt(message.bodyText, 280)
+      }));
+      return {
+        executed: true,
+        sideEffect: "none",
+        result: {
+          lookback_hours: lookbackHours,
+          since: since.toISOString(),
+          counts: {
+            outbound_total: outbound.length,
+            owner_visible_contact_attempts: sentOrPending.length,
+            sent: outbound.filter((message) => message.status === "sent").length,
+            pending_or_approved: outbound.filter((message) => ["pending", "approved", "sending"].includes(message.status)).length,
+            requiring_approval: outbound.filter((message) => message.status === "requires_approval").length,
+            failed_outbound: failedOutbound.length,
+            owner_inbound_messages: ownerInbound.length,
+            agent_runs: runs.length,
+            failed_agent_runs: failedRuns.length,
+            tool_calls: toolCalls.length,
+            failed_or_rejected_tool_calls: failedToolCalls.length,
+            pending_approvals: approvals.length
+          },
+          contact_cadence: assessContactCadence({
+            lookbackHours,
+            outboundAttempts: sentOrPending.length,
+            ownerInboundCount: ownerInbound.length,
+            pendingApprovals: approvals.length,
+            failedOutbound: failedOutbound.length
+          }),
+          recent_outbound: recentOutbound,
+          recent_failures: {
+            outbound: failedOutbound.slice(0, limit).map((message) => ({
+              outbound_message_id: message.id,
+              timestamp: message.updatedAt,
+              failure_message: message.failureMessage ?? null,
+              body_excerpt: excerpt(message.bodyText, 160)
+            })),
+            agent_runs: failedRuns.slice(0, limit).map((run) => ({
+              run_id: run.id,
+              started_at: run.startedAt,
+              failure_message: run.failureMessage ?? null
+            })),
+            tool_calls: failedToolCalls.slice(0, limit).map((toolCall) => ({
+              tool_call_id: toolCall.id,
+              tool_name: toolCall.toolName,
+              status: toolCall.status,
+              validation_error: toolCall.validationError ?? null
+            }))
+          },
+          guidance: "Use this as operational context only. Do not contact the owner solely because this tool says contact has been quiet; consider task urgency, pending approvals, and owner preferences first."
+        }
+      };
+    }
     case "write_memory": {
       const slug = String(options.args.slug);
       const title = String(options.args.title);
@@ -558,6 +638,45 @@ export async function executeToolCall(options: {
 
 function excerpt(value: string | null | undefined, length: number): string {
   return (value ?? "").replace(/\s+/g, " ").trim().slice(0, length);
+}
+
+function assessContactCadence(input: {
+  lookbackHours: number;
+  outboundAttempts: number;
+  ownerInboundCount: number;
+  pendingApprovals: number;
+  failedOutbound: number;
+}): Record<string, unknown> {
+  const days = Math.max(input.lookbackHours / 24, 1 / 24);
+  const attemptsPerDay = input.outboundAttempts / days;
+  let level: "quiet" | "balanced" | "high" = "balanced";
+  const reasons: string[] = [];
+  if (attemptsPerDay > 3 || input.outboundAttempts >= 8) {
+    level = "high";
+    reasons.push("Owner-visible contact attempts are high for the selected window.");
+  } else if (input.outboundAttempts === 0 && input.ownerInboundCount > 0) {
+    level = "quiet";
+    reasons.push("The owner has contacted the agent, but the agent has not attempted an owner-visible reply.");
+  } else if (attemptsPerDay < 0.25 && input.ownerInboundCount > input.outboundAttempts) {
+    level = "quiet";
+    reasons.push("Owner inbound messages outnumber bot contact attempts in this window.");
+  } else {
+    reasons.push("Owner-visible contact attempts look moderate for the selected window.");
+  }
+  if (input.pendingApprovals > 0) {
+    reasons.push("Pending approvals may make the agent look quiet even when it has proposed owner-visible messages.");
+  }
+  if (input.failedOutbound > 0) {
+    reasons.push("Failed outbound messages may mean the owner did not actually receive attempted contact.");
+  }
+  return {
+    level,
+    outbound_attempts_per_day: Number(attemptsPerDay.toFixed(2)),
+    owner_inbound_to_outbound_ratio: input.outboundAttempts === 0
+      ? null
+      : Number((input.ownerInboundCount / input.outboundAttempts).toFixed(2)),
+    reasons
+  };
 }
 
 function configString(config: Record<string, unknown>, key: string): string | undefined {

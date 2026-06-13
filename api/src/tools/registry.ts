@@ -32,6 +32,7 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   list_ongoing_tasks: { access: "read", risk: "low", sideEffect: "none" },
   list_recent_context: { access: "read", risk: "low", sideEffect: "none" },
   list_recent_owner_conversations: { access: "read", risk: "low", sideEffect: "none" },
+  get_recent_bot_activity: { access: "read", risk: "low", sideEffect: "none" },
   write_memory: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   append_task_prompt: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   update_task_schedule: { access: "write", risk: "medium", sideEffect: "local_persistence" },

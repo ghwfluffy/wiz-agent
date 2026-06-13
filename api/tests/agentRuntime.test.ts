@@ -591,6 +591,83 @@ describe("agent task execution", () => {
     );
   });
 
+  it("exposes recent bot activity insights through MCP", async () => {
+    const { context, store } = await testContext();
+    await store.recordInboundMessage(context, {
+      providerMessageId: "activity-owner-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Any updates?",
+      source: "sms"
+    }, "owner");
+    for (const bodyText of ["First update.", "Second update.", "Third update.", "Fourth update."]) {
+      await store.queueOutboundMessage(context, {
+        channel: "sms",
+        status: "sent",
+        toAddr: "owner-sms@example.test",
+        bodyText
+      });
+    }
+    await store.createApproval(context, {
+      actionType: "send_outbound_message",
+      proposedPayload: { body_text: "Pending owner-visible update." },
+      riskLevel: "high",
+      summary: "Pending owner-visible update.",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "get_recent_bot_activity",
+            arguments: {
+              reason: "Decide whether I have been contacting the owner too often.",
+              lookbackHours: 24,
+              limit: 3
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Check recent bot activity."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "get_recent_bot_activity",
+      sideEffect: "none",
+      executionResult: {
+        lookback_hours: 24,
+        counts: expect.objectContaining({
+          owner_visible_contact_attempts: 4,
+          owner_inbound_messages: 1,
+          pending_approvals: 1
+        }),
+        contact_cadence: expect.objectContaining({
+          level: "high",
+          outbound_attempts_per_day: 4
+        }),
+        recent_outbound: expect.arrayContaining([
+          expect.objectContaining({
+            status: "sent",
+            body_excerpt: expect.stringContaining("update")
+          })
+        ])
+      }
+    });
+    expect(modelToolDescriptors()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "get_recent_bot_activity",
+        access: "read",
+        sideEffect: "none"
+      })
+    ]));
+  });
+
   it("updates task schedules with rationale through the decision tool", async () => {
     const { context, store } = await testContext();
     const task = await store.createTask(context, {
