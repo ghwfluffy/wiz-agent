@@ -144,11 +144,20 @@ Current migrated agent tools:
   local clarification task for later owner-facing handling.
 - `record_observation` records the accepted observation in the tool-call result.
 
-`integration_action` resolves through the registered app capability allowlist
-and then through the scoped integration gateway. It fails closed unless settings
-and signed agent-token configuration are supplied by host code. Reply tools
-receive any inbound owner-message context from host code, not from model
-arguments, so the model still cannot select recipients.
+High-risk tools return a host-owned approval state instead of executing the
+side effect. `propose_outbound_message` now creates an approval plus a linked
+`requires_approval` outbox record. `integration_action` creates a
+`cross_app_write_action` approval for write-style proposals and does not call
+registered apps directly from the model tool path. Approval records preserve
+the source run, source reference, proposed payload, risk level, summary,
+expiration, and audit trail.
+
+Reply tools receive any inbound owner-message context from host code, not from
+model arguments, so the model still cannot select recipients. Owner SMS/email
+commands such as `YES`, `NO`, `EDIT <text>`, `LATER`, and `DETAILS` are parsed
+by host code against the most recent pending owner approval. `YES` approves
+only that current approval, `NO` rejects it, and `EDIT` updates the proposed
+outbound payload and audit trail.
 
 ## Repair Flow
 

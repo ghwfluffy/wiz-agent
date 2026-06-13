@@ -848,9 +848,15 @@ describe("agent task execution", () => {
     expect(outbox).toEqual([
       expect.objectContaining({
         channel: "sms",
-        status: "pending",
+        status: "requires_approval",
         toAddr: "owner-sms@example.test",
         bodyText: "Yes, I am online."
+      })
+    ]);
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([
+      expect.objectContaining({
+        actionType: "send_outbound_message",
+        riskLevel: "high"
       })
     ]);
   });

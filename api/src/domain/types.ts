@@ -120,6 +120,40 @@ export type OutboundMessageRecord = OutboundMessageInput & {
   failureMessage?: string | null;
 };
 
+export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
+
+export type ApprovalActionType =
+  | "send_outbound_message"
+  | "update_task_schedule"
+  | "trust_sender"
+  | "block_sender"
+  | "write_important_memory"
+  | "cross_app_write_action"
+  | "delete_archive_data";
+
+export type ApprovalRiskLevel = "medium" | "high";
+
+export type ApprovalInput = {
+  sourceRunId?: string | null;
+  sourceRef?: string | null;
+  actionType: ApprovalActionType;
+  proposedPayload: Record<string, unknown>;
+  riskLevel: ApprovalRiskLevel;
+  summary: string;
+  expiresAt: string;
+  requestedBy?: string;
+};
+
+export type ApprovalRecord = ApprovalInput & {
+  id: string;
+  userId: string;
+  status: ApprovalStatus;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type InboundHandlingResult = {
   classification: SenderClassification;
   action:
@@ -129,7 +163,8 @@ export type InboundHandlingResult = {
     | "accepted_trusted"
     | "blocked"
     | "rate_limited"
-    | "sender_reviewed";
+    | "sender_reviewed"
+    | "approval_decided";
   messageId?: string;
   taskId?: string;
   taskEventId?: string;
@@ -535,4 +570,19 @@ export type AgentStore = {
     status: OutboundMessageInput["status"],
     failureMessage?: string | null
   ): Promise<OutboundMessageRecord | undefined>;
+  createApproval(context: RequestContext, input: ApprovalInput): Promise<ApprovalRecord>;
+  listApprovals(context: RequestContext, statuses?: ApprovalStatus[]): Promise<ApprovalRecord[]>;
+  getApproval(context: RequestContext, approvalId: string): Promise<ApprovalRecord | undefined>;
+  updateApprovalStatus(
+    context: RequestContext,
+    approvalId: string,
+    status: ApprovalStatus,
+    decidedBy?: string | null
+  ): Promise<ApprovalRecord | undefined>;
+  updateApprovalPayload(
+    context: RequestContext,
+    approvalId: string,
+    proposedPayload: Record<string, unknown>,
+    summary?: string
+  ): Promise<ApprovalRecord | undefined>;
 };

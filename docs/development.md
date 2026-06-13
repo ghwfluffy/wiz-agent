@@ -30,6 +30,14 @@ signed-in user is an administrator. OAuth callback failures redirect back to the
 UI with an `oauth_error` token; the web store converts that token into a
 friendly message and removes it from the URL.
 
+Phase 08 approvals are visible in the Approval inbox. High-risk outbound owner
+messages and cross-app write proposals create approval records instead of
+executing immediately. The owner can approve, reject, edit outbound text, or
+bulk reject stale approvals from the UI. Owner-classified SMS/email replies of
+`YES`, `NO`, `EDIT <text>`, `LATER`, or `DETAILS` are parsed by host code
+against the most recent pending approval; the model does not choose approval ids
+or recipients.
+
 API and worker startup run the TypeScript migration runner before serving:
 
 ```bash

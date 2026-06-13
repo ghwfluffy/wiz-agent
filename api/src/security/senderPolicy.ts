@@ -9,6 +9,7 @@ import type {
   SenderClassification
 } from "../domain/types.js";
 import { integrateTrustedMessageIntoMemory } from "../memory/personalMemory.js";
+import { handleOwnerApprovalCommand } from "./approvalPolicy.js";
 import { appendNewsletterKnowledge, handleOwnerNewsletterReply } from "./newsletterPolicy.js";
 
 export function normalizeAddress(value: string): string {
@@ -189,6 +190,21 @@ export async function handleInboundMessage(
     });
     if (newsletterReply) {
       return newsletterReply;
+    }
+    const approvalReply = await handleOwnerApprovalCommand({
+      store: options.store,
+      context: options.context,
+      bodyText: recorded.bodyText
+    });
+    if (approvalReply.handled) {
+      await options.store.updateInboundMessageHandling(options.context, recorded.id, {
+        action: "approval_decided"
+      });
+      return {
+        classification,
+        action: "approval_decided",
+        messageId: recorded.id
+      };
     }
     const agentResult = await options.ownerAgentRunner?.(recorded);
     let taskEventId = agentResult?.taskEventId;

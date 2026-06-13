@@ -75,10 +75,28 @@ export type OutboxMessage = {
   toAddr: string;
   subject?: string | null;
   bodyText: string;
+  approvalId?: string | null;
   createdAt: string;
   updatedAt: string;
   sentAt?: string | null;
   failureMessage?: string | null;
+};
+
+export type Approval = {
+  id: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  actionType: string;
+  sourceRunId?: string | null;
+  sourceRef?: string | null;
+  proposedPayload: Record<string, unknown>;
+  riskLevel: string;
+  summary: string;
+  expiresAt: string;
+  requestedBy?: string;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type AuditEvent = {
@@ -273,6 +291,18 @@ export const api = {
   },
   listOutbox(): Promise<{ messages: OutboxMessage[] }> {
     return request<{ messages: OutboxMessage[] }>("/outbox");
+  },
+  listApprovals(status = "pending"): Promise<{ approvals: Approval[] }> {
+    return request<{ approvals: Approval[] }>(`/approvals?status=${encodeURIComponent(status)}`);
+  },
+  updateApproval(id: string, input: { decision: "approve" | "reject" } | { decision: "edit"; text: string }): Promise<{ approval: Approval; outbound?: OutboxMessage }> {
+    return request<{ approval: Approval; outbound?: OutboxMessage }>(`/approvals/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: JSON.stringify(input)
+    });
+  },
+  rejectStaleApprovals(): Promise<{ rejected: Approval[] }> {
+    return request<{ rejected: Approval[] }>("/approvals/stale/reject", { method: "POST" });
   },
   updateOutbox(id: string, status: "pending" | "approved" | "cancelled"): Promise<OutboxMessage> {
     return request<OutboxMessage>(`/outbox/${encodeURIComponent(id)}`, {

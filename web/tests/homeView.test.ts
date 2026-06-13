@@ -454,6 +454,97 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("NO IMAP disabled");
   });
 
+  it("renders approval inbox and calls approve/edit APIs", async () => {
+    const approval = {
+      id: "approval-1",
+      status: "pending",
+      actionType: "send_outbound_message",
+      sourceRunId: "run-1",
+      sourceRef: "sms",
+      proposedPayload: { body_text: "Original message", channel: "sms" },
+      riskLevel: "high",
+      summary: "Send SMS owner message",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestedBy: "agent",
+      decidedBy: null,
+      decidedAt: null,
+      createdAt: "",
+      updatedAt: ""
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
+          })
+        };
+      }
+      if (url.includes("/approvals/approval-1") && init?.method === "PATCH") {
+        return { ok: true, json: async () => ({ approval }) };
+      }
+      if (url.includes("/approvals")) {
+        return { ok: true, json: async () => ({ approvals: [approval] }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/admin/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome("/?tab=approvals");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Approval inbox");
+    expect(wrapper.text()).toContain("Send SMS owner message");
+    expect(wrapper.text()).toContain("Original message");
+
+    const textarea = wrapper.get("#approval-edit-approval-1");
+    (textarea.element as HTMLTextAreaElement).value = "Edited message";
+    await textarea.trigger("input");
+    const saveEdit = wrapper.findAll("button").find((button) => button.text() === "Save edit");
+    expect(saveEdit).toBeTruthy();
+    await saveEdit!.trigger("click");
+    await flushPromises();
+
+    const approve = wrapper.findAll("button").find((button) => button.text() === "Approve");
+    expect(approve).toBeTruthy();
+    await approve!.trigger("click");
+    await flushPromises();
+
+    const patchBodies = fetchMock.mock.calls
+      .filter((call) => String(call[0]).includes("/approvals/approval-1"))
+      .map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+    expect(patchBodies).toEqual(expect.arrayContaining([
+      { decision: "approve" },
+      { decision: "edit", text: "Edited message" }
+    ]));
+  });
+
   it("polls only the active tab data every ten seconds", async () => {
     vi.useFakeTimers();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");

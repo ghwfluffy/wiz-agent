@@ -16,6 +16,7 @@ import type {
   RequestContext,
   SenderStatus
 } from "../domain/types.js";
+import { decideApproval, editApproval } from "../security/approvalPolicy.js";
 import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
 
 export type AppOptions = {
@@ -488,18 +489,81 @@ export function buildApp(options: AppOptions = {}): Hono {
     });
   });
 
-  for (const [path, key] of [
-    ["/api/v1/conversations", "conversations"],
-    ["/api/v1/approvals", "approvals"]
-  ] as const) {
-    app.get(path, async (context) => {
-      const authContext = await requireContext(context);
-      if (authContext instanceof Response) {
-        return authContext;
+  app.get("/api/v1/conversations", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    return context.json({ conversations: [] });
+  });
+
+  app.get("/api/v1/approvals", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const status = context.req.query("status");
+    const statuses = status ? status.split(",").filter((item) =>
+      ["pending", "approved", "rejected", "expired"].includes(item)
+    ) as Array<"pending" | "approved" | "rejected" | "expired"> : undefined;
+    return context.json({ approvals: await store.listApprovals(authContext, statuses) });
+  });
+
+  app.patch("/api/v1/approvals/:id", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
+    const decision = payload?.decision;
+    if (decision === "approve" || decision === "reject") {
+      const result = await decideApproval({
+        context: authContext,
+        store,
+        approvalId: context.req.param("id"),
+        decision
+      });
+      if (!result) {
+        return context.json(errorPayload("http_404", "Approval not found.", authContext.requestId), 404);
       }
-      return context.json({ [key]: [] });
-    });
-  }
+      return context.json(result);
+    }
+    if (decision === "edit" && typeof payload?.text === "string" && payload.text.trim()) {
+      const result = await editApproval({
+        context: authContext,
+        store,
+        approvalId: context.req.param("id"),
+        text: payload.text.trim()
+      });
+      if (!result) {
+        return context.json(errorPayload("http_404", "Approval not found.", authContext.requestId), 404);
+      }
+      return context.json(result);
+    }
+    return context.json(errorPayload("validation_error", "Approval decision must be approve, reject, or edit.", authContext.requestId), 400);
+  });
+
+  app.post("/api/v1/approvals/stale/reject", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const pending = await store.listApprovals(authContext, ["pending"]);
+    const stale = pending.filter((approval) => Date.parse(approval.expiresAt) <= Date.now());
+    const rejected = [];
+    for (const approval of stale) {
+      const result = await decideApproval({
+        context: authContext,
+        store,
+        approvalId: approval.id,
+        decision: "reject"
+      });
+      if (result) {
+        rejected.push(result.approval);
+      }
+    }
+    return context.json({ rejected });
+  });
 
   app.get("/api/v1/memory", async (context) => {
     const authContext = await requireContext(context);
@@ -792,6 +856,19 @@ export function buildApp(options: AppOptions = {}): Hono {
     const statusValue = payload?.status;
     if (!["pending", "approved", "cancelled"].includes(String(statusValue))) {
       return context.json(errorPayload("validation_error", "A valid outbox status is required.", authContext.requestId), 400);
+    }
+    const existing = (await store.listOutboundMessages(authContext)).find((candidate) => candidate.id === context.req.param("id"));
+    if (existing?.approvalId && (statusValue === "approved" || statusValue === "cancelled")) {
+      const result = await decideApproval({
+        context: authContext,
+        store,
+        approvalId: existing.approvalId,
+        decision: statusValue === "approved" ? "approve" : "reject"
+      });
+      if (!result?.outbound) {
+        return context.json(errorPayload("validation_error", "Approval could not be applied.", authContext.requestId), 400);
+      }
+      return context.json(result.outbound);
     }
     const message = await store.updateOutboundMessageStatus(
       authContext,

@@ -254,22 +254,27 @@ the configured MMS gateway for SMS-channel owner replies whose body is over the
 safe SMS text length. Short SMS replies still use the SMS gateway, and email
 replies are unchanged.
 
-Approval gates delivery only for records with `status = 'requires_approval'`.
-The owner-reply model tool defaults to immediate queued delivery because sender
-policy has already classified the inbound sender as owner and host code controls
-the recipient. The model may explicitly request approval for sensitive replies.
-Deterministic untrusted-sender review
-notifications are host-generated from bounded message metadata and are queued as
-`pending`, not `requires_approval`, so the owner actually receives the prompt to
-review the sender. The delivery worker only attempts records with `pending` or
-`approved` status, so `requires_approval` records stay blocked until an
-operator or future approval mechanism changes the status.
+Approval gates delivery for records with `status = 'requires_approval'`.
+The owner-reply model tool is conservative in Phase 08: it creates an approval
+and a linked outbox record instead of directly queuing delivery. The delivery
+worker only attempts records with `pending` or `approved` status, so
+`requires_approval` records stay blocked until the owner approves them from the
+operations UI or an owner-classified SMS/email command. Deterministic
+untrusted-sender review notifications remain host-generated from bounded
+message metadata and are queued as `pending`, not `requires_approval`, so the
+owner actually receives the prompt to review the sender.
 
-The current implemented approval mechanism is the operations UI calling
-`PATCH /api/v1/outbox/:id` to change a record to `approved` or `cancelled`.
-There is not yet an SMS/email reply approval parser, scheduled auto-approval
-rule, or policy engine. Those should be added as explicit host-owned approval
-mechanisms before they can send messages without dashboard interaction.
+Owner approval replies are parsed by host code after sender-review replies get
+first chance. `YES` approves the most recent pending approval for the owner,
+`NO` rejects it, `EDIT <text>` updates an outbound approval payload and audit
+record, and `LATER`/`DETAILS` are recorded without running model tools. Arbitrary
+inbound messages cannot select approval ids unless a future signed short-code
+mechanism is added by host code.
+
+The operations UI has a dedicated Approval inbox backed by
+`GET /api/v1/approvals` and `PATCH /api/v1/approvals/:id`. Legacy outbox
+approve/cancel controls delegate to approval decisions when the outbox record
+has an approval id.
 
 The operations UI Overview lists only active outbound records that need
 attention or delivery tracking: `requires_approval`, `pending`, `approved`, and

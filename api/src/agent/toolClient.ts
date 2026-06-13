@@ -28,6 +28,7 @@ export class LocalToolClient implements AgentToolClient {
     return executeToolCall({
       context: input.context,
       store: input.store,
+      runId: input.runId,
       toolName: input.toolName,
       args: input.args,
       settings: input.settings,

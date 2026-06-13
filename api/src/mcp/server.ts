@@ -150,6 +150,7 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
         const execution = await ToolRegistry[tool].execute({
           context: authContext,
           store,
+          runId,
           settings,
           integrationTokenProvider: options.integrationTokenProvider,
           fetchImpl: options.fetchImpl,

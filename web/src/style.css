@@ -497,6 +497,38 @@ h3 {
   padding-top: 12px;
 }
 
+.approval-list {
+  display: grid;
+  gap: 16px;
+}
+
+.approval-item {
+  display: grid;
+  gap: 12px;
+  border: 1px solid #e0e0e0;
+  padding: 16px;
+}
+
+.approval-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: start;
+}
+
+.approval-item pre {
+  max-height: 260px;
+  overflow: auto;
+  margin: 0;
+  background: #f4f4f4;
+  padding: 12px;
+  white-space: pre-wrap;
+}
+
+.compact-details {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .search-result-list {
   display: flex;
   flex-wrap: wrap;

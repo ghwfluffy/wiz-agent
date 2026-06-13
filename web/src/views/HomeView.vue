@@ -6,6 +6,7 @@ import {
   type AgentPromptMode,
   type AgentPromptResponse,
   type AiConfig,
+  type Approval,
   type AuditEvent,
   type Connector,
   type ConnectorKind,
@@ -33,6 +34,7 @@ const tabs = [
   { id: "overview", label: "Overview" },
   { id: "chat", label: "Chat" },
   { id: "inbox", label: "Agent Inbox" },
+  { id: "approvals", label: "Approvals" },
   { id: "outbox", label: "Outbox" },
   { id: "tasks", label: "Tasks" },
   { id: "memory", label: "Memory" },
@@ -52,6 +54,7 @@ const activeTab = ref<TabId>(tabFromRoute(route.query.tab));
 const tasks = ref<Task[]>([]);
 const inbox = ref<InboundMessage[]>([]);
 const outbox = ref<OutboxMessage[]>([]);
+const approvals = ref<Approval[]>([]);
 const audit = ref<AuditEvent[]>([]);
 const senders = ref<Sender[]>([]);
 const connectors = ref<Connector[]>([]);
@@ -88,6 +91,7 @@ const knowledgeEditMode = ref(false);
 const taskStatusDraft = ref("");
 const taskFollowUpPrompt = ref("");
 const taskModalError = ref<string | null>(null);
+const approvalEditDrafts = reactive<Record<string, string>>({});
 
 const taskForm = reactive({
   title: "",
@@ -154,6 +158,7 @@ const promptModes: { value: AgentPromptMode; label: string }[] = [
 ];
 const knowledgeRootPaths = ["/personal", "/preferences", "/assistant", "/tasks", "/projects", "/newsletters", "/legacy"];
 const activeOutbox = computed(() => outbox.value.filter((message) => ["requires_approval", "pending", "approved", "sending"].includes(message.status)));
+const pendingApprovals = computed(() => approvals.value.filter((approval) => approval.status === "pending"));
 const outboxHistory = computed(() => outbox.value.filter((message) => ["sent", "failed"].includes(message.status)));
 const recentAudit = computed(() => audit.value.slice(0, 12));
 const agentRunEvents = computed(() => audit.value.filter((event) => event.action.startsWith("agent_run.")).slice(0, 12));
@@ -453,6 +458,11 @@ function promptContextSummary(): string {
   ].join("\n");
 }
 
+function approvalPayloadText(approval: Approval): string {
+  const body = approval.proposedPayload.body_text;
+  return typeof body === "string" ? body : "";
+}
+
 function setActiveTab(tabId: TabId): void {
   activeTab.value = tabId;
   void router.replace({ query: { ...route.query, tab: tabId } });
@@ -643,6 +653,11 @@ async function loadActiveTab(): Promise<void> {
         inbox.value = response.messages;
         break;
       }
+      case "approvals": {
+        const response = await api.listApprovals();
+        approvals.value = response.approvals;
+        break;
+      }
       case "outbox": {
         const response = await api.listOutbox();
         outbox.value = response.messages;
@@ -817,6 +832,40 @@ async function updateOutboxStatus(message: OutboxMessage, status: "approved" | "
     await loadDashboard();
   } catch {
     dashboardError.value = "Unable to update the outbound message.";
+  }
+}
+
+async function decidePendingApproval(approval: Approval, decision: "approve" | "reject"): Promise<void> {
+  try {
+    await api.updateApproval(approval.id, { decision });
+    await loadDashboard();
+    approvals.value = (await api.listApprovals()).approvals;
+  } catch {
+    dashboardError.value = "Unable to update the approval.";
+  }
+}
+
+async function editPendingApproval(approval: Approval): Promise<void> {
+  const text = (approvalEditDrafts[approval.id] ?? approvalPayloadText(approval)).trim();
+  if (!text) {
+    return;
+  }
+  try {
+    await api.updateApproval(approval.id, { decision: "edit", text });
+    await loadDashboard();
+    approvals.value = (await api.listApprovals()).approvals;
+  } catch {
+    dashboardError.value = "Unable to edit the approval.";
+  }
+}
+
+async function rejectStaleApprovals(): Promise<void> {
+  try {
+    await api.rejectStaleApprovals();
+    await loadDashboard();
+    approvals.value = (await api.listApprovals()).approvals;
+  } catch {
+    dashboardError.value = "Unable to reject stale approvals.";
   }
 }
 
@@ -1400,6 +1449,68 @@ onUnmounted(() => {
               </div>
             </div>
           </template>
+        </section>
+      </section>
+
+      <section v-show="activeTab === 'approvals'" id="panel-approvals" class="tab-panel" role="tabpanel" aria-labelledby="tab-approvals">
+        <section class="activity-section" aria-label="Approval inbox">
+          <div class="section-heading">
+            <div>
+              <h2>Approval inbox</h2>
+              <p class="label">{{ pendingApprovals.length }} pending</p>
+            </div>
+            <button class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="rejectStaleApprovals">
+              Reject stale
+            </button>
+          </div>
+          <p v-if="pendingApprovals.length === 0" class="empty">No pending approvals.</p>
+          <div v-else class="approval-list">
+            <article v-for="approval in pendingApprovals" :key="approval.id" class="approval-item">
+              <div class="approval-header">
+                <div>
+                  <p class="label">{{ approval.actionType }} / {{ approval.riskLevel }}</p>
+                  <h3>{{ approval.summary }}</h3>
+                </div>
+                <span class="cds--tag" :class="statusTagClass(approval.status)">{{ approval.status }}</span>
+              </div>
+              <dl class="detail-list compact-details">
+                <div>
+                  <dt>Run</dt>
+                  <dd>{{ approval.sourceRunId || "none" }}</dd>
+                </div>
+                <div>
+                  <dt>Source</dt>
+                  <dd>{{ approval.sourceRef || "none" }}</dd>
+                </div>
+                <div>
+                  <dt>Expires</dt>
+                  <dd>{{ formatDate(approval.expiresAt) }}</dd>
+                </div>
+              </dl>
+              <pre>{{ formatDetails(approval.proposedPayload) }}</pre>
+              <div v-if="approval.actionType === 'send_outbound_message'" class="cds--form-item">
+                <label class="cds--label" :for="`approval-edit-${approval.id}`">Edited message</label>
+                <textarea
+                  :id="`approval-edit-${approval.id}`"
+                  v-model="approvalEditDrafts[approval.id]"
+                  class="cds--text-area"
+                  rows="3"
+                  :placeholder="approvalPayloadText(approval)"
+                />
+              </div>
+              <div class="table-actions">
+                <button class="cds--btn cds--btn--sm cds--btn--primary" type="button" @click="decidePendingApproval(approval, 'approve')">
+                  Approve
+                </button>
+                <button class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="editPendingApproval(approval)">
+                  Save edit
+                </button>
+                <button class="cds--btn cds--btn--sm cds--btn--danger--tertiary" type="button" @click="decidePendingApproval(approval, 'reject')">
+                  Reject
+                </button>
+              </div>
+            </article>
+          </div>
         </section>
       </section>
 

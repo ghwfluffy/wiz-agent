@@ -61,6 +61,23 @@ Source records such as messages, tasks, approvals, memory revisions, tool calls,
 and audit logs should be preserved. Summaries, dashboards, and cached activity
 views should be rebuildable from source records where practical.
 
+## Approvals
+
+Approvals are user-owned source records for high-risk or owner-interrupting
+effects. Each approval stores the source agent run id when available, a source
+reference, action type, proposed payload, risk level, summary, expiration time,
+status, decision user, and decision timestamp. The proposed payload is metadata
+for host-owned execution; it must not contain connector credentials, deployment
+hostnames, raw secret references, or model-selected recipients.
+
+The first active approval actions are outbound owner messages and cross-app
+write proposals. Outbound approvals link to an outbox record with
+`requires_approval`; approving the approval changes the outbox record to
+`approved`, and rejecting or expiring it cancels the outbox record. Cross-app
+write approvals are queued and audited but are not executed by the generic web
+approval route yet; a future executor must reconstruct the call from the stored
+payload under host-owned token and capability policy.
+
 ## Task Events
 
 `task_events` is the user-visible timeline for a task. It records task creation,

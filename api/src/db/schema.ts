@@ -131,6 +131,11 @@ CREATE TABLE IF NOT EXISTS approvals (
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   status TEXT NOT NULL,
   action_type TEXT NOT NULL,
+  source_run_id TEXT,
+  source_ref TEXT,
+  risk_level TEXT NOT NULL DEFAULT 'high',
+  summary TEXT NOT NULL DEFAULT '',
+  expires_at TIMESTAMPTZ,
   action_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   requested_by TEXT NOT NULL,
   decided_by TEXT REFERENCES users(id) ON DELETE SET NULL,
@@ -375,6 +380,7 @@ CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_tasks_user_status_due ON tasks(user_id, status, due_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_user_created ON audit_log(user_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_agent_runs_user_started ON agent_runs(user_id, started_at DESC);
+CREATE INDEX IF NOT EXISTS idx_approvals_user_status_created ON approvals(user_id, status, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_markdown_documents_user_path ON markdown_documents(user_id, path);
 CREATE INDEX IF NOT EXISTS idx_markdown_sections_document_version ON markdown_sections(document_id, document_version);
 CREATE INDEX IF NOT EXISTS idx_rag_index_jobs_status_available ON rag_index_jobs(status, available_at, created_at);

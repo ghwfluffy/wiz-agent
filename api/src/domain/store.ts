@@ -22,6 +22,9 @@ import type {
   AgentStore,
   AgentMcpSession,
   AgentRunRecord,
+  ApprovalInput,
+  ApprovalRecord,
+  ApprovalStatus,
   AiConfig,
   ConnectorInput,
   ConnectorKind,
@@ -207,6 +210,26 @@ function outboundFromRow(row: Record<string, unknown>): OutboundMessageRecord {
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at),
     sentAt: row.sent_at instanceof Date ? row.sent_at.toISOString() : row.sent_at ? String(row.sent_at) : null,
     failureMessage: row.failure_message ? String(row.failure_message) : null
+  };
+}
+
+function approvalFromRow(row: Record<string, unknown>): ApprovalRecord {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    status: row.status as ApprovalStatus,
+    actionType: row.action_type as ApprovalRecord["actionType"],
+    sourceRunId: row.source_run_id ? String(row.source_run_id) : null,
+    sourceRef: row.source_ref ? String(row.source_ref) : null,
+    proposedPayload: (row.action_json as Record<string, unknown> | null) ?? {},
+    riskLevel: row.risk_level as ApprovalRecord["riskLevel"],
+    summary: String(row.summary ?? ""),
+    expiresAt: row.expires_at instanceof Date ? row.expires_at.toISOString() : row.expires_at ? String(row.expires_at) : "",
+    requestedBy: String(row.requested_by),
+    decidedBy: row.decided_by ? String(row.decided_by) : null,
+    decidedAt: row.decided_at instanceof Date ? row.decided_at.toISOString() : row.decided_at ? String(row.decided_at) : null,
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
   };
 }
 
@@ -2035,6 +2058,100 @@ export function createPostgresStore(pool: Pool): AgentStore {
         });
       }
       return record;
+    },
+
+    async createApproval(context, input) {
+      const result = await pool.query(
+        `INSERT INTO approvals
+          (id, user_id, status, action_type, source_run_id, source_ref, risk_level, summary, expires_at, action_json, requested_by)
+         VALUES ($1, $2, 'pending', $3, $4, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [
+          randomUUID(),
+          context.userId,
+          input.actionType,
+          input.sourceRunId ?? null,
+          input.sourceRef ?? null,
+          input.riskLevel,
+          input.summary,
+          input.expiresAt,
+          JSON.stringify(input.proposedPayload),
+          input.requestedBy ?? context.actorType
+        ]
+      );
+      const record = approvalFromRow(result.rows[0]);
+      await recordAudit(pool, context, "approval.requested", "approval", record.id, {
+        action_type: record.actionType,
+        risk_level: record.riskLevel,
+        source_run_id: record.sourceRunId,
+        source_ref: record.sourceRef
+      });
+      return record;
+    },
+
+    async listApprovals(context, statuses) {
+      const statusFilter = statuses && statuses.length > 0;
+      const result = await pool.query(
+        statusFilter
+          ? `SELECT * FROM approvals
+             WHERE user_id = $1 AND status = ANY($2::text[])
+             ORDER BY created_at DESC
+             LIMIT 500`
+          : `SELECT * FROM approvals
+             WHERE user_id = $1
+             ORDER BY created_at DESC
+             LIMIT 500`,
+        statusFilter ? [context.userId, statuses] : [context.userId]
+      );
+      return result.rows.map(approvalFromRow);
+    },
+
+    async getApproval(context, approvalId) {
+      const result = await pool.query(
+        `SELECT * FROM approvals WHERE id = $1 AND user_id = $2 LIMIT 1`,
+        [approvalId, context.userId]
+      );
+      return result.rows[0] ? approvalFromRow(result.rows[0]) : undefined;
+    },
+
+    async updateApprovalStatus(context, approvalId, status, decidedBy = null) {
+      const result = await pool.query(
+        `UPDATE approvals
+         SET status = $3,
+             decided_by = CASE WHEN $3 IN ('approved', 'rejected', 'expired') THEN $4 ELSE decided_by END,
+             decided_at = CASE WHEN $3 IN ('approved', 'rejected', 'expired') THEN now() ELSE decided_at END,
+             updated_at = now()
+         WHERE id = $1 AND user_id = $2
+         RETURNING *`,
+        [approvalId, context.userId, status, decidedBy]
+      );
+      const record = result.rows[0] ? approvalFromRow(result.rows[0]) : undefined;
+      if (record) {
+        await recordAudit(pool, context, `approval.${status}`, "approval", approvalId, {
+          action_type: record.actionType,
+          risk_level: record.riskLevel
+        });
+      }
+      return record;
+    },
+
+    async updateApprovalPayload(context, approvalId, proposedPayload, summary) {
+      const result = await pool.query(
+        `UPDATE approvals
+         SET action_json = $3,
+             summary = COALESCE($4, summary),
+             updated_at = now()
+         WHERE id = $1 AND user_id = $2 AND status = 'pending'
+         RETURNING *`,
+        [approvalId, context.userId, JSON.stringify(proposedPayload), summary ?? null]
+      );
+      const record = result.rows[0] ? approvalFromRow(result.rows[0]) : undefined;
+      if (record) {
+        await recordAudit(pool, context, "approval.edited", "approval", approvalId, {
+          action_type: record.actionType
+        });
+      }
+      return record;
     }
   };
 }
@@ -2058,6 +2175,7 @@ export function createMemoryStore(): AgentStore {
   const inboundProviderIds = new Map<string, string>();
   const inboundMessages = new Map<string, InboundMessageRecord>();
   const outboundMessages = new Map<string, OutboundMessageRecord>();
+  const approvals = new Map<string, ApprovalRecord>();
   const audit: AuditRecord[] = [];
   let aiConfig = DEFAULT_AI_CONFIG;
 
@@ -3128,6 +3246,76 @@ export function createMemoryStore(): AgentStore {
       outboundMessages.set(messageId, updated);
       pushAudit(context, `outbound.${status}`, "outbound_message", messageId, {
         failure_message: failureMessage
+      });
+      return updated;
+    },
+    async createApproval(context, input: ApprovalInput) {
+      const now = nowIso();
+      const approval: ApprovalRecord = {
+        ...input,
+        id: randomUUID(),
+        userId: context.userId,
+        status: "pending",
+        sourceRunId: input.sourceRunId ?? null,
+        sourceRef: input.sourceRef ?? null,
+        requestedBy: input.requestedBy ?? context.actorType,
+        decidedBy: null,
+        decidedAt: null,
+        createdAt: now,
+        updatedAt: now
+      };
+      approvals.set(approval.id, approval);
+      pushAudit(context, "approval.requested", "approval", approval.id, {
+        action_type: approval.actionType,
+        risk_level: approval.riskLevel,
+        source_run_id: approval.sourceRunId,
+        source_ref: approval.sourceRef
+      });
+      return approval;
+    },
+    async listApprovals(context, statuses) {
+      return [...approvals.values()]
+        .filter((approval) => approval.userId === context.userId)
+        .filter((approval) => !statuses || statuses.length === 0 || statuses.includes(approval.status))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    },
+    async getApproval(context, approvalId) {
+      const approval = approvals.get(approvalId);
+      return approval && approval.userId === context.userId ? approval : undefined;
+    },
+    async updateApprovalStatus(context, approvalId, status, decidedBy = null) {
+      const approval = approvals.get(approvalId);
+      if (!approval || approval.userId !== context.userId) {
+        return undefined;
+      }
+      const updated: ApprovalRecord = {
+        ...approval,
+        status,
+        decidedBy: ["approved", "rejected", "expired"].includes(status) ? decidedBy : approval.decidedBy,
+        decidedAt: ["approved", "rejected", "expired"].includes(status) ? nowIso() : approval.decidedAt,
+        updatedAt: nowIso()
+      };
+      approvals.set(approvalId, updated);
+      pushAudit(context, `approval.${status}`, "approval", approvalId, {
+        action_type: updated.actionType,
+        risk_level: updated.riskLevel
+      });
+      return updated;
+    },
+    async updateApprovalPayload(context, approvalId, proposedPayload, summary) {
+      const approval = approvals.get(approvalId);
+      if (!approval || approval.userId !== context.userId || approval.status !== "pending") {
+        return undefined;
+      }
+      const updated: ApprovalRecord = {
+        ...approval,
+        proposedPayload,
+        summary: summary ?? approval.summary,
+        updatedAt: nowIso()
+      };
+      approvals.set(approvalId, updated);
+      pushAudit(context, "approval.edited", "approval", approvalId, {
+        action_type: updated.actionType
       });
       return updated;
     }

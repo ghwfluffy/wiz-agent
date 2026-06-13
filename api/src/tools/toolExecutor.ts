@@ -1,11 +1,8 @@
 import type { Settings } from "../config/settings.js";
 import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain/types.js";
-import type { IntegrationActionId } from "../integrations/capabilityRegistry.js";
-import {
-  callIntegrationActionApi,
-  type IntegrationTokenProvider
-} from "./integrationGateway.js";
+import type { IntegrationTokenProvider } from "./integrationGateway.js";
 import type { ToolName } from "./contracts.js";
+import { createCrossAppApproval, createOutboundApproval } from "../security/approvalPolicy.js";
 
 export type ToolExecutionResult = {
   executed: boolean;
@@ -16,6 +13,7 @@ export type ToolExecutionResult = {
 export async function executeToolCall(options: {
   context: RequestContext;
   store: AgentStore;
+  runId?: string | null;
   toolName: ToolName;
   args: Record<string, unknown>;
   settings?: Settings;
@@ -379,7 +377,6 @@ export async function executeToolCall(options: {
       };
     }
     case "propose_outbound_message": {
-      const approvalRequired = options.args.approvalRequired === true;
       const destination = await resolveOwnerReplyDestination(options);
       if (!destination) {
         return {
@@ -388,9 +385,12 @@ export async function executeToolCall(options: {
           result: { reason: "owner_reply_destination_unavailable" }
         };
       }
-      const message = await options.store.queueOutboundMessage(options.context, {
+      const { approval, outbound } = await createOutboundApproval({
+        context: options.context,
+        store: options.store,
+        runId: options.runId ?? null,
+        sourceRef: options.replyToMessage?.subject ?? null,
         channel: destination.channel,
-        status: approvalRequired ? "requires_approval" : "pending",
         toAddr: destination.toAddr,
         subject: typeof options.args.subject === "string" ? options.args.subject : null,
         bodyText: String(options.args.body)
@@ -399,9 +399,10 @@ export async function executeToolCall(options: {
         executed: true,
         sideEffect: "local_persistence",
         result: {
-          outbound_message_id: message.id,
-          status: message.status,
-          approval_required: approvalRequired,
+          approval_id: approval.id,
+          outbound_message_id: outbound.id,
+          status: "queued_approval",
+          approval_required: true,
           destination: destination.source
         }
       };
@@ -521,36 +522,29 @@ export async function executeToolCall(options: {
         }
       };
     case "integration_action": {
-      if (!options.settings) {
-        return {
-          executed: false,
-          sideEffect: "none",
-          result: { reason: "settings_required" }
-        };
-      }
-      if (!options.integrationTokenProvider) {
-        return {
-          executed: false,
-          sideEffect: "none",
-          result: { reason: "integration_token_provider_required" }
-        };
-      }
-      const response = await callIntegrationActionApi({
-        settings: options.settings,
+      const approval = await createCrossAppApproval({
         context: options.context,
-        actionId: options.args.actionId as IntegrationActionId,
-        pathParams: asStringRecord(options.args.pathParams),
-        query: asQueryRecord(options.args.query),
-        body: options.args.body,
-        tokenProvider: options.integrationTokenProvider,
-        fetchImpl: options.fetchImpl
+        store: options.store,
+        runId: options.runId ?? null,
+        actionId: String(options.args.actionId),
+        proposedPayload: {
+          action_id: options.args.actionId,
+          path_params: options.args.pathParams,
+          query: options.args.query,
+          body: options.args.body ?? null,
+          user_intent_summary: options.args.userIntentSummary
+        },
+        summary: String(options.args.userIntentSummary)
       });
       return {
-        executed: response.ok,
-        sideEffect: response.ok ? "cross_app_api" : "none",
-        result: response.ok
-          ? { status: response.status, data: response.data }
-          : { reason: response.reason }
+        executed: true,
+        sideEffect: "local_persistence",
+        result: {
+          approval_id: approval.id,
+          status: "queued_approval",
+          approval_required: true,
+          action_id: options.args.actionId
+        }
       };
     }
     default:
@@ -612,30 +606,4 @@ async function resolveOwnerReplyDestination(options: {
     return { channel: "email", toAddr: email, source: "owner-contact" };
   }
   return undefined;
-}
-
-function asStringRecord(value: unknown): Record<string, string> | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const result: Record<string, string> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (typeof item === "string") {
-      result[key] = item;
-    }
-  }
-  return result;
-}
-
-function asQueryRecord(value: unknown): Record<string, string | number | boolean> | undefined {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const result: Record<string, string | number | boolean> = {};
-  for (const [key, item] of Object.entries(value)) {
-    if (typeof item === "string" || typeof item === "number" || typeof item === "boolean") {
-      result[key] = item;
-    }
-  }
-  return result;
 }

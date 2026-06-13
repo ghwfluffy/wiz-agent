@@ -5,7 +5,9 @@ import {
   MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID,
   MEMORY_MARKDOWN_BACKFILL_SQL,
   MCP_TOOL_ALLOWLIST_MIGRATION_ID,
-  MCP_TOOL_ALLOWLIST_SQL
+  MCP_TOOL_ALLOWLIST_SQL,
+  APPROVAL_POLICY_MIGRATION_ID,
+  APPROVAL_POLICY_SQL
 } from "../src/db/migrations.js";
 import { INITIAL_SCHEMA_SQL } from "../src/db/schema.js";
 
@@ -61,7 +63,10 @@ describe("initial schema", () => {
     expect(INITIAL_SCHEMA_SQL).toContain("idx_audit_log_user_created");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_agent_runs_user_started");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_agent_mcp_sessions_token");
+    expect(INITIAL_SCHEMA_SQL).toContain("idx_approvals_user_status_created");
     expect(INITIAL_SCHEMA_SQL).toContain("allowed_tools_json JSONB");
+    expect(INITIAL_SCHEMA_SQL).toContain("source_run_id TEXT");
+    expect(INITIAL_SCHEMA_SQL).toContain("expires_at TIMESTAMPTZ");
   });
 
   it("defines the tenant-collapse migration", () => {
@@ -84,5 +89,11 @@ describe("initial schema", () => {
   it("defines the MCP tool allowlist migration", () => {
     expect(MCP_TOOL_ALLOWLIST_MIGRATION_ID).toBe("0004_mcp_tool_allowlist");
     expect(MCP_TOOL_ALLOWLIST_SQL).toContain("ADD COLUMN IF NOT EXISTS allowed_tools_json JSONB");
+  });
+
+  it("defines the approval policy migration", () => {
+    expect(APPROVAL_POLICY_MIGRATION_ID).toBe("0006_approval_policy");
+    expect(APPROVAL_POLICY_SQL).toContain("ADD COLUMN IF NOT EXISTS source_run_id TEXT");
+    expect(APPROVAL_POLICY_SQL).toContain("idx_approvals_user_status_created");
   });
 });

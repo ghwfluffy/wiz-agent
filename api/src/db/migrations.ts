@@ -2,6 +2,7 @@ export const COLLAPSE_TENANT_TO_USER_MIGRATION_ID = "0002_collapse_tenant_to_use
 export const MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID = "0003_memory_markdown_backfill";
 export const MCP_TOOL_ALLOWLIST_MIGRATION_ID = "0004_mcp_tool_allowlist";
 export const TASK_SCHEDULE_CONTEXT_MIGRATION_ID = "0005_task_schedule_context";
+export const APPROVAL_POLICY_MIGRATION_ID = "0006_approval_policy";
 
 const tenantOwnedTables = [
   "identities",
@@ -154,4 +155,15 @@ ALTER TABLE agent_mcp_sessions
 export const TASK_SCHEDULE_CONTEXT_SQL = `
 ALTER TABLE tasks
   ADD COLUMN IF NOT EXISTS schedule_context_json JSONB NOT NULL DEFAULT '{}'::jsonb;
+`;
+
+export const APPROVAL_POLICY_SQL = `
+ALTER TABLE approvals
+  ADD COLUMN IF NOT EXISTS source_run_id TEXT,
+  ADD COLUMN IF NOT EXISTS source_ref TEXT,
+  ADD COLUMN IF NOT EXISTS risk_level TEXT NOT NULL DEFAULT 'high',
+  ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
+
+CREATE INDEX IF NOT EXISTS idx_approvals_user_status_created ON approvals(user_id, status, created_at DESC);
 `;

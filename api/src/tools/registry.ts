@@ -11,6 +11,7 @@ export type ToolSideEffect = "none" | "local_persistence" | "cross_app_api";
 export type ToolExecutionContext = {
   context: RequestContext;
   store: AgentStore;
+  runId?: string | null;
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
