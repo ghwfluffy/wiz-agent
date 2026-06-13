@@ -8,7 +8,12 @@ import type {
 import { callIntegrationActionApi, type IntegrationTokenProvider } from "./integrationGateway.js";
 import type { ToolName } from "./contracts.js";
 import { createCrossAppApproval, createOutboundApproval } from "../security/approvalPolicy.js";
-import { listAppCapabilities, type IntegrationActionId, type IntegrationAppId } from "../integrations/capabilityRegistry.js";
+import {
+  getIntegrationAction,
+  listAppCapabilities,
+  type IntegrationActionId,
+  type IntegrationAppId
+} from "../integrations/capabilityRegistry.js";
 import { recordTaskOutcomeMemory } from "../memory/taskOutcomeMemory.js";
 import {
   addMemoryListItem,
@@ -1237,13 +1242,26 @@ export async function executeToolCall(options: {
         }
       };
     case "integration_action": {
+      const actionId = String(options.args.actionId) as IntegrationActionId;
+      const action = getIntegrationAction(actionId);
+      if (action.access !== "write") {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: {
+            rejected: true,
+            reason: "integration_action_not_write",
+            action_id: actionId
+          }
+        };
+      }
       const approval = await createCrossAppApproval({
         context: options.context,
         store: options.store,
         runId: options.runId ?? null,
-        actionId: String(options.args.actionId),
+        actionId,
         proposedPayload: {
-          action_id: options.args.actionId,
+          action_id: actionId,
           path_params: options.args.pathParams,
           query: options.args.query,
           body: options.args.body ?? null,
@@ -1258,7 +1276,7 @@ export async function executeToolCall(options: {
           approval_id: approval.id,
           status: "queued_approval",
           approval_required: true,
-          action_id: options.args.actionId
+          action_id: actionId
         }
       };
     }

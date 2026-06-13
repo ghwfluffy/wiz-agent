@@ -120,6 +120,35 @@ describe("approval and notification policy", () => {
     ]);
   });
 
+  it("rejects read-only integration_action requests without queuing approval", async () => {
+    const { context, store } = await testContext();
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [{
+          toolName: "integration_action",
+          arguments: {
+            actionId: "goals.list_goals",
+            pathParams: {},
+            query: { include_archived: false },
+            userIntentSummary: "Read current goals."
+          }
+        }]
+      }),
+      request: { prompt: "What goals do I have?" },
+      toolClient: new LocalToolClient()
+    });
+
+    expect(result.executionResult).toEqual({
+      rejected: true,
+      reason: "integration_action_not_write",
+      action_id: "goals.list_goals"
+    });
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
+  });
+
   it("approves the current owner approval from an SMS YES reply", async () => {
     const { context, store, settings } = await testContext();
     const approval = await store.createApproval(context, {

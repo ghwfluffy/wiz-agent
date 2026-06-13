@@ -74,11 +74,41 @@ describe("personal dashboard API", () => {
     });
     await store.writeMarkdownDocument(owner, {
       path: "/assistant/decisions/2026-06.md",
-      markdown: "# Assistant Decisions: 2026-06\n\n## Travel check-in\n\n- Queued a check-in because the task is due soon."
+      markdown: [
+        "# Assistant Decisions: 2026-06",
+        "",
+        "Deterministic host-written ledger of meaningful assistant decisions.",
+        "",
+        "## 2026-06-12T10:00:00.000Z - older decision",
+        "",
+        "- Action chosen: stayed quiet",
+        "",
+        "## 2026-06-13T10:00:00.000Z - travel check-in",
+        "",
+        "- Action chosen: queued a check-in because the task is due soon.",
+        "- Rationale: Owner asked for a short follow-up before the appointment."
+      ].join("\n")
     });
     await store.writeMarkdownDocument(owner, {
       path: "/assistant/feedback/2026-06.md",
-      markdown: "# Owner Feedback: 2026-06\n\n## communication feedback\n\n- Owner said to avoid early texts."
+      markdown: [
+        "# Owner Feedback: 2026-06",
+        "",
+        "Structured owner corrections captured by the controlled feedback tool.",
+        "",
+        "## 2026-06-12 memory feedback",
+        "",
+        "Older feedback should not headline the dashboard.",
+        "",
+        "## 2026-06-13 communication feedback",
+        "",
+        "recorded_at: 2026-06-13T10:00:00.000Z",
+        "feedback_type: communication",
+        "",
+        "### Owner Correction",
+        "",
+        "Owner said to avoid early texts."
+      ].join("\n")
     });
     await store.writeMarkdownDocument(owner, {
       path: "/personal/lists/books.md",
@@ -147,7 +177,8 @@ describe("personal dashboard API", () => {
     expect(payload.pendingApprovals).toEqual([
       expect.objectContaining({ summary: "Send owner a travel-plan check-in." })
     ]);
-    expect(payload.recentDecisions[0]?.excerpt).toContain("Queued a check-in");
+    expect(payload.recentDecisions[0]?.excerpt).toContain("travel check-in");
+    expect(payload.recentDecisions[0]?.excerpt).not.toContain("older decision");
     expect(payload.recentFeedback[0]?.excerpt).toContain("avoid early texts");
     expect(payload.activeThreads).toEqual([
       expect.objectContaining({

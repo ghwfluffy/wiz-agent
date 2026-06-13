@@ -3,6 +3,7 @@ import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { MarkdownConflict, RequestContext } from "../src/domain/types.js";
 import { buildApp } from "../src/http/app.js";
+import { buildUnifiedMarkdownDiff } from "../src/memory/markdownDiff.js";
 import { buildMcpApp } from "../src/mcp/server.js";
 
 function isConflict(value: unknown): value is MarkdownConflict {
@@ -143,6 +144,18 @@ describe("markdown memory filesystem", () => {
         afterMarkdown: expect.stringContaining("# Other")
       })
     ]);
+  });
+
+  it("bounds diff generation for line-heavy markdown", () => {
+    const before = Array.from({ length: 700 }, (_, index) => `old line ${index}`).join("\n");
+    const after = Array.from({ length: 700 }, (_, index) => `new line ${index}`).join("\n");
+
+    const diff = buildUnifiedMarkdownDiff(before, after);
+
+    expect(diff.truncated).toBe(true);
+    expect(diff.addedLines).toBe(700);
+    expect(diff.removedLines).toBe(700);
+    expect(diff.unified.split("\n").length).toBeLessThanOrEqual(220);
   });
 
   it("exposes recent memory changes through the authenticated API", async () => {

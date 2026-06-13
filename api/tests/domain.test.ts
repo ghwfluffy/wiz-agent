@@ -744,6 +744,19 @@ describe("domain and user ownership APIs", () => {
     }
     const [job] = await store.claimRagIndexJobs(1, new Date());
     await store.markRagIndexJobDead(job.id, "embedding provider unavailable");
+    await store.recordToolCall(context, {
+      runId: null,
+      toolName: "create_task",
+      status: "rejected",
+      arguments: {
+        title: "bad",
+        leaked: "super-secret-token"
+      },
+      result: {
+        password: "super-secret-token"
+      },
+      validationError: "prompt is required"
+    });
 
     const jobsResponse = await app.request("/api/v1/jobs", {
       headers: {
@@ -752,7 +765,10 @@ describe("domain and user ownership APIs", () => {
     });
     expect(jobsResponse.status).toBe(200);
     const jobsPayload = await jobsResponse.json() as {
-      recentFailures: { ragJobs: Array<{ id: string; status: string; lastError: string | null }> };
+      recentFailures: {
+        ragJobs: Array<{ id: string; status: string; lastError: string | null }>;
+        toolCalls: Array<Record<string, unknown>>;
+      };
       jobs: Array<{ name: string; deadJobs?: number; status: string }>;
     };
     expect(jobsPayload.recentFailures.ragJobs).toEqual([
@@ -762,6 +778,16 @@ describe("domain and user ownership APIs", () => {
         lastError: "embedding provider unavailable"
       })
     ]);
+    expect(jobsPayload.recentFailures.toolCalls).toEqual([
+      expect.objectContaining({
+        toolName: "create_task",
+        status: "rejected",
+        validationError: "prompt is required"
+      })
+    ]);
+    expect(jobsPayload.recentFailures.toolCalls[0]).not.toHaveProperty("arguments");
+    expect(jobsPayload.recentFailures.toolCalls[0]).not.toHaveProperty("result");
+    expect(JSON.stringify(jobsPayload.recentFailures.toolCalls)).not.toContain("super-secret-token");
     expect(jobsPayload.jobs).toEqual(expect.arrayContaining([
       expect.objectContaining({
         name: "rag-index",

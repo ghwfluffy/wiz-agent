@@ -1,5 +1,6 @@
 const SNAPSHOT_CHAR_LIMIT = 12_000;
 const DIFF_LINE_LIMIT = 220;
+const MAX_LCS_CELLS = 250_000;
 
 const sensitiveLinePattern = /\b(password|passwd|pwd|secret|token|api\s*key|api[_-]?key|access[_-]?key|private[_-]?key|credential|authorization|bearer)\b/i;
 const assignmentSecretPattern = /(:\s*|=\s*)([A-Za-z0-9_./+=@:-]{8,})/g;
@@ -39,6 +40,19 @@ export function redactedMarkdownSnapshot(markdown: string | null | undefined): M
 export function buildUnifiedMarkdownDiff(before: string, after: string): MarkdownDiff {
   const beforeLines = before.split("\n");
   const afterLines = after.split("\n");
+  if ((beforeLines.length + 1) * (afterLines.length + 1) > MAX_LCS_CELLS) {
+    const beforePreview = beforeLines.slice(0, DIFF_LINE_LIMIT);
+    const afterPreview = afterLines.slice(0, DIFF_LINE_LIMIT);
+    return {
+      unified: [
+        ...beforePreview.map((line) => `-${line}`),
+        ...afterPreview.map((line) => `+${line}`)
+      ].slice(0, DIFF_LINE_LIMIT).join("\n"),
+      truncated: true,
+      addedLines: afterLines.length,
+      removedLines: beforeLines.length
+    };
+  }
   const rows = beforeLines.length + 1;
   const cols = afterLines.length + 1;
   const table = Array.from({ length: rows }, () => Array<number>(cols).fill(0));

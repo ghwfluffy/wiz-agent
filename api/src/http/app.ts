@@ -21,7 +21,8 @@ import type {
   OutboundMessageRecord,
   RequestContext,
   SenderStatus,
-  TaskRecord
+  TaskRecord,
+  ToolCallRecord
 } from "../domain/types.js";
 import { decideApproval, editApproval } from "../security/approvalPolicy.js";
 import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
@@ -194,12 +195,30 @@ function isCredentialLikeLine(line: string): boolean {
   return /(password|secret|token|api[_ -]?key|credential|authorization|bearer)/i.test(line);
 }
 
-function compactMarkdownSnippet(markdown: string, maxLines = 3): string {
-  return markdown
+function lowSignalMarkdownLine(line: string): boolean {
+  return /^(recorded_at|feedback_type|durability|follow_up_target|source_run_id):/i.test(line) ||
+    /^###\s+linked ids/i.test(line);
+}
+
+function lastMarkdownSectionIndex(lines: string[]): number {
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    if (/^##\s+/.test(lines[index] ?? "")) {
+      return index;
+    }
+  }
+  return -1;
+}
+
+function compactMarkdownSnippet(markdown: string, maxLines = 3, preferLatestSection = false): string {
+  const lines = markdown
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line && !line.startsWith("<!--"))
     .filter((line) => !isCredentialLikeLine(line))
+    .filter((line) => !lowSignalMarkdownLine(line));
+  const start = preferLatestSection ? lastMarkdownSectionIndex(lines) : -1;
+  const selected = start >= 0 ? lines.slice(start) : lines;
+  return selected
     .slice(0, maxLines)
     .join(" ")
     .slice(0, 400);
@@ -209,7 +228,11 @@ function markdownExcerpt(document: MarkdownDocumentRecord | undefined): string |
   if (!document) {
     return null;
   }
-  return compactMarkdownSnippet(document.markdown) || document.title || document.path;
+  const preferLatestSection = document.path.startsWith("/assistant/decisions/") ||
+    document.path.startsWith("/assistant/feedback/");
+  return compactMarkdownSnippet(document.markdown, preferLatestSection ? 6 : 3, preferLatestSection) ||
+    document.title ||
+    document.path;
 }
 
 function checkboxCounts(markdown: string): { total: number; archived: number; active: number } {
@@ -256,6 +279,18 @@ function auditSummary(event: AuditRecord): string {
     .filter((value): value is string | number | boolean => ["string", "number", "boolean"].includes(typeof value))
     .map(String)
     .join(" - ") || event.action;
+}
+
+function publicFailedToolCall(toolCall: ToolCallRecord) {
+  return {
+    id: toolCall.id,
+    runId: toolCall.runId,
+    toolName: toolCall.toolName,
+    status: toolCall.status,
+    validationError: toolCall.validationError,
+    createdAt: toolCall.createdAt,
+    completedAt: toolCall.completedAt
+  };
 }
 
 export function buildApp(options: AppOptions = {}): Hono {
@@ -366,7 +401,7 @@ export function buildApp(options: AppOptions = {}): Hono {
       ragIndexHealth: ragHealth,
       recentFailures: {
         agentRuns: failedRuns.slice(0, 20),
-        toolCalls: failedToolCalls.slice(0, 20),
+        toolCalls: failedToolCalls.slice(0, 20).map(publicFailedToolCall),
         ragJobs: ragJobs.filter((job) => job.status === "failed" || job.status === "dead").slice(0, 20),
         guardrails: recentGuardrails.slice(0, 20)
       },
