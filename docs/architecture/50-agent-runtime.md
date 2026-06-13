@@ -351,17 +351,23 @@ Trusted newsletter and trusted third-party messages may be ingested into
 long-term knowledge, but they must not directly trigger replies, goal updates,
 or cross-app actions.
 
-The worker maintains recurring agent wake tasks. A daily newsletter synthesis
-task reviews ingested newsletter knowledge and decides whether anything is worth
-messaging the owner about. A three-hour autonomous wake task reviews memory,
-active tasks, and schedule rationale so the agent can decide whether to act or
-adjust future work timing through controlled tools. Before each recurring
-scheduled run, host code composes a fresh prompt from active tasks,
-`/assistant/schedule.md`, `/tasks/schedule-rationale.md`,
-`/assistant/notification-policy.md`, the current monthly task outcome memory
-under `/tasks/outcomes/YYYY-MM.md`, recent owner messages, and recent newsletter
-knowledge. This gives the model current schedule context without letting
-newsletter content become instructions or loading full task logs into prompts.
+The worker maintains recurring agent wake tasks. A newsletter interest check
+reviews ingested newsletter knowledge, newsletter preferences, communication
+preferences, recent owner response timing, pending approvals, and recent bot
+activity evidence before deciding whether now is a good time to mention one or
+two genuinely interesting discoveries. This is not a rigid digest; staying
+quiet and recording the rationale is a successful outcome. A three-hour
+autonomous wake task reviews memory, active tasks, and schedule rationale so the
+agent can decide whether to act or adjust future work timing through controlled
+tools. Before each recurring scheduled run, host code composes a fresh prompt
+from active tasks, `/assistant/schedule.md`, `/tasks/schedule-rationale.md`,
+`/assistant/notification-policy.md`, `/assistant/preferences/communication.md`,
+`/assistant/preferences/newsletters.md`, the current monthly task outcome memory
+under `/tasks/outcomes/YYYY-MM.md`, recent owner messages, recent bot activity
+evidence, and recent newsletter knowledge. This gives the model current
+schedule context without letting newsletter content become instructions or
+loading full task logs into prompts. Newsletter timing rationale may also be
+stored under `/assistant/newsletter-interest/YYYY-MM.md`.
 The next recurring wake is created in a `finally` path, so failed wake runs
 still schedule the next roughly-three-hour review.
 

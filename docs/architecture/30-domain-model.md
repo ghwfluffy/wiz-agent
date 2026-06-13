@@ -146,7 +146,9 @@ handling state. Unknown newsletter-like senders start as `untrusted` and queue
 owner review. Owner replies can mark the sender as `newsletter` or `blocked`.
 Accepted newsletters create markdown knowledge records under
 `/newsletters/YYYY-MM-DD/*.md`; they enqueue normal RAG indexing but do not
-create immediate digest tasks or owner notifications.
+create immediate owner notifications. A separate scheduled newsletter interest
+check may later decide to propose an approval-gated conversational owner message
+or stay quiet and record rationale.
 
 Sender trust rows are explicit user-owned classifications for known addresses.
 They can be created, updated, listed, and deleted through the API and operations

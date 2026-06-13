@@ -13,7 +13,7 @@ describe("worker loop", () => {
     expect(isWorkerEntrypoint(new URL("../src/worker.ts", import.meta.url).href, "src/worker.ts")).toBe(true);
   });
 
-  it("keeps newsletter, autonomous wake, and self-review tasks scheduled with durable rationale", async () => {
+  it("keeps newsletter interest, autonomous wake, and self-review tasks scheduled with durable rationale", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
       APP_ENV: "test",
@@ -39,10 +39,10 @@ describe("worker loop", () => {
     const tasks = await store.listTasks(context);
     expect(tasks).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        title: "Daily newsletter synthesis",
-        prompt: expect.stringContaining("newsletters/"),
-        scheduleRationale: "Default daily review of trusted newsletter knowledge.",
-        recurrencePolicy: "daily at 17:00 local/server time"
+        title: "Newsletter interest check",
+        prompt: expect.stringContaining("not a daily digest"),
+        scheduleRationale: "Default preference-aware newsletter interest check.",
+        recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
       }),
       expect.objectContaining({
         title: "Autonomous agent wake review",
@@ -58,7 +58,7 @@ describe("worker loop", () => {
       })
     ]));
     await expect(store.getMemoryDocument(context, "agent-schedule")).resolves.toMatchObject({
-      body: expect.stringContaining("Assistant self-review")
+      body: expect.stringContaining("Newsletter interest check")
     });
     await expect(store.getMarkdownDocument(context, "/tasks/schedule-rationale.md")).resolves.toMatchObject({
       markdown: expect.stringContaining("Schedule Rationale")
@@ -69,6 +69,269 @@ describe("worker loop", () => {
     await expect(store.getMarkdownDocument(context, "/assistant/preferences/newsletters.md")).resolves.toMatchObject({
       markdown: expect.stringContaining("Newsletter Preferences")
     });
+  });
+
+  it("keeps an existing legacy newsletter synthesis task from duplicating and rolls it forward to interest checks", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-legacy-newsletter-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-legacy-newsletter-test",
+      session
+    };
+    const legacyTask = await store.createTask(context, {
+      title: "Daily newsletter synthesis",
+      prompt: "Legacy newsletter task.",
+      dueAt: "2026-06-13T17:00:00.000Z",
+      scheduleRationale: "Existing task from before newsletter interest checks.",
+      recurrencePolicy: "daily newsletter synthesis"
+    });
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient(),
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+
+    expect((await store.listTasks(context)).filter((entry) =>
+      ["Daily newsletter synthesis", "Newsletter interest check"].includes(entry.title) &&
+      !["completed", "cancelled", "failed"].includes(entry.status)
+    )).toHaveLength(1);
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_schedule_rationale",
+            arguments: {
+              taskId: legacyTask.id,
+              rationale: "Stayed quiet and switch future checks to conversational interest timing."
+            }
+          }
+        ]
+      }),
+      now: new Date("2026-06-13T17:00:00.000Z")
+    });
+
+    await expect(store.getTask(context, legacyTask.id)).resolves.toMatchObject({ status: "completed" });
+    expect((await store.listTasks(context)).filter((entry) =>
+      entry.title === "Newsletter interest check" &&
+      entry.status === "pending" &&
+      entry.sourceTaskId === legacyTask.id
+    )).toHaveLength(1);
+  });
+
+  it("builds a newsletter interest prompt with preferences, activity evidence, and conversational timing guidance", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-newsletter-prompt-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-newsletter-prompt-test",
+      session
+    };
+    await store.writeMarkdownDocument(context, {
+      path: "/newsletters/2026-06-13/infra-weekly.md",
+      markdown: "# Infra Weekly\n\nA surprising database outage writeup."
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/assistant/preferences/newsletters.md",
+      markdown: "# Newsletter Preferences\n\n- Mention weird infrastructure and agent tooling only when it is genuinely useful."
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/assistant/preferences/communication.md",
+      markdown: "# Communication Preferences\n\n- Prefer fewer proactive messages when approvals are already pending."
+    });
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "requires_approval",
+      toAddr: "owner-sms@example.test",
+      bodyText: "Newsletter note: previous item is waiting."
+    });
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient(),
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+    const task = (await store.listTasks(context)).find((entry) => entry.title === "Newsletter interest check");
+    expect(task).toBeTruthy();
+
+    const prompt = await buildScheduledTaskPrompt({
+      store,
+      context,
+      task: task!,
+      now: new Date()
+    });
+
+    expect(prompt).toContain("This is not a daily digest");
+    expect(prompt).toContain("Use get_recent_bot_activity");
+    expect(prompt).toContain("/assistant/preferences/newsletters.md");
+    expect(prompt).toContain("Communication preferences:");
+    expect(prompt).toContain("Newsletter preferences:");
+    expect(prompt).toContain("Recent bot activity evidence for newsletter timing:");
+    expect(prompt).toContain("pending_approvals=");
+    expect(prompt).toContain("owner_visible_contact_attempts=");
+    expect(prompt).toContain("Prefer staying quiet when recent contact cadence is high");
+    expect(prompt).toContain("A surprising database outage writeup");
+  });
+
+  it("lets a scheduled newsletter interest check stay quiet and record rationale", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-newsletter-quiet-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-newsletter-quiet-test",
+      session
+    };
+    const task = await store.createTask(context, {
+      title: "Newsletter interest check",
+      prompt: "Run newsletter interest check.",
+      dueAt: "2026-06-13T17:00:00.000Z",
+      scheduleRationale: "Test quiet newsletter check.",
+      recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
+    });
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_schedule_rationale",
+            arguments: {
+              taskId: task.id,
+              rationale: "Stayed quiet: recent newsletter material was routine and an approval was already pending.",
+              sourceMemoryPath: "/assistant/newsletter-interest/2026-06.md",
+              recurrencePolicy: "check again tomorrow unless owner preference changes",
+              nextReviewAt: "2026-06-14T17:00:00.000Z"
+            }
+          }
+        ]
+      }),
+      now: new Date("2026-06-13T17:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1, outboundAttempted: 0 });
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({
+      status: "completed",
+      scheduleRationale: "Stayed quiet: recent newsletter material was routine and an approval was already pending."
+    });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([]);
+    await expect(store.listTaskEvents(context, task.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ eventType: "task.schedule_rationale_recorded" }),
+      expect.objectContaining({ eventType: "scheduled_task.outcome" })
+    ]));
+    expect((await store.listTasks(context)).filter((entry) =>
+      entry.title === "Newsletter interest check" &&
+      entry.status === "pending" &&
+      entry.id !== task.id
+    )).toHaveLength(1);
+  });
+
+  it("lets a scheduled newsletter interest check propose an approval-gated conversational message", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-newsletter-propose-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-newsletter-propose-test",
+      session
+    };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        sms_gateway: "owner-sms@example.test"
+      }
+    });
+    await store.writeMarkdownDocument(context, {
+      path: "/newsletters/2026-06-13/agent-weekly.md",
+      markdown: "# Agent Weekly\n\nA practical agent runtime writeup with a useful approval pattern."
+    });
+    const task = await store.createTask(context, {
+      title: "Newsletter interest check",
+      prompt: "Run newsletter interest check.",
+      dueAt: "2026-06-13T17:00:00.000Z",
+      scheduleRationale: "Test proposed newsletter message.",
+      recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
+    });
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "propose_outbound_message",
+            arguments: {
+              intent: "reply",
+              body: "One newsletter thing worth flagging: Agent Weekly had a useful approval pattern for keeping runtime actions gated. Might be relevant to the assistant work."
+            }
+          }
+        ]
+      }),
+      now: new Date("2026-06-13T17:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1, outboundAttempted: 0 });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        status: "requires_approval",
+        toAddr: "owner-sms@example.test",
+        bodyText: expect.stringContaining("One newsletter thing worth flagging")
+      })
+    ]);
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([
+      expect.objectContaining({
+        actionType: "send_outbound_message",
+        riskLevel: "high",
+        summary: expect.stringContaining("One newsletter thing worth flagging")
+      })
+    ]);
+    await expect(store.listToolCalls(context)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        toolName: "propose_outbound_message",
+        status: "accepted",
+        result: expect.objectContaining({
+          execution: expect.objectContaining({
+            status: "queued_approval"
+          })
+        })
+      })
+    ]));
   });
 
   it("builds a self-review prompt with activity and preference-memory guidance", async () => {

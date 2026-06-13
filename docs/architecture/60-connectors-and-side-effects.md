@@ -44,15 +44,18 @@ filesystem under absolute dated paths such as
 `/newsletters/2026-06-13/forbes.md`. Source ingestion stores the normalized
 newsletter content plus trust-boundary metadata and enqueues normal markdown/RAG
 indexing. It does not run owner-command tools, does not run the generic trusted
-message memory extractor, and does not queue an immediate owner digest. Owner
+message memory extractor, and does not queue an immediate owner message. Owner
 `ONCE` replies ingest only the reviewed message without trusting future
 messages. Owner `YES` replies mark the sender as `newsletter` and ingest the
 reviewed message. Owner `NO` replies mark the sender as `blocked`.
 
-Daily newsletter synthesis is a scheduled agent task, not an inbound side
-effect. That task reviews newsletter knowledge and owner newsletter preferences,
-then decides whether to queue a concise owner reply or record that nothing was
-worth interrupting the owner about.
+A newsletter interest check is a scheduled agent task, not an inbound side
+effect. That task reviews newsletter knowledge, newsletter preferences,
+communication preferences, recent owner response timing, pending approvals, and
+recent bot activity evidence. It then decides whether now is a good time to
+propose an approval-gated conversational owner message about one or two
+specific discoveries, or to stay quiet and record rationale. It is not a rigid
+daily digest.
 
 Connectors should call `processInboundMessage`, not the lower-level sender
 policy helper directly. The processor records the message, applies sender
@@ -84,19 +87,22 @@ uses the memory write tool. Host code scopes and audits the write. Owner
 messages should not be pre-written to memory before the agent has made that
 decision.
 
-The worker also maintains autonomous scheduled tasks. A daily newsletter task
-reviews the accumulated newsletter knowledge. A three-hour wake task reviews
-long-term memory, active tasks, and schedule rationale so the agent can decide
-whether anything needs action or whether a task should be rescheduled. A
-twice-daily assistant self-review task inspects recent assistant behavior,
-owner-contact cadence, pending approvals, failed outbound delivery, failed
-runs, and durable communication preference memory.
-Newsletter synthesis runs from the schedule, not directly from inbound
+The worker also maintains autonomous scheduled tasks. A newsletter interest
+check reviews accumulated newsletter knowledge and decides whether to mention a
+small number of unusually interesting items conversationally or stay quiet. A
+three-hour wake task reviews long-term memory, active tasks, and schedule
+rationale so the agent can decide whether anything needs action or whether a
+task should be rescheduled. A twice-daily assistant self-review task inspects
+recent assistant behavior, owner-contact cadence, pending approvals, failed
+outbound delivery, failed runs, and durable communication preference memory.
+The newsletter interest check runs from the schedule, not directly from inbound
 newsletter delivery. It receives newsletter excerpts as trusted knowledge data,
 must still choose a host-approved tool, and can queue an owner message only
-through the normal outbound tool. Autonomous wakes can update task schedule,
-status, waiting/blocked state, follow-up tasks, and schedule rationale only
-through MCP tools that require rationale and write task events. Self-review
+through the normal approval-gated outbound tool. Quiet decisions should record
+rationale through task events or assistant memory such as
+`/assistant/newsletter-interest/YYYY-MM.md`. Autonomous wakes can update task
+schedule, status, waiting/blocked state, follow-up tasks, and schedule rationale
+only through MCP tools that require rationale and write task events. Self-review
 writes compact operational notes under `/assistant/self-review/YYYY-MM-DD.md`
 and may update `/assistant/preferences/communication.md` or
 `/assistant/preferences/newsletters.md` only for owner-stated preferences or

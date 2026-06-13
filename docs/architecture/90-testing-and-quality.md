@@ -66,11 +66,11 @@ Current tests cover:
 - owner-contact backed untrusted sender review notification queueing.
 - owner SMS sender-review replies for newsletter trust, one-time review, and
   blocking.
-- trusted newsletter knowledge ingestion without immediate digest task queueing.
+- trusted newsletter knowledge ingestion without immediate owner messaging.
 - trusted non-owner sender memory integration without owner-command tool
   routing.
 - owner-message memory writes through the controlled agent tool path.
-- recurring daily newsletter synthesis and three-hour autonomous wake task
+- recurring newsletter interest check and three-hour autonomous wake task
   scheduling with durable schedule rationale.
 - compact task outcome markdown memory for completed/failed work, duplicate
   prevention, source-task links, user scoping, RAG job enqueueing, and scheduled

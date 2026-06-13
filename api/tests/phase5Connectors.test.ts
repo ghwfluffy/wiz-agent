@@ -514,7 +514,7 @@ describe("inbound sender policy", () => {
     });
   });
 
-  it("lets owner SMS replies block a reviewed sender without queuing digest work", async () => {
+  it("lets owner SMS replies block a reviewed sender without queuing newsletter owner messaging", async () => {
     const { context, store } = await testContext();
     await store.upsertConnector(context, {
       kind: "owner-contact",
@@ -568,7 +568,7 @@ describe("inbound sender policy", () => {
     await expect(store.listTasks(context)).resolves.toEqual([]);
   });
 
-  it("ingests trusted newsletter knowledge without queuing immediate digest work", async () => {
+  it("ingests trusted newsletter knowledge without queuing immediate owner messaging", async () => {
     const { context, store } = await testContext();
     await store.setSenderStatus(context, "news@example.test", "newsletter");
     await store.upsertMemoryDocument(context, {
