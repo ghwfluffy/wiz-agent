@@ -903,7 +903,7 @@ describe("home view", () => {
     wrapper.unmount();
   });
 
-  it("submits direct agent prompts with selected context and renders the run result", async () => {
+  it("submits chat messages without operator controls and renders replies", async () => {
     const task = { id: "task-1", title: "Plan trip", prompt: "Plan", status: "pending", dueAt: null, priority: 0 };
     const message = {
       id: "in-1",
@@ -997,23 +997,29 @@ describe("home view", () => {
     await wrapper.get("#tab-chat").trigger("click");
     await flushPromises();
     await wrapper.get("#chat-agent-prompt").setValue("Create a packing task.");
-    await wrapper.get("#chat-prompt-mode").setValue("planning");
-    await wrapper.get("#chat-prompt-task").setValue("task-1");
-    await wrapper.get("#chat-prompt-memory").setValue("/assistant/context.md");
-    await wrapper.get("#chat-prompt-message").setValue("in-1");
     await wrapper.get("#panel-chat form").trigger("submit");
     await flushPromises();
 
     const promptCall = fetchMock.mock.calls.find((call) => String(call[0]).includes("/agent/prompts"));
     expect(promptCall).toBeTruthy();
     const body = JSON.parse(String((promptCall?.[1] as RequestInit).body));
-    expect(body).toMatchObject({ mode: "planning", contextTaskId: "task-1" });
-    expect(body.prompt).toContain("Selected memory path: /assistant/context.md");
-    expect(body.prompt).toContain("Selected recent assistant mailbox message: in-1");
-    expect(body.prompt).toContain("Create a packing task.");
-    expect(wrapper.text()).toContain("run-123");
-    expect(wrapper.text()).toContain("create_task");
-    expect(wrapper.text()).toContain("Created task");
+    expect(body).toMatchObject({ prompt: "Create a packing task.", mode: "normal", contextTaskId: null });
+    expect(wrapper.find("#chat-prompt-mode").exists()).toBe(false);
+    expect(wrapper.find("#chat-prompt-task").exists()).toBe(false);
+    expect(wrapper.find("#chat-prompt-memory").exists()).toBe(false);
+    expect(wrapper.find("#chat-prompt-message").exists()).toBe(false);
+    const chatPanel = wrapper.get("#panel-chat");
+    expect(chatPanel.text()).toContain("Create a packing task.");
+    expect(chatPanel.text()).toContain("Created task: Created task");
+    expect(chatPanel.text()).not.toContain("run-123");
+    expect(chatPanel.text()).not.toContain("create_task");
+    expect(chatPanel.text()).not.toContain("Selected action");
+    expect(chatPanel.text()).not.toContain("Tool result");
+
+    await wrapper.get("#panel-chat .chat-heading button").trigger("click");
+    await flushPromises();
+    expect(wrapper.get("#panel-chat").text()).not.toContain("Create a packing task.");
+    expect(wrapper.get("#panel-chat").text()).not.toContain("Created task: Created task");
   });
 
   it("shows task schedule intelligence details in the task modal", async () => {

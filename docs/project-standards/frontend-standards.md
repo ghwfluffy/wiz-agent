@@ -42,6 +42,14 @@ Frontend code must not:
   markup, especially tabs, data tables, modals, form controls, notifications,
   tags, and pagination
 
+## Agent Chat
+
+The Chat tab should behave like a normal conversation surface: one message
+composer, one chronological message thread, and a clear-chat action. Keep run
+ids, selected tool names, raw tool JSON, prompt modes, task selectors, memory
+selectors, and other debugging or operator controls out of this screen. Put
+advanced prompt controls in admin/overview/operator surfaces instead.
+
 ## API Error Feedback
 
 The web app should surface failed API requests through the shared toast service by default. The shared API client should parse the backend error envelope, prefer the envelope's human-readable message, and fall back to a generic message when the response is malformed or unavailable.

@@ -59,10 +59,17 @@ const tabs = [
   { id: "admin", label: "Admin" }
 ] as const;
 type TabId = typeof tabs[number]["id"];
+type ChatMessage = {
+  id: string;
+  role: "user" | "agent";
+  text: string;
+  status?: "error";
+};
 const tabIds = new Set<TabId>(tabs.map((tab) => tab.id));
 const dashboardPollIntervalMs = 10_000;
 let dashboardPollHandle: number | null = null;
 let activeTabRefreshInFlight = false;
+let chatMessageSequence = 0;
 const activeTab = ref<TabId>(tabFromRoute(route.query.tab));
 
 const tasks = ref<Task[]>([]);
@@ -86,6 +93,8 @@ const ragIndexHealth = ref<RagIndexHealth[]>([]);
 const dashboardError = ref<string | null>(null);
 const promptError = ref<string | null>(null);
 const promptResult = ref<AgentPromptResponse | null>(null);
+const chatDraft = ref("");
+const chatMessages = ref<ChatMessage[]>([]);
 const imapTestMessage = ref<string | null>(null);
 const imapTestError = ref<string | null>(null);
 const saving = ref(false);
@@ -459,6 +468,10 @@ function formatDetails(details: Record<string, unknown>): string {
   return JSON.stringify(details, null, 2);
 }
 
+function detailRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
 function compactDetails(details: Record<string, unknown>): string {
   if (Object.keys(details).length === 0) {
     return "";
@@ -482,6 +495,62 @@ function detailString(details: Record<string, unknown>, keys: string[]): string 
     }
   }
   return "";
+}
+
+function readableGoalSummary(goal: Record<string, unknown>): string {
+  const title = typeof goal.title === "string" && goal.title.trim() ? goal.title.trim() : "Untitled goal";
+  const status = typeof goal.status === "string" && goal.status.trim() ? goal.status.trim() : "";
+  const goalType = typeof goal.goal_type === "string" && goal.goal_type.trim() ? goal.goal_type.trim().replace(/_/g, " ") : "";
+  const progress = typeof goal.progress === "number" ? `, ${goal.progress}%` : "";
+  const details = [status, goalType].filter(Boolean).join(", ");
+  return `${title}${details ? ` (${details}${progress})` : progress ? ` (${progress.slice(2)})` : ""}`;
+}
+
+function goalsFromToolResult(toolResult: Record<string, unknown>): Record<string, unknown>[] {
+  const data = detailRecord(toolResult.data);
+  const rawGoals = data?.goals ?? toolResult.goals;
+  return Array.isArray(rawGoals) ? rawGoals.flatMap((goal) => {
+    const record = detailRecord(goal);
+    return record ? [record] : [];
+  }) : [];
+}
+
+function agentPromptReply(result: AgentPromptResponse): string {
+  if (result.failureMessage) {
+    return `I could not complete that: ${result.failureMessage}`;
+  }
+
+  const toolResult = detailRecord(result.toolResult);
+  if (!toolResult) {
+    return result.status === "completed" ? "Done." : `The agent run finished with status ${result.status}.`;
+  }
+
+  const directText = detailString(toolResult, ["response", "message", "summary", "result"]);
+  if (directText) {
+    return directText;
+  }
+
+  if (result.selectedAction === "list_goals") {
+    const goals = goalsFromToolResult(toolResult);
+    if (goals.length === 0) {
+      return "I do not see any goals yet.";
+    }
+    const shownGoals = goals.slice(0, 8).map((goal) => `- ${readableGoalSummary(goal)}`);
+    const suffix = goals.length > shownGoals.length ? `\n\nShowing ${shownGoals.length} of ${goals.length} goals.` : "";
+    return `I found ${goals.length} goal${goals.length === 1 ? "" : "s"}:\n${shownGoals.join("\n")}${suffix}`;
+  }
+
+  if (result.selectedAction === "create_task" && result.links.taskId) {
+    const task = tasks.value.find((candidate) => candidate.id === result.links.taskId);
+    return task ? `Created task: ${task.title}` : "Created the task.";
+  }
+
+  return result.status === "completed" ? "Done." : `The agent run finished with status ${result.status}.`;
+}
+
+function nextChatMessageId(role: ChatMessage["role"]): string {
+  chatMessageSequence += 1;
+  return `${role}-${chatMessageSequence}`;
 }
 
 function promptContextSummary(): string {
@@ -712,30 +781,63 @@ async function saveKnowledgeFile(): Promise<void> {
   }
 }
 
-async function submitAgentPrompt(): Promise<void> {
-  const prompt = promptForm.prompt.trim();
+function clearChat(): void {
+  chatMessages.value = [];
+  chatDraft.value = "";
+  promptError.value = null;
+}
+
+async function submitAgentPrompt(source: "overview" | "chat" = "overview"): Promise<void> {
+  const prompt = source === "chat" ? chatDraft.value.trim() : promptForm.prompt.trim();
   if (!prompt) {
     return;
   }
   sendingPrompt.value = true;
   promptError.value = null;
   promptResult.value = null;
-  try {
-    promptResult.value = await api.submitAgentPrompt({
-      prompt: promptContextSummary(),
-      mode: promptForm.mode,
-      contextTaskId: promptForm.contextTaskId || null
+  const requestPrompt = source === "chat" ? prompt : promptContextSummary();
+  if (source === "chat") {
+    chatMessages.value.push({
+      id: nextChatMessageId("user"),
+      role: "user",
+      text: prompt
     });
-    promptForm.prompt = "";
+    chatDraft.value = "";
+  }
+  try {
+    const result = await api.submitAgentPrompt({
+      prompt: requestPrompt,
+      mode: source === "chat" ? "normal" : promptForm.mode,
+      contextTaskId: source === "chat" ? null : promptForm.contextTaskId || null
+    });
+    promptResult.value = result;
+    if (source === "overview") {
+      promptForm.prompt = "";
+    }
     await loadDashboard();
-    if (promptResult.value.links.taskId) {
-      const task = tasks.value.find((candidate) => candidate.id === promptResult.value?.links.taskId);
+    if (source === "chat") {
+      chatMessages.value.push({
+        id: nextChatMessageId("agent"),
+        role: "agent",
+        text: agentPromptReply(result)
+      });
+    }
+    if (result.links.taskId) {
+      const task = tasks.value.find((candidate) => candidate.id === result.links.taskId);
       if (task) {
         await openTask(task);
       }
     }
   } catch {
     promptError.value = "Unable to send the prompt to the agent.";
+    if (source === "chat") {
+      chatMessages.value.push({
+        id: nextChatMessageId("agent"),
+        role: "agent",
+        text: "I could not send that message. Try again.",
+        status: "error"
+      });
+    }
   } finally {
     sendingPrompt.value = false;
   }
@@ -1401,7 +1503,7 @@ onUnmounted(() => {
             <h2>Talk to the agent</h2>
             <p class="label">Authenticated web prompt</p>
           </div>
-          <form class="prompt-form" @submit.prevent="submitAgentPrompt">
+          <form class="prompt-form" @submit.prevent="submitAgentPrompt('overview')">
             <div class="cds--form-item form-wide">
               <label class="cds--label" for="overview-agent-prompt">Prompt</label>
               <textarea id="overview-agent-prompt" v-model="promptForm.prompt" class="cds--text-area" required rows="4" />
@@ -1723,77 +1825,45 @@ onUnmounted(() => {
       </section>
 
       <section v-show="activeTab === 'chat'" id="panel-chat" class="tab-panel" role="tabpanel" aria-labelledby="tab-chat">
-        <section class="activity-section prompt-panel" aria-label="Direct agent chat">
-          <div class="section-heading">
+        <section class="activity-section chat-panel" aria-label="Agent chat">
+          <div class="section-heading chat-heading">
             <h2>Agent chat</h2>
-            <p class="label">Direct owner-command loop</p>
+            <button class="cds--btn cds--btn--secondary cds--btn--sm" type="button" :disabled="chatMessages.length === 0 && !chatDraft.trim()" @click="clearChat">
+              Clear chat
+            </button>
           </div>
-          <form class="prompt-form" @submit.prevent="submitAgentPrompt">
-            <div class="cds--form-item form-wide">
-              <label class="cds--label" for="chat-agent-prompt">Prompt</label>
-              <textarea id="chat-agent-prompt" v-model="promptForm.prompt" class="cds--text-area" required rows="8" />
-            </div>
-            <div class="cds--form-item">
-              <label class="cds--label" for="chat-prompt-mode">Mode</label>
-              <select id="chat-prompt-mode" v-model="promptForm.mode" class="cds--select-input">
-                <option v-for="mode in promptModes" :key="mode.value" :value="mode.value">{{ mode.label }}</option>
-              </select>
-            </div>
-            <div class="cds--form-item">
-              <label class="cds--label" for="chat-prompt-task">Task context</label>
-              <select id="chat-prompt-task" v-model="promptForm.contextTaskId" class="cds--select-input">
-                <option value="">No task</option>
-                <option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.title }}</option>
-              </select>
-            </div>
-            <div class="cds--form-item">
-              <label class="cds--label" for="chat-prompt-memory">Memory path</label>
-              <select id="chat-prompt-memory" v-model="promptForm.contextMemoryPath" class="cds--select-input">
-                <option value="">No memory path</option>
-                <option v-for="entry in knowledgeFileEntries" :key="entry.path" :value="entry.path">{{ entry.path }}</option>
-              </select>
-            </div>
-            <div class="cds--form-item">
-              <label class="cds--label" for="chat-prompt-message">Recent message</label>
-              <select id="chat-prompt-message" v-model="promptForm.contextMessageId" class="cds--select-input">
-                <option value="">No message</option>
-                <option v-for="message in inbox.slice(0, 20)" :key="message.id" :value="message.id">
-                  {{ message.fromAddr }} - {{ message.subject || message.bodyText.slice(0, 48) }}
-                </option>
-              </select>
-            </div>
-            <div class="form-actions form-wide">
-              <button class="cds--btn cds--btn--primary" type="submit" :disabled="sendingPrompt || !promptForm.prompt.trim()">
-                Send prompt
+          <div class="chat-thread" role="log" aria-live="polite" aria-label="Conversation">
+            <p v-if="chatMessages.length === 0" class="chat-empty">No messages yet.</p>
+            <article
+              v-for="message in chatMessages"
+              :key="message.id"
+              class="chat-message"
+              :class="[`chat-message--${message.role}`, { 'chat-message--error': message.status === 'error' }]"
+            >
+              <p class="chat-message__author">{{ message.role === "user" ? "You" : "Agent" }}</p>
+              <p class="chat-message__body">{{ message.text }}</p>
+            </article>
+            <article v-if="sendingPrompt" class="chat-message chat-message--agent">
+              <p class="chat-message__author">Agent</p>
+              <p class="chat-message__body">Thinking...</p>
+            </article>
+          </div>
+          <form class="chat-composer" @submit.prevent="submitAgentPrompt('chat')">
+            <label class="cds--visually-hidden" for="chat-agent-prompt">Message</label>
+            <textarea
+              id="chat-agent-prompt"
+              v-model="chatDraft"
+              class="cds--text-area"
+              required
+              rows="3"
+              placeholder="Message the agent"
+            />
+            <div class="chat-composer__actions">
+              <button class="cds--btn cds--btn--primary" type="submit" :disabled="sendingPrompt || !chatDraft.trim()">
+                Send
               </button>
             </div>
           </form>
-          <div v-if="promptError" class="cds--inline-notification cds--inline-notification--error" role="alert">
-            <div class="cds--inline-notification__details">
-              <div class="cds--inline-notification__text-wrapper">
-                <p class="cds--inline-notification__title">Prompt error</p>
-                <p class="cds--inline-notification__subtitle">{{ promptError }}</p>
-              </div>
-            </div>
-          </div>
-          <div v-if="promptResult" class="prompt-result" role="status">
-            <div>
-              <p class="label">Run</p>
-              <p>{{ promptResult.runId }}</p>
-            </div>
-            <div>
-              <p class="label">Status</p>
-              <p><span class="cds--tag" :class="statusTagClass(promptResult.status)">{{ promptResult.status }}</span></p>
-            </div>
-            <div>
-              <p class="label">Selected action</p>
-              <p>{{ promptResult.selectedAction || "none" }}</p>
-            </div>
-            <div>
-              <p class="label">Tool result</p>
-              <pre>{{ formatDetails(promptResult.toolResult ?? {}) || promptResult.failureMessage || "No tool result." }}</pre>
-            </div>
-          </div>
         </section>
       </section>
 
