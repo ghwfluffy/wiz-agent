@@ -33,6 +33,15 @@ const route = useRoute();
 const router = useRouter();
 const authMode = import.meta.env.VITE_AUTH_MODE || "standalone";
 const signInLabel = computed(() => (authMode === "standalone" ? "Sign in" : "Continue with central sign-in"));
+const authPanelMessage = computed(() => {
+  if (authMode === "standalone") {
+    return "Use the local development account to start testing the assistant.";
+  }
+  if (auth.error) {
+    return "Central sign-in did not complete.";
+  }
+  return "Redirecting to central sign-in.";
+});
 const tabs = [
   { id: "overview", label: "Overview" },
   { id: "chat", label: "Chat" },
@@ -155,6 +164,7 @@ const configForm = reactive<AiConfig>({
   maxRuntimeSec: 120,
   repairAttemptLimit: 1
 });
+let oauthRedirectStarted = false;
 
 const taskStatuses = ["pending", "claimed", "running", "completed", "cancelled", "failed"];
 const senderStatuses: Sender["status"][] = ["owner", "newsletter", "trusted", "blocked", "untrusted"];
@@ -1083,7 +1093,22 @@ function signIn(): void {
     void auth.signIn();
     return;
   }
+  oauthRedirectStarted = true;
   window.location.assign(apiUrl("/auth/login"));
+}
+
+function maybeStartFederatedLogin(): void {
+  if (
+    authMode !== "oauth" ||
+    oauthRedirectStarted ||
+    auth.loading ||
+    !auth.loaded ||
+    auth.authenticated ||
+    auth.error
+  ) {
+    return;
+  }
+  signIn();
 }
 
 async function loadAuthenticatedHome(): Promise<void> {
@@ -1095,10 +1120,13 @@ async function loadAuthenticatedHome(): Promise<void> {
 
 onMounted(() => {
   if (!auth.loaded) {
-    void auth.restore();
+    void auth.restore().then(() => {
+      maybeStartFederatedLogin();
+    });
   } else if (auth.authenticated) {
     void loadAuthenticatedHome();
   }
+  maybeStartFederatedLogin();
   startDashboardPolling();
 });
 
@@ -1107,6 +1135,13 @@ watch(() => auth.authenticated, (authenticated) => {
     void loadAuthenticatedHome();
   }
 });
+
+watch(
+  () => [auth.loaded, auth.loading, auth.authenticated, auth.error] as const,
+  () => {
+    maybeStartFederatedLogin();
+  },
+);
 
 watch(() => route.query.tab, (tab) => {
   const nextTab = tabFromRoute(tab);
@@ -1141,8 +1176,14 @@ onUnmounted(() => {
     </div>
 
     <section v-if="!auth.authenticated" class="auth-panel" aria-label="Sign in">
-      <p>Use the local development account to start testing the assistant.</p>
-      <button class="cds--btn cds--btn--primary" type="button" :disabled="auth.loading" @click="signIn">
+      <p>{{ authPanelMessage }}</p>
+      <button
+        v-if="authMode === 'standalone' || auth.error"
+        class="cds--btn cds--btn--primary"
+        type="button"
+        :disabled="auth.loading"
+        @click="signIn"
+      >
         {{ signInLabel }}
       </button>
     </section>

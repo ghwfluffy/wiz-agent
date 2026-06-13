@@ -33,6 +33,8 @@ Behavior:
 - callback fetches central userinfo and upserts a local user and central
   identity;
 - the app creates its own local session after successful OAuth;
+- after the frontend restores auth state and finds no active session, it
+  automatically redirects to the OAuth login endpoint;
 - failed callbacks redirect back to the app UI with a friendly error token.
 
 The local user id is derived from the central subject and identity provider. The
