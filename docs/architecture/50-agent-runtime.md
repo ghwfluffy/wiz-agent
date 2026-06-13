@@ -123,6 +123,16 @@ API call.
 The runtime includes the app capability registry in the model prompt so the
 model knows what Goals, Fluffynomics, and Apartment Gate are for and which
 actions are available.
+
+Owner inbound prompts include a deterministic host-detected intent envelope for
+the current owner message. The envelope has one conservative label, numeric
+confidence, short non-secret evidence strings, and guidance such as "host
+detected likely memory/list offload; verify before using list tools." It is
+computed by host code with simple heuristics, audited on the inbound message
+when the message reaches the agent, and passed as context only. It never creates
+tasks, writes memory, approves messages, updates sender trust, calls apps, or
+selects tools by itself; the model still decides and all side effects continue
+through validated MCP/tool contracts.
 Accepted tool calls execute through the server-owned MCP boundary by default:
 
 1. host code creates an agent run;

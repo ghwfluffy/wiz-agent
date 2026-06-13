@@ -88,6 +88,11 @@ Current tests cover:
   prompt inclusion.
 - newsletter preference memory writes from explicit owner messages.
 - personal-profile memory injection into future owner prompts.
+- deterministic owner-message intent classification for memory/list offload,
+  task creation/update, question/answer, approval-style replies, preference
+  corrections, app action requests, casual conversation, clarification
+  responses, unknown messages, prompt injection, user-scoped audit, and
+  approval/trust reply precedence.
 - memory document API, Memory tab rendering, and trusted-contact management.
 - memory change API and Memory tab diff rendering, including user scoping,
   path filtering, read-file links, and redaction of credential-like markdown

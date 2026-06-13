@@ -107,6 +107,17 @@ indexing. Feedback is a training/review signal only; do not rewrite preference
 files or capability guidance from it unless a separate controlled tool call
 does so with clear rationale.
 
+Owner-classified inbound SMS/MMS/email that reaches the agent includes a
+deterministic intent envelope in the prompt. The host computes this with
+conservative heuristics for memory/list offload, task creation/update,
+question/answer, approval-style replies, preference corrections, app action
+requests, casual conversation, clarification responses, and unknown messages.
+The envelope includes confidence and generic evidence strings and is audited as
+`message.owner_intent.classified` on the inbound message. It is guidance only:
+approval replies and sender-review replies are handled before classification,
+and the classifier must not create tasks, write memory, update trust, approve
+messages, or call app integrations by itself.
+
 Conversation threading is automatic for owner-command prompts that arrive
 through inbound SMS/MMS/email. The host creates or reuses a user-owned
 `conversation_threads` record before the model call, includes recent thread

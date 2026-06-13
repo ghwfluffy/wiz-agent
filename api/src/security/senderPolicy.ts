@@ -1,4 +1,5 @@
 import type { Settings } from "../config/settings.js";
+import { classifyOwnerMessageIntent, type OwnerIntentEnvelope } from "../agent/ownerIntentClassifier.js";
 import type {
   AgentStore,
   InboundHandlingResult,
@@ -139,7 +140,7 @@ export async function handleInboundMessage(
     store: AgentStore;
     message: InboundMessageInput;
     rateLimiter: InboundRateLimiter;
-    ownerAgentRunner?: (message: InboundMessageRecord) => Promise<{
+    ownerAgentRunner?: (message: InboundMessageRecord, ownerIntent: OwnerIntentEnvelope) => Promise<{
       runId?: string;
       conversationThreadId?: string;
       taskId?: string;
@@ -207,7 +208,15 @@ export async function handleInboundMessage(
         messageId: recorded.id
       };
     }
-    const agentResult = await options.ownerAgentRunner?.(recorded);
+    const ownerIntent = classifyOwnerMessageIntent(recorded);
+    await options.store.recordAudit(options.context, "message.owner_intent.classified", "message", recorded.id, {
+      intent: ownerIntent.intent,
+      confidence: ownerIntent.confidence,
+      evidence: ownerIntent.evidence,
+      source: recorded.source ?? "imap",
+      classifier: "deterministic-owner-intent-v1"
+    });
+    const agentResult = await options.ownerAgentRunner?.(recorded, ownerIntent);
     let taskEventId = agentResult?.taskEventId;
     if (agentResult?.taskId) {
       const event = await options.store.recordTaskEvent(options.context, agentResult.taskId, "message.inbound.assigned", {

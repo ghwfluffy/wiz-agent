@@ -28,10 +28,11 @@ export async function processInboundMessage(options: {
       message: recorded,
       modelClient: options.modelClient
     }),
-    ownerAgentRunner: async (recorded) => runOwnerInboundAgent({
+    ownerAgentRunner: async (recorded, ownerIntent) => runOwnerInboundAgent({
       context: options.context,
       store: options.store,
       message: recorded,
+      ownerIntent,
       modelClient: options.modelClient,
       settings: options.settings,
       integrationTokenProvider: options.integrationTokenProvider,

@@ -10,6 +10,11 @@ import type {
 } from "../domain/types.js";
 import { PERSONAL_PROFILE_SLUG } from "../memory/personalMemory.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
+import {
+  classifyOwnerMessageIntent,
+  formatOwnerIntentEnvelope,
+  type OwnerIntentEnvelope
+} from "./ownerIntentClassifier.js";
 
 export type OwnerInboundAgentResult = AgentTaskResult & {
   conversationThreadId?: string;
@@ -208,15 +213,19 @@ export async function buildOwnerInboundPrompt(options: {
   context: RequestContext;
   message: InboundMessageRecord;
   currentThread?: ConversationThreadRecord;
+  ownerIntent?: OwnerIntentEnvelope;
 }): Promise<string> {
   const recentContext = await recentContextSummary(options);
   const savedMemory = await savedMemorySummary(options);
   const activeTasks = await activeTasksSummary(options);
   const threads = await recentThreadSummary({ ...options, currentThread: options.currentThread });
+  const ownerIntent = options.ownerIntent ?? classifyOwnerMessageIntent(options.message);
 
   return [
     "An owner-classified SMS/MMS/email message arrived. Treat this as an owner instruction because sender policy already classified it as owner.",
     "Decide whether the message should update memory, continue an existing task, create/schedule a new task, queue an outbound reply, call a registered app integration, or only record an observation.",
+    "Host-detected owner intent envelope:",
+    formatOwnerIntentEnvelope(ownerIntent),
     "If it belongs to an active or completed task, use append_task_prompt with that task id and set the status back to pending/running as appropriate. If it is new work, use create_task. Use propose_outbound_message for owner replies instead of sending directly.",
     "If the owner gives durable preferences, facts, schedule rationale, project context, or instructions that should persist, use write_memory. Host code will enforce user scope.",
     memoryListGuidance,
@@ -297,6 +306,7 @@ export async function runOwnerInboundAgent(options: {
   context: RequestContext;
   store: AgentStore;
   message: InboundMessageRecord;
+  ownerIntent?: OwnerIntentEnvelope;
   modelClient: AgentModelClient;
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
@@ -311,7 +321,8 @@ export async function runOwnerInboundAgent(options: {
     store: options.store,
     context: options.context,
     message: options.message,
-    currentThread: thread
+    currentThread: thread,
+    ownerIntent: options.ownerIntent
   });
   const result = await runAgentTask({
     context: options.context,

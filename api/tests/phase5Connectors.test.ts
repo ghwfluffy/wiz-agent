@@ -220,6 +220,54 @@ describe("inbound sender policy", () => {
     ]);
   });
 
+  it("audits owner intent classification before routing owner messages to the agent", async () => {
+    const { context, store } = await testContext();
+
+    const result = await handleInboundMessage({
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OWNER_SMS_EMAILS: "15555550100@sms.example.test"
+      }),
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      ownerAgentRunner: async (_message, ownerIntent) => {
+        expect(ownerIntent).toMatchObject({
+          intent: "memory_list_offload",
+          confidence: 0.8,
+          evidence: expect.arrayContaining(["memory/list preservation verb", "list/bucket target"])
+        });
+        return { runId: "run-owner-intent-audit" };
+      },
+      message: {
+        providerMessageId: "owner-intent-audit-1",
+        fromAddr: "15555550100@sms.example.test",
+        toAddr: "agent@example.test",
+        subject: null,
+        bodyText: "add Desperado to my movies list",
+        source: "sms"
+      }
+    });
+
+    expect(result).toMatchObject({
+      classification: "owner",
+      action: "routed_to_agent",
+      agentRunId: "run-owner-intent-audit"
+    });
+    await expect(store.listAudit(context, false)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "message.owner_intent.classified",
+        entityType: "message",
+        userId: context.userId,
+        details: expect.objectContaining({
+          intent: "memory_list_offload",
+          classifier: "deterministic-owner-intent-v1",
+          source: "sms"
+        })
+      })
+    ]));
+  });
+
   it("accepts trusted newsletter senders without treating them as owner commands", async () => {
     const { context, store } = await testContext();
     await store.setSenderStatus(context, "news@example.test", "newsletter");
@@ -358,6 +406,9 @@ describe("inbound sender policy", () => {
       classification: "owner",
       action: "sender_reviewed"
     });
+    await expect(store.listAudit(context, false)).resolves.not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "message.owner_intent.classified" })
+    ]));
     await expect(store.getSenderStatus(context, "news@example.test")).resolves.toBe("newsletter");
     await expect(store.listTasks(context)).resolves.toEqual([]);
     await expect(store.listOutboundMessages(context)).resolves.toHaveLength(1);

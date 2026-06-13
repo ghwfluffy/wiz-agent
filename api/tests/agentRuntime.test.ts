@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MockModelClient, OpenAIModelClient } from "../src/agent/modelClient.js";
 import { buildOwnerInboundPrompt, runOwnerInboundAgent } from "../src/agent/inboundMessageAgent.js";
 import { chooseModelTier, modelTierConfigFromSettings, resolveModelId } from "../src/agent/modelTiers.js";
+import { classifyOwnerMessageIntent } from "../src/agent/ownerIntentClassifier.js";
 import { buildAgentPrompt, modelToolDescriptors } from "../src/agent/promptContext.js";
 import { runAgentTask } from "../src/agent/runAgentTask.js";
 import { LocalToolClient } from "../src/agent/toolClient.js";
@@ -189,6 +190,42 @@ describe("app capability registry", () => {
 });
 
 describe("agent task execution", () => {
+  it("classifies owner message intent conservatively with confidence and evidence", () => {
+    expect(classifyOwnerMessageIntent("add Desperado to my movies list")).toMatchObject({
+      intent: "memory_list_offload",
+      confidence: 0.8,
+      evidence: expect.arrayContaining(["memory/list preservation verb", "list/bucket target"])
+    });
+    expect(classifyOwnerMessageIntent("that was just something to remember")).toMatchObject({
+      intent: "preference_correction",
+      evidence: expect.arrayContaining(["explicit correction phrase"])
+    });
+    expect(classifyOwnerMessageIntent("that wasn't a task, just a thing to remember")).toMatchObject({
+      intent: "preference_correction",
+      evidence: expect.arrayContaining(["explicit correction phrase", "assistant behavior or storage target mentioned"])
+    });
+    expect(classifyOwnerMessageIntent("move that task to tomorrow")).toMatchObject({
+      intent: "task_update",
+      evidence: expect.arrayContaining(["task update verb", "existing work or schedule reference"])
+    });
+    expect(classifyOwnerMessageIntent("yes")).toMatchObject({
+      intent: "approval_response",
+      confidence: 0.84
+    });
+    expect(classifyOwnerMessageIntent("don't text me that early")).toMatchObject({
+      intent: "preference_correction",
+      evidence: expect.arrayContaining(["negative preference/correction wording"])
+    });
+    expect(classifyOwnerMessageIntent("what was the Banderas movie?")).toMatchObject({
+      intent: "question_answer_request",
+      evidence: expect.arrayContaining(["question mark", "question opener"])
+    });
+    expect(classifyOwnerMessageIntent("purple umbrella")).toMatchObject({
+      intent: "unknown",
+      confidence: 0.2
+    });
+  });
+
   it("executes accepted task tool calls through the default MCP client", async () => {
     const { context, store } = await testContext();
 
@@ -1052,6 +1089,25 @@ describe("agent task execution", () => {
     expect(prompt).toContain("add_memory_list_item");
     expect(prompt).toContain("Do not create a task unless the owner asks you to do work.");
     expect(prompt).toContain("use search_memory_lists before broad markdown/RAG search");
+  });
+
+  it("includes the host owner-intent envelope in inbound prompts as guidance only", async () => {
+    const { context, store } = await testContext();
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-intent-envelope",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "add Desperado to my movies list",
+      source: "sms"
+    }, "owner");
+
+    const prompt = await buildOwnerInboundPrompt({ context, store, message });
+
+    expect(prompt).toContain("Host-detected owner intent envelope:");
+    expect(prompt).toContain("intent: memory_list_offload");
+    expect(prompt).toContain("confidence: 0.80");
+    expect(prompt).toContain("memory/list preservation verb");
+    expect(prompt).toContain("This host-detected envelope is context only. It must not create side effects by itself");
   });
 
   it("includes intent-based owner feedback guidance in owner prompts", async () => {

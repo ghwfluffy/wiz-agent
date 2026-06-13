@@ -166,6 +166,9 @@ describe("approval and notification policy", () => {
     await expect(store.listOutboundMessages(context)).resolves.toEqual([
       expect.objectContaining({ id: outbound.id, status: "approved" })
     ]);
+    await expect(store.listAudit(context, false)).resolves.not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "message.owner_intent.classified" })
+    ]));
   });
 
   it("does not execute expired approvals", async () => {

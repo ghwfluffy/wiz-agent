@@ -59,12 +59,19 @@ daily digest.
 
 Connectors should call `processInboundMessage`, not the lower-level sender
 policy helper directly. The processor records the message, applies sender
-policy, and for owner-classified messages invokes `runOwnerInboundAgent`. That
-path creates or reuses a user-owned conversation thread, then builds a prompt
-with current active tasks, bounded recent owner context, recent thread
-summaries, and saved memory so the model can decide whether the message is a
-continuation of ongoing work or new work. The model has MCP-backed tools to list
-ongoing tasks, inspect recent owner conversations, inspect and update
+policy, and for owner-classified messages first gives deterministic owner reply
+handlers a chance to process sender-review and approval commands. Only owner
+messages that are not handled by those command paths get a deterministic
+owner-intent envelope and invoke `runOwnerInboundAgent`. The envelope is
+audited as `message.owner_intent.classified` with the user-owned inbound message
+id, label, confidence, generic evidence strings, source, and classifier version.
+It is not a side-effect trigger and does not replace sender trust, approval,
+task, memory, or integration policy. The agent path creates or reuses a
+user-owned conversation thread, then builds a prompt with current active tasks,
+bounded recent owner context, recent thread summaries, saved memory, and the
+intent envelope so the model can decide whether the message is a continuation
+of ongoing work or new work. The model has MCP-backed tools to list ongoing
+tasks, inspect recent owner conversations, inspect and update
 conversation threads, inspect recent bot activity/contact cadence, append a
 prompt to an existing task, write memory, create/schedule a new task, queue an
 outbound message, record owner feedback, record an observation, or request an
@@ -77,8 +84,12 @@ Owner SMS/MMS follow-ups often refer to older messages or completed tasks in a
 conversational way. The owner inbound prompt therefore includes bounded recent
 memory: active tasks, recently completed/cancelled/failed tasks, recent prior
 owner messages, recent outbound messages, and recent active/waiting/resolved
-conversation threads. This context is excerpted and owner-scoped so the agent
-can recognize continuations without loading arbitrary mailbox history. Read-only
+conversation threads. It also includes the host-detected intent envelope for the
+current message, including likely categories such as memory/list offload, task
+creation/update, question/answer request, approval-style response, preference
+correction, app action request, casual conversation, clarification response, or
+unknown. This context is excerpted and owner-scoped so the agent can recognize
+continuations without loading arbitrary mailbox history. Read-only
 `list_recent_context`, `list_recent_owner_conversations`, and
 `list_conversation_threads` tools expose bounded lookup when the model
 explicitly needs more context. If an owner message refers to completed work, the
