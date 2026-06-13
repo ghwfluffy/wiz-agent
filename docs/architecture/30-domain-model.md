@@ -96,8 +96,9 @@ calls.
 Newsletter sender review is represented as source inbox records plus derived
 handling state. Unknown newsletter-like senders start as `untrusted` and queue
 owner review. Owner replies can mark the sender as `newsletter` or `blocked`.
-Accepted newsletters create path-like markdown knowledge records under
-`newsletters/YYYY-MM-DD/*.md`; they do not create immediate digest tasks.
+Accepted newsletters create markdown knowledge records under
+`/newsletters/YYYY-MM-DD/*.md`; they enqueue normal RAG indexing but do not
+create immediate digest tasks or owner notifications.
 
 Sender trust rows are explicit user-owned classifications for known addresses.
 They can be created, updated, listed, and deleted through the API and operations

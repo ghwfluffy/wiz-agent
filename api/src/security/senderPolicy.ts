@@ -174,7 +174,7 @@ export async function handleInboundMessage(
       messageId: recorded.id
     };
   }
-  if (["newsletter", "trusted"].includes(classification)) {
+  if (classification === "trusted") {
     await (options.memoryIntegrator ?? ((message) => integrateTrustedMessageIntoMemory({
       store: options.store,
       context: options.context,

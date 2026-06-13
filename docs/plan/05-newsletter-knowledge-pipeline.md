@@ -19,11 +19,16 @@ owner.
 1. IMAP receives message in the assistant mailbox.
 2. Sender policy classifies sender as `newsletter`.
 3. Host records inbound message.
-4. Host writes source newsletter markdown to:
+4. Host writes source newsletter markdown to the virtual markdown filesystem at:
    `/newsletters/YYYY-MM-DD/<source-or-subject>.md`
 5. Host enqueues RAG index job.
 6. Host marks handling action `accepted_newsletter`.
 7. No immediate SMS/MMS/email is sent.
+
+Newsletter source ingestion is not the generic trusted-message extractor path:
+the host stores source markdown plus trust-boundary metadata only. Later
+scheduled synthesis may read/search those documents and decide whether to queue
+one owner-facing briefing.
 
 For `ONCE` owner approval, ingest that single reviewed message but do not trust
 future sender messages.

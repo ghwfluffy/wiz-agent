@@ -39,12 +39,15 @@ sender as a newsletter, `NO` to block it, or `ONCE` to process only that message
 Those replies are parsed by host code against the most recent pending sender
 review from the last 48 hours. Host code, not the model, updates sender trust.
 
-Trusted newsletter messages are appended to newsletter knowledge using a
-path-like markdown memory title such as `newsletters/2026-06-13/forbes.md`.
-The immediate inbound path stops after ingestion. Owner `ONCE` replies ingest
-only the reviewed message without trusting future messages. Owner `YES` replies
-mark the sender as `newsletter` and ingest the reviewed message. Owner `NO`
-replies mark the sender as `blocked`.
+Trusted newsletter messages are written directly to the markdown knowledge
+filesystem under absolute dated paths such as
+`/newsletters/2026-06-13/forbes.md`. Source ingestion stores the normalized
+newsletter content plus trust-boundary metadata and enqueues normal markdown/RAG
+indexing. It does not run owner-command tools, does not run the generic trusted
+message memory extractor, and does not queue an immediate owner digest. Owner
+`ONCE` replies ingest only the reviewed message without trusting future
+messages. Owner `YES` replies mark the sender as `newsletter` and ingest the
+reviewed message. Owner `NO` replies mark the sender as `blocked`.
 
 Daily newsletter synthesis is a scheduled agent task, not an inbound side
 effect. That task reviews newsletter knowledge and owner newsletter preferences,
