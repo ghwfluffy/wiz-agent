@@ -10,6 +10,7 @@ import {
   isAutonomousRecurringTask,
   scheduleNextAutonomousTask
 } from "./autonomousTasks.js";
+import { executeApprovedCrossAppApprovals } from "./approvalExecutor.js";
 
 export async function claimDueTasks(options: {
   store: AgentStore;
@@ -28,7 +29,17 @@ export async function daemonOnce(options: {
   mailTransport?: MailTransport;
   outboundLimit?: number;
   now?: Date;
-}): Promise<{ claimedTasks: number; ranTasks: number; outboundAttempted: number; outboundSent: number; outboundFailed: number }> {
+  fetchImpl?: typeof fetch;
+}): Promise<{
+  claimedTasks: number;
+  ranTasks: number;
+  approvalExecutionAttempted: number;
+  approvalExecutionSucceeded: number;
+  approvalExecutionFailed: number;
+  outboundAttempted: number;
+  outboundSent: number;
+  outboundFailed: number;
+}> {
   const modelClient = options.modelClient;
   if (modelClient) {
     await ensureAutonomousTasks({
@@ -109,6 +120,16 @@ export async function daemonOnce(options: {
       }
     }
   }
+  const approvalExecution = options.settings
+    ? await executeApprovedCrossAppApprovals({
+        store: options.store,
+        context: options.context,
+        settings: options.settings,
+        tokenProvider: new SignedIntegrationTokenProvider(options.settings),
+        fetchImpl: options.fetchImpl,
+        now: options.now
+      })
+    : { attempted: 0, succeeded: 0, failed: 0 };
   const outbound = options.settings
     ? await processOutboundQueue({
         store: options.store,
@@ -121,6 +142,9 @@ export async function daemonOnce(options: {
   return {
     claimedTasks: claimed.length,
     ranTasks,
+    approvalExecutionAttempted: approvalExecution.attempted,
+    approvalExecutionSucceeded: approvalExecution.succeeded,
+    approvalExecutionFailed: approvalExecution.failed,
     outboundAttempted: outbound.attempted,
     outboundSent: outbound.sent,
     outboundFailed: outbound.failed

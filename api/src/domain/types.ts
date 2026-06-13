@@ -121,6 +121,7 @@ export type OutboundMessageRecord = OutboundMessageInput & {
 };
 
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
+export type ApprovalExecutionStatus = "not_applicable" | "pending" | "running" | "succeeded" | "failed";
 
 export type ApprovalActionType =
   | "send_outbound_message"
@@ -148,6 +149,10 @@ export type ApprovalRecord = ApprovalInput & {
   id: string;
   userId: string;
   status: ApprovalStatus;
+  executionStatus: ApprovalExecutionStatus;
+  executionResult: Record<string, unknown> | null;
+  executionError: string | null;
+  executedAt: string | null;
   decidedBy: string | null;
   decidedAt: string | null;
   createdAt: string;
@@ -610,5 +615,17 @@ export type AgentStore = {
     approvalId: string,
     proposedPayload: Record<string, unknown>,
     summary?: string
+  ): Promise<ApprovalRecord | undefined>;
+  claimApprovalExecution(context: RequestContext, approvalId: string): Promise<ApprovalRecord | undefined>;
+  completeApprovalExecution(
+    context: RequestContext,
+    approvalId: string,
+    result: Record<string, unknown>
+  ): Promise<ApprovalRecord | undefined>;
+  failApprovalExecution(
+    context: RequestContext,
+    approvalId: string,
+    error: string,
+    result?: Record<string, unknown> | null
   ): Promise<ApprovalRecord | undefined>;
 };

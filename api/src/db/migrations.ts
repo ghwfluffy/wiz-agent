@@ -3,6 +3,7 @@ export const MEMORY_MARKDOWN_BACKFILL_MIGRATION_ID = "0003_memory_markdown_backf
 export const MCP_TOOL_ALLOWLIST_MIGRATION_ID = "0004_mcp_tool_allowlist";
 export const TASK_SCHEDULE_CONTEXT_MIGRATION_ID = "0005_task_schedule_context";
 export const APPROVAL_POLICY_MIGRATION_ID = "0006_approval_policy";
+export const APPROVAL_EXECUTION_MIGRATION_ID = "0007_approval_execution";
 
 const tenantOwnedTables = [
   "identities",
@@ -166,4 +167,21 @@ ALTER TABLE approvals
   ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_approvals_user_status_created ON approvals(user_id, status, created_at DESC);
+`;
+
+export const APPROVAL_EXECUTION_SQL = `
+ALTER TABLE approvals
+  ADD COLUMN IF NOT EXISTS execution_status TEXT NOT NULL DEFAULT 'not_applicable',
+  ADD COLUMN IF NOT EXISTS execution_result_json JSONB,
+  ADD COLUMN IF NOT EXISTS execution_error TEXT,
+  ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ;
+
+UPDATE approvals
+SET execution_status = 'pending'
+WHERE status = 'approved'
+  AND action_type = 'cross_app_write_action'
+  AND execution_status = 'not_applicable';
+
+CREATE INDEX IF NOT EXISTS idx_approvals_cross_app_execution ON approvals(user_id, execution_status, created_at)
+  WHERE status = 'approved' AND action_type = 'cross_app_write_action';
 `;

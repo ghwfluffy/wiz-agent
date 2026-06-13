@@ -25,6 +25,13 @@ The response includes:
 The Workers tab consumes this endpoint and shows the same budget, queue,
 failure, and Qdrant/RAG health information.
 
+Approval execution status is visible on approval records and in audit logs.
+Cross-app write execution records `approval.execution.running`,
+`approval.execution.succeeded`, or `approval.execution.failed`; success details
+include only redacted integration response data, and failures include a bounded
+host error reason such as an unknown action, read action, missing token, expired
+approval, or non-2xx integration response.
+
 Scheduled assistant self-review runs are visible through the same task, run,
 tool-call, and audit surfaces as other scheduled tasks. Successful reviews
 record `agent.prompted`, accepted tool-call, and `scheduled_task.outcome`
@@ -63,6 +70,11 @@ Qdrant publicly reachable.
 MCP sessions remain short-lived, user/run scoped, and allowlisted. Browser MCP
 sessions are limited to read-only memory/search tools. Agent-created MCP
 sessions are tied to one run and the host-selected tool allowlist.
+
+Approved cross-app writes are not MCP/model execution. They are host-owned
+worker executions that revalidate the stored action id and access level against
+the capability registry immediately before calling the integration gateway.
+Directory-only apps and read actions fail closed in this executor.
 
 Self-review prompts are treated as internal operational work. They may inspect
 recent bot activity and write assistant memory, but they explicitly prohibit

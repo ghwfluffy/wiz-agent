@@ -85,6 +85,10 @@ export type OutboxMessage = {
 export type Approval = {
   id: string;
   status: "pending" | "approved" | "rejected" | "expired";
+  executionStatus: "not_applicable" | "pending" | "running" | "succeeded" | "failed";
+  executionResult: Record<string, unknown> | null;
+  executionError: string | null;
+  executedAt: string | null;
   actionType: string;
   sourceRunId?: string | null;
   sourceRef?: string | null;

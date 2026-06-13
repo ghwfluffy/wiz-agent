@@ -52,10 +52,14 @@ export async function workerTick(options: {
   mailTransport?: MailTransport;
   imapProcessor?: typeof processImapInbox;
   now?: Date;
+  fetchImpl?: typeof fetch;
 }): Promise<{
   users: number;
   claimedTasks: number;
   ranTasks: number;
+  approvalExecutionAttempted: number;
+  approvalExecutionSucceeded: number;
+  approvalExecutionFailed: number;
   outboundAttempted: number;
   outboundSent: number;
   outboundFailed: number;
@@ -68,6 +72,9 @@ export async function workerTick(options: {
     users: users.length,
     claimedTasks: 0,
     ranTasks: 0,
+    approvalExecutionAttempted: 0,
+    approvalExecutionSucceeded: 0,
+    approvalExecutionFailed: 0,
     outboundAttempted: 0,
     outboundSent: 0,
     outboundFailed: 0,
@@ -85,11 +92,15 @@ export async function workerTick(options: {
       modelClient: options.modelClient,
       mailTransport: options.mailTransport,
       outboundLimit: remainingOutbound,
-      now: options.now
+      now: options.now,
+      fetchImpl: options.fetchImpl
     });
     remainingOutbound = Math.max(0, remainingOutbound - result.outboundAttempted);
     totals.claimedTasks += result.claimedTasks;
     totals.ranTasks += result.ranTasks;
+    totals.approvalExecutionAttempted += result.approvalExecutionAttempted;
+    totals.approvalExecutionSucceeded += result.approvalExecutionSucceeded;
+    totals.approvalExecutionFailed += result.approvalExecutionFailed;
     totals.outboundAttempted += result.outboundAttempted;
     totals.outboundSent += result.outboundSent;
     totals.outboundFailed += result.outboundFailed;

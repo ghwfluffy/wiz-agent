@@ -73,10 +73,17 @@ hostnames, raw secret references, or model-selected recipients.
 The first active approval actions are outbound owner messages and cross-app
 write proposals. Outbound approvals link to an outbox record with
 `requires_approval`; approving the approval changes the outbox record to
-`approved`, and rejecting or expiring it cancels the outbox record. Cross-app
-write approvals are queued and audited but are not executed by the generic web
-approval route yet; a future executor must reconstruct the call from the stored
-payload under host-owned token and capability policy.
+`approved`, and rejecting or expiring it cancels the outbox record.
+
+Cross-app write approvals store host-owned execution state on the approval:
+`execution_status`, `execution_result_json`, `execution_error`, and
+`executed_at`. Approving a `cross_app_write_action` moves execution from
+`not_applicable` to `pending`. The worker atomically claims pending approved
+executions by moving them to `running`, rehydrates `action_id`, `path_params`,
+`query`, and `body` from `action_json`, revalidates the registered capability as
+a write action, and then records either `succeeded` with a redacted result or
+`failed` with a visible error. Duplicate worker ticks cannot execute the same
+approval because only `pending` executions can be claimed.
 
 ## Task Events
 

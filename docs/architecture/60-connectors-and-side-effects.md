@@ -286,6 +286,15 @@ The operations UI has a dedicated Approval inbox backed by
 approve/cancel controls delegate to approval decisions when the outbox record
 has an approval id.
 
+Cross-app write approvals use the same decision surface but execute in the
+worker after approval. The worker claims each approved pending
+`cross_app_write_action` once, rejects expired/rejected/non-write/directory-only
+actions without calling a target app, and calls registered app APIs only through
+the integration gateway with a server-minted scoped token. Integration responses
+are redacted before they are written to approval execution results or audit
+details. Automatic retries are not performed; a failed execution stays visible
+on the approval record until a future explicit retry workflow is added.
+
 The operations UI Overview lists only active outbound records that need
 attention or delivery tracking: `requires_approval`, `pending`, `approved`, and
 `sending`. The Outbox tab is history-oriented and lists sent and failed

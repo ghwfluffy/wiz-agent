@@ -219,6 +219,10 @@ function approvalFromRow(row: Record<string, unknown>): ApprovalRecord {
     id: String(row.id),
     userId: String(row.user_id),
     status: row.status as ApprovalStatus,
+    executionStatus: (row.execution_status as ApprovalRecord["executionStatus"] | null) ?? "not_applicable",
+    executionResult: (row.execution_result_json as Record<string, unknown> | null) ?? null,
+    executionError: row.execution_error ? String(row.execution_error) : null,
+    executedAt: row.executed_at instanceof Date ? row.executed_at.toISOString() : row.executed_at ? String(row.executed_at) : null,
     actionType: row.action_type as ApprovalRecord["actionType"],
     sourceRunId: row.source_run_id ? String(row.source_run_id) : null,
     sourceRef: row.source_ref ? String(row.source_ref) : null,
@@ -2137,6 +2141,14 @@ export function createPostgresStore(pool: Pool): AgentStore {
          )
          OR EXISTS (
            SELECT 1
+           FROM approvals a
+           WHERE a.user_id = u.id
+             AND a.status = 'approved'
+             AND a.action_type = 'cross_app_write_action'
+             AND a.execution_status = 'pending'
+         )
+         OR EXISTS (
+           SELECT 1
            FROM connectors c
            WHERE c.user_id = u.id
              AND c.kind = 'imap'
@@ -2226,6 +2238,11 @@ export function createPostgresStore(pool: Pool): AgentStore {
       const result = await pool.query(
         `UPDATE approvals
          SET status = $3,
+             execution_status = CASE
+               WHEN $3 = 'approved' AND action_type = 'cross_app_write_action' AND execution_status = 'not_applicable'
+                 THEN 'pending'
+               ELSE execution_status
+             END,
              decided_by = CASE WHEN $3 IN ('approved', 'rejected', 'expired') THEN $4 ELSE decided_by END,
              decided_at = CASE WHEN $3 IN ('approved', 'rejected', 'expired') THEN now() ELSE decided_at END,
              updated_at = now()
@@ -2257,6 +2274,82 @@ export function createPostgresStore(pool: Pool): AgentStore {
       if (record) {
         await recordAudit(pool, context, "approval.edited", "approval", approvalId, {
           action_type: record.actionType
+        });
+      }
+      return record;
+    },
+
+    async claimApprovalExecution(context, approvalId) {
+      const result = await pool.query(
+        `UPDATE approvals
+         SET execution_status = 'running',
+             updated_at = now()
+         WHERE id = $1
+           AND user_id = $2
+           AND status = 'approved'
+           AND action_type = 'cross_app_write_action'
+           AND execution_status = 'pending'
+         RETURNING *`,
+        [approvalId, context.userId]
+      );
+      const record = result.rows[0] ? approvalFromRow(result.rows[0]) : undefined;
+      if (record) {
+        await recordAudit(pool, context, "approval.execution.running", "approval", approvalId, {
+          action_type: record.actionType,
+          source_ref: record.sourceRef
+        });
+      }
+      return record;
+    },
+
+    async completeApprovalExecution(context, approvalId, executionResult) {
+      const result = await pool.query(
+        `UPDATE approvals
+         SET execution_status = 'succeeded',
+             execution_result_json = $3,
+             execution_error = NULL,
+             executed_at = now(),
+             updated_at = now()
+         WHERE id = $1
+           AND user_id = $2
+           AND status = 'approved'
+           AND action_type = 'cross_app_write_action'
+           AND execution_status = 'running'
+         RETURNING *`,
+        [approvalId, context.userId, JSON.stringify(executionResult)]
+      );
+      const record = result.rows[0] ? approvalFromRow(result.rows[0]) : undefined;
+      if (record) {
+        await recordAudit(pool, context, "approval.execution.succeeded", "approval", approvalId, {
+          action_type: record.actionType,
+          result: executionResult
+        });
+      }
+      return record;
+    },
+
+    async failApprovalExecution(context, approvalId, error, executionResult = null) {
+      const result = await pool.query(
+        `UPDATE approvals
+         SET execution_status = 'failed',
+             execution_result_json = $4,
+             execution_error = $3,
+             executed_at = now(),
+             updated_at = now()
+         WHERE id = $1
+           AND user_id = $2
+           AND status = 'approved'
+           AND action_type = 'cross_app_write_action'
+           AND execution_status = 'running'
+         RETURNING *`,
+        [approvalId, context.userId, error, executionResult ? JSON.stringify(executionResult) : null]
+      );
+      const record = result.rows[0] ? approvalFromRow(result.rows[0]) : undefined;
+      if (record) {
+        await recordAudit(pool, context, "approval.execution.failed", "approval", approvalId, {
+          action_type: record.actionType,
+          error,
+          result: executionResult
         });
       }
       return record;
@@ -3397,6 +3490,15 @@ export function createMemoryStore(): AgentStore {
           userIds.add(task.userId);
         }
       }
+      for (const approval of approvals.values()) {
+        if (
+          approval.status === "approved" &&
+          approval.actionType === "cross_app_write_action" &&
+          approval.executionStatus === "pending"
+        ) {
+          userIds.add(approval.userId);
+        }
+      }
       for (const connector of connectors.values()) {
         if (connector.kind === "imap" && connector.status === "enabled") {
           userIds.add(connector.userId);
@@ -3432,6 +3534,10 @@ export function createMemoryStore(): AgentStore {
         id: randomUUID(),
         userId: context.userId,
         status: "pending",
+        executionStatus: "not_applicable",
+        executionResult: null,
+        executionError: null,
+        executedAt: null,
         sourceRunId: input.sourceRunId ?? null,
         sourceRef: input.sourceRef ?? null,
         requestedBy: input.requestedBy ?? context.actorType,
@@ -3467,6 +3573,9 @@ export function createMemoryStore(): AgentStore {
       const updated: ApprovalRecord = {
         ...approval,
         status,
+        executionStatus: status === "approved" && approval.actionType === "cross_app_write_action" && approval.executionStatus === "not_applicable"
+          ? "pending"
+          : approval.executionStatus,
         decidedBy: ["approved", "rejected", "expired"].includes(status) ? decidedBy : approval.decidedBy,
         decidedAt: ["approved", "rejected", "expired"].includes(status) ? nowIso() : approval.decidedAt,
         updatedAt: nowIso()
@@ -3475,6 +3584,84 @@ export function createMemoryStore(): AgentStore {
       pushAudit(context, `approval.${status}`, "approval", approvalId, {
         action_type: updated.actionType,
         risk_level: updated.riskLevel
+      });
+      return updated;
+    },
+    async claimApprovalExecution(context, approvalId) {
+      const approval = approvals.get(approvalId);
+      if (
+        !approval ||
+        approval.userId !== context.userId ||
+        approval.status !== "approved" ||
+        approval.actionType !== "cross_app_write_action" ||
+        approval.executionStatus !== "pending"
+      ) {
+        return undefined;
+      }
+      const updated: ApprovalRecord = {
+        ...approval,
+        executionStatus: "running",
+        updatedAt: nowIso()
+      };
+      approvals.set(approvalId, updated);
+      pushAudit(context, "approval.execution.running", "approval", approvalId, {
+        action_type: updated.actionType,
+        source_ref: updated.sourceRef
+      });
+      return updated;
+    },
+    async completeApprovalExecution(context, approvalId, executionResult) {
+      const approval = approvals.get(approvalId);
+      if (
+        !approval ||
+        approval.userId !== context.userId ||
+        approval.status !== "approved" ||
+        approval.actionType !== "cross_app_write_action" ||
+        approval.executionStatus !== "running"
+      ) {
+        return undefined;
+      }
+      const now = nowIso();
+      const updated: ApprovalRecord = {
+        ...approval,
+        executionStatus: "succeeded",
+        executionResult,
+        executionError: null,
+        executedAt: now,
+        updatedAt: now
+      };
+      approvals.set(approvalId, updated);
+      pushAudit(context, "approval.execution.succeeded", "approval", approvalId, {
+        action_type: updated.actionType,
+        result: executionResult
+      });
+      return updated;
+    },
+    async failApprovalExecution(context, approvalId, error, executionResult = null) {
+      const approval = approvals.get(approvalId);
+      if (
+        !approval ||
+        approval.userId !== context.userId ||
+        approval.status !== "approved" ||
+        approval.actionType !== "cross_app_write_action" ||
+        approval.executionStatus !== "running"
+      ) {
+        return undefined;
+      }
+      const now = nowIso();
+      const updated: ApprovalRecord = {
+        ...approval,
+        executionStatus: "failed",
+        executionResult,
+        executionError: error,
+        executedAt: now,
+        updatedAt: now
+      };
+      approvals.set(approvalId, updated);
+      pushAudit(context, "approval.execution.failed", "approval", approvalId, {
+        action_type: updated.actionType,
+        error,
+        result: executionResult
       });
       return updated;
     },

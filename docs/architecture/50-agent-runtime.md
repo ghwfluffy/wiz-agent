@@ -198,7 +198,15 @@ side effect. `propose_outbound_message` now creates an approval plus a linked
 `cross_app_write_action` approval for write-style proposals and does not call
 registered apps directly from the model tool path. Approval records preserve
 the source run, source reference, proposed payload, risk level, summary,
-expiration, and audit trail.
+expiration, execution status, redacted execution result or failure, and audit
+trail.
+
+Approved cross-app write approvals execute only from deterministic host code.
+The worker revalidates the stored action id against the capability registry at
+execution time, rejects read actions and directory-only apps, mints the scoped
+integration token server-side, calls through the integration gateway, and stores
+only redacted response data. The model never receives bearer tokens and cannot
+execute a high-risk registered app write directly.
 
 Reply tools receive any inbound owner-message context from host code, not from
 model arguments, so the model still cannot select recipients. Owner SMS/email

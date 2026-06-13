@@ -176,6 +176,7 @@ const promptModes: { value: AgentPromptMode; label: string }[] = [
 const knowledgeRootPaths = ["/personal", "/preferences", "/assistant", "/tasks", "/projects", "/newsletters", "/legacy"];
 const activeOutbox = computed(() => outbox.value.filter((message) => ["requires_approval", "pending", "approved", "sending"].includes(message.status)));
 const pendingApprovals = computed(() => approvals.value.filter((approval) => approval.status === "pending"));
+const approvalInboxCount = computed(() => approvals.value.length);
 const outboxHistory = computed(() => outbox.value.filter((message) => ["sent", "failed"].includes(message.status)));
 const recentAudit = computed(() => audit.value.slice(0, 12));
 const agentRunEvents = computed(() => audit.value.filter((event) => event.action.startsWith("agent_run.")).slice(0, 12));
@@ -492,6 +493,25 @@ function approvalPayloadText(approval: Approval): string {
   return typeof body === "string" ? body : "";
 }
 
+function approvalActionId(approval: Approval): string {
+  const actionId = approval.proposedPayload.action_id;
+  return typeof actionId === "string" && actionId.trim() ? actionId : approval.sourceRef || "none";
+}
+
+function approvalExecutionSummary(approval: Approval): string {
+  if (approval.executionStatus === "succeeded") {
+    return formatDetails(approval.executionResult ?? {});
+  }
+  if (approval.executionStatus === "failed") {
+    return approval.executionError || "Execution failed.";
+  }
+  return approval.executionStatus.replace(/_/g, " ");
+}
+
+async function refreshApprovals(): Promise<void> {
+  approvals.value = (await api.listApprovals("pending,approved,rejected,expired")).approvals;
+}
+
 function setActiveTab(tabId: TabId): void {
   activeTab.value = tabId;
   void router.replace({ query: { ...route.query, tab: tabId } });
@@ -683,8 +703,7 @@ async function loadActiveTab(): Promise<void> {
         break;
       }
       case "approvals": {
-        const response = await api.listApprovals();
-        approvals.value = response.approvals;
+        await refreshApprovals();
         break;
       }
       case "outbox": {
@@ -886,7 +905,7 @@ async function decidePendingApproval(approval: Approval, decision: "approve" | "
   try {
     await api.updateApproval(approval.id, { decision });
     await loadDashboard();
-    approvals.value = (await api.listApprovals()).approvals;
+    await refreshApprovals();
   } catch {
     dashboardError.value = "Unable to update the approval.";
   }
@@ -900,7 +919,7 @@ async function editPendingApproval(approval: Approval): Promise<void> {
   try {
     await api.updateApproval(approval.id, { decision: "edit", text });
     await loadDashboard();
-    approvals.value = (await api.listApprovals()).approvals;
+    await refreshApprovals();
   } catch {
     dashboardError.value = "Unable to edit the approval.";
   }
@@ -910,7 +929,7 @@ async function rejectStaleApprovals(): Promise<void> {
   try {
     await api.rejectStaleApprovals();
     await loadDashboard();
-    approvals.value = (await api.listApprovals()).approvals;
+    await refreshApprovals();
   } catch {
     dashboardError.value = "Unable to reject stale approvals.";
   }
@@ -1535,15 +1554,15 @@ onUnmounted(() => {
           <div class="section-heading">
             <div>
               <h2>Approval inbox</h2>
-              <p class="label">{{ pendingApprovals.length }} pending</p>
+              <p class="label">{{ pendingApprovals.length }} pending / {{ approvalInboxCount }} recent</p>
             </div>
             <button class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="rejectStaleApprovals">
               Reject stale
             </button>
           </div>
-          <p v-if="pendingApprovals.length === 0" class="empty">No pending approvals.</p>
+          <p v-if="approvals.length === 0" class="empty">No approvals.</p>
           <div v-else class="approval-list">
-            <article v-for="approval in pendingApprovals" :key="approval.id" class="approval-item">
+            <article v-for="approval in approvals" :key="approval.id" class="approval-item">
               <div class="approval-header">
                 <div>
                   <p class="label">{{ approval.actionType }} / {{ approval.riskLevel }}</p>
@@ -1560,13 +1579,22 @@ onUnmounted(() => {
                   <dt>Source</dt>
                   <dd>{{ approval.sourceRef || "none" }}</dd>
                 </div>
+                <div v-if="approval.actionType === 'cross_app_write_action'">
+                  <dt>Action</dt>
+                  <dd>{{ approvalActionId(approval) }}</dd>
+                </div>
+                <div v-if="approval.actionType === 'cross_app_write_action'">
+                  <dt>Execution</dt>
+                  <dd>{{ approval.executionStatus }}</dd>
+                </div>
                 <div>
                   <dt>Expires</dt>
                   <dd>{{ formatDate(approval.expiresAt) }}</dd>
                 </div>
               </dl>
               <pre>{{ formatDetails(approval.proposedPayload) }}</pre>
-              <div v-if="approval.actionType === 'send_outbound_message'" class="cds--form-item">
+              <pre v-if="approval.actionType === 'cross_app_write_action' && approval.executionStatus !== 'not_applicable'">{{ approvalExecutionSummary(approval) }}</pre>
+              <div v-if="approval.status === 'pending' && approval.actionType === 'send_outbound_message'" class="cds--form-item">
                 <label class="cds--label" :for="`approval-edit-${approval.id}`">Edited message</label>
                 <textarea
                   :id="`approval-edit-${approval.id}`"
@@ -1576,11 +1604,11 @@ onUnmounted(() => {
                   :placeholder="approvalPayloadText(approval)"
                 />
               </div>
-              <div class="table-actions">
+              <div v-if="approval.status === 'pending'" class="table-actions">
                 <button class="cds--btn cds--btn--sm cds--btn--primary" type="button" @click="decidePendingApproval(approval, 'approve')">
                   Approve
                 </button>
-                <button class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="editPendingApproval(approval)">
+                <button v-if="approval.actionType === 'send_outbound_message'" class="cds--btn cds--btn--sm cds--btn--secondary" type="button" @click="editPendingApproval(approval)">
                   Save edit
                 </button>
                 <button class="cds--btn cds--btn--sm cds--btn--danger--tertiary" type="button" @click="decidePendingApproval(approval, 'reject')">

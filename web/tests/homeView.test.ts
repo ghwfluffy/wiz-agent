@@ -458,6 +458,10 @@ describe("home view", () => {
     const approval = {
       id: "approval-1",
       status: "pending",
+      executionStatus: "not_applicable",
+      executionResult: null,
+      executionError: null,
+      executedAt: null,
       actionType: "send_outbound_message",
       sourceRunId: "run-1",
       sourceRef: "sms",
@@ -468,6 +472,26 @@ describe("home view", () => {
       requestedBy: "agent",
       decidedBy: null,
       decidedAt: null,
+      createdAt: "",
+      updatedAt: ""
+    };
+    const crossAppApproval = {
+      id: "approval-2",
+      status: "approved",
+      executionStatus: "succeeded",
+      executionResult: { status: 201, data: { id: "goal-1", access_token: "[redacted]" } },
+      executionError: null,
+      executedAt: "",
+      actionType: "cross_app_write_action",
+      sourceRunId: "run-2",
+      sourceRef: "goals.create_goal",
+      proposedPayload: { action_id: "goals.create_goal", body: { title: "Phase 02" } },
+      riskLevel: "high",
+      summary: "Create Phase 02 goal",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      requestedBy: "agent",
+      decidedBy: "u1",
+      decidedAt: "",
       createdAt: "",
       updatedAt: ""
     };
@@ -486,7 +510,7 @@ describe("home view", () => {
         return { ok: true, json: async () => ({ approval }) };
       }
       if (url.includes("/approvals")) {
-        return { ok: true, json: async () => ({ approvals: [approval] }) };
+        return { ok: true, json: async () => ({ approvals: [approval, crossAppApproval] }) };
       }
       if (url.includes("/admin/ai-config")) {
         return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
@@ -522,6 +546,9 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Approval inbox");
     expect(wrapper.text()).toContain("Send SMS owner message");
     expect(wrapper.text()).toContain("Original message");
+    expect(wrapper.text()).toContain("Create Phase 02 goal");
+    expect(wrapper.text()).toContain("goals.create_goal");
+    expect(wrapper.text()).toContain("[redacted]");
 
     const textarea = wrapper.get("#approval-edit-approval-1");
     (textarea.element as HTMLTextAreaElement).value = "Edited message";

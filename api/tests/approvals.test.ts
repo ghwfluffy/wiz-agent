@@ -7,13 +7,15 @@ import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
 import { buildApp } from "../src/http/app.js";
+import { SignedIntegrationTokenProvider } from "../src/integrations/tokenProvider.js";
+import { executeApprovedCrossAppApproval } from "../src/scheduler/approvalExecutor.js";
 import { SlidingWindowRateLimiter } from "../src/security/senderPolicy.js";
 
 function cookieHeader(sessionId: string): string {
   return `agent_session=${sessionId}`;
 }
 
-async function testContext(): Promise<{
+async function testContext(env: Record<string, string> = {}): Promise<{
   context: RequestContext;
   store: ReturnType<typeof createMemoryStore>;
   settings: ReturnType<typeof loadSettings>;
@@ -22,7 +24,8 @@ async function testContext(): Promise<{
     APP_ENV: "test",
     AUTH_MODE: "standalone",
     DEV_USER_ID: "owner",
-    DEV_USER_EMAIL: "owner@example.test"
+    DEV_USER_EMAIL: "owner@example.test",
+    ...env
   });
   const store = createMemoryStore();
   const session = await store.createDevelopmentSession(settings, "approval-test-login");
@@ -217,6 +220,243 @@ describe("approval and notification policy", () => {
         expect.objectContaining({ action: "approval.rejected", entityId: approval.id })
       ])
     );
+  });
+
+  it("executes approved cross-app writes with a scoped signed token and redacts stored results", async () => {
+    const { context, store, settings } = await testContext({
+      DEV_USER_ID: "oauth:central-oauth:owner-subject",
+      GOALS_API_BASE_URL: "https://goals.example.test/api/",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const approval = await store.createApproval(context, {
+      actionType: "cross_app_write_action",
+      proposedPayload: {
+        action_id: "goals.create_goal",
+        path_params: {},
+        query: {},
+        body: { title: "Phase 02" }
+      },
+      riskLevel: "high",
+      summary: "Create goal",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, approval.id, "approved", context.userId);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://goals.example.test/api/goals");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({ title: "Phase 02" });
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      expect(authorization).toMatch(/^Bearer agent-v1\./);
+      const payload = JSON.parse(Buffer.from(authorization.split(".")[1] ?? "", "base64url").toString("utf8"));
+      expect(payload).toMatchObject({
+        aud: "goals",
+        scope: "goals.create_goal",
+        sub: "owner-subject"
+      });
+      return Response.json({
+        id: "goal-1",
+        title: "Phase 02",
+        access_token: "secret-token",
+        nested: { session_cookie: "secret-cookie" }
+      }, { status: 201 });
+    });
+
+    const result = await executeApprovedCrossAppApproval({
+      context,
+      store,
+      settings,
+      approvalId: approval.id,
+      tokenProvider: new SignedIntegrationTokenProvider(settings),
+      fetchImpl: fetchMock
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      executionStatus: "succeeded",
+      executionResult: {
+        status: 201,
+        data: {
+          id: "goal-1",
+          title: "Phase 02",
+          access_token: "[redacted]",
+          nested: { session_cookie: "[redacted]" }
+        }
+      }
+    });
+    await expect(store.listAudit(context, false)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "approval.execution.succeeded",
+        entityId: approval.id,
+        details: expect.objectContaining({
+          result: expect.objectContaining({
+            data: expect.objectContaining({ access_token: "[redacted]" })
+          })
+        })
+      })
+    ]));
+  });
+
+  it("fails closed for read, unknown, and directory-only cross-app approvals", async () => {
+    const { context, store, settings } = await testContext({ GOALS_API_BASE_URL: "https://goals.example.test" });
+    const cases = [
+      { action_id: "goals.list_goals", error: "integration_action_not_write" },
+      { action_id: "apartment_gate.open_gate", error: "unknown_integration_action" },
+      { action_id: "not.registered", error: "unknown_integration_action" }
+    ];
+    for (const entry of cases) {
+      const approval = await store.createApproval(context, {
+        actionType: "cross_app_write_action",
+        proposedPayload: { action_id: entry.action_id },
+        riskLevel: "high",
+        summary: "Unsafe action",
+        expiresAt: new Date(Date.now() + 60_000).toISOString()
+      });
+      await store.updateApprovalStatus(context, approval.id, "approved", context.userId);
+      const fetchMock = vi.fn();
+
+      const result = await executeApprovedCrossAppApproval({
+        context,
+        store,
+        settings,
+        approvalId: approval.id,
+        tokenProvider: { tokenFor: async () => "token" },
+        fetchImpl: fetchMock
+      });
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ executionStatus: "failed", executionError: entry.error });
+    }
+  });
+
+  it("prevents duplicate cross-app approval execution", async () => {
+    const { context, store, settings } = await testContext({
+      DEV_USER_ID: "oauth:central-oauth:owner-subject",
+      GOALS_API_BASE_URL: "https://goals.example.test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const approval = await store.createApproval(context, {
+      actionType: "cross_app_write_action",
+      proposedPayload: { action_id: "goals.create_goal", body: { title: "One time" } },
+      riskLevel: "high",
+      summary: "Create goal",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, approval.id, "approved", context.userId);
+    const fetchMock = vi.fn(async () => Response.json({ ok: true }, { status: 201 }));
+    const tokenProvider = new SignedIntegrationTokenProvider(settings);
+
+    await executeApprovedCrossAppApproval({ context, store, settings, approvalId: approval.id, tokenProvider, fetchImpl: fetchMock });
+    const duplicate = await executeApprovedCrossAppApproval({ context, store, settings, approvalId: approval.id, tokenProvider, fetchImpl: fetchMock });
+
+    expect(duplicate).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(store.getApproval(context, approval.id)).resolves.toMatchObject({ executionStatus: "succeeded" });
+  });
+
+  it("does not execute expired or rejected cross-app approvals", async () => {
+    const { context, store, settings } = await testContext({ GOALS_API_BASE_URL: "https://goals.example.test" });
+    const expired = await store.createApproval(context, {
+      actionType: "cross_app_write_action",
+      proposedPayload: { action_id: "goals.create_goal", body: { title: "Too late" } },
+      riskLevel: "high",
+      summary: "Expired",
+      expiresAt: new Date(Date.now() - 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, expired.id, "approved", context.userId);
+    const rejected = await store.createApproval(context, {
+      actionType: "cross_app_write_action",
+      proposedPayload: { action_id: "goals.create_goal", body: { title: "Rejected" } },
+      riskLevel: "high",
+      summary: "Rejected",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, rejected.id, "rejected", context.userId);
+    const fetchMock = vi.fn();
+
+    const expiredResult = await executeApprovedCrossAppApproval({
+      context,
+      store,
+      settings,
+      approvalId: expired.id,
+      tokenProvider: { tokenFor: async () => "token" },
+      fetchImpl: fetchMock
+    });
+    const rejectedResult = await executeApprovedCrossAppApproval({
+      context,
+      store,
+      settings,
+      approvalId: rejected.id,
+      tokenProvider: { tokenFor: async () => "token" },
+      fetchImpl: fetchMock
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(expiredResult).toMatchObject({ executionStatus: "failed", executionError: "approval_expired" });
+    expect(rejectedResult).toBeUndefined();
+  });
+
+  it("records a visible failure when integration token config is unavailable", async () => {
+    const { context, store, settings } = await testContext({ GOALS_API_BASE_URL: "https://goals.example.test" });
+    const approval = await store.createApproval(context, {
+      actionType: "cross_app_write_action",
+      proposedPayload: { action_id: "goals.create_goal", body: { title: "No token" } },
+      riskLevel: "high",
+      summary: "Create goal",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, approval.id, "approved", context.userId);
+    const fetchMock = vi.fn();
+
+    const result = await executeApprovedCrossAppApproval({
+      context,
+      store,
+      settings,
+      approvalId: approval.id,
+      tokenProvider: new SignedIntegrationTokenProvider(settings),
+      fetchImpl: fetchMock
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      executionStatus: "failed",
+      executionError: "missing_user_integration_token"
+    });
+  });
+
+  it("records a failed execution when the cross-app request throws", async () => {
+    const { context, store, settings } = await testContext({
+      DEV_USER_ID: "oauth:central-oauth:owner-subject",
+      GOALS_API_BASE_URL: "https://goals.example.test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const approval = await store.createApproval(context, {
+      actionType: "cross_app_write_action",
+      proposedPayload: { action_id: "goals.create_goal", body: { title: "Network failure" } },
+      riskLevel: "high",
+      summary: "Create goal",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, approval.id, "approved", context.userId);
+
+    const result = await executeApprovedCrossAppApproval({
+      context,
+      store,
+      settings,
+      approvalId: approval.id,
+      tokenProvider: new SignedIntegrationTokenProvider(settings),
+      fetchImpl: async () => {
+        throw new Error("integration unavailable");
+      }
+    });
+
+    expect(result).toMatchObject({
+      executionStatus: "failed",
+      executionError: "integration unavailable"
+    });
+    await expect(store.getApproval(context, approval.id)).resolves.toMatchObject({
+      executionStatus: "failed",
+      executionError: "integration unavailable"
+    });
   });
 
   it("edits outbound approval payload and audits the edit", async () => {
