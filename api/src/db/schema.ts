@@ -397,6 +397,17 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
   applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+ALTER TABLE approvals
+  ADD COLUMN IF NOT EXISTS source_run_id TEXT,
+  ADD COLUMN IF NOT EXISTS source_ref TEXT,
+  ADD COLUMN IF NOT EXISTS risk_level TEXT NOT NULL DEFAULT 'high',
+  ADD COLUMN IF NOT EXISTS summary TEXT NOT NULL DEFAULT '',
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ,
+  ADD COLUMN IF NOT EXISTS execution_status TEXT NOT NULL DEFAULT 'not_applicable',
+  ADD COLUMN IF NOT EXISTS execution_result_json JSONB,
+  ADD COLUMN IF NOT EXISTS execution_error TEXT,
+  ADD COLUMN IF NOT EXISTS executed_at TIMESTAMPTZ;
+
 CREATE INDEX IF NOT EXISTS idx_sessions_token_hash ON sessions(token_hash);
 CREATE INDEX IF NOT EXISTS idx_tasks_user_status_due ON tasks(user_id, status, due_at);
 CREATE INDEX IF NOT EXISTS idx_audit_log_user_created ON audit_log(user_id, created_at DESC);

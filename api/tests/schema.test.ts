@@ -70,6 +70,7 @@ describe("initial schema", () => {
     expect(INITIAL_SCHEMA_SQL).toContain("allowed_tools_json JSONB");
     expect(INITIAL_SCHEMA_SQL).toContain("source_run_id TEXT");
     expect(INITIAL_SCHEMA_SQL).toContain("expires_at TIMESTAMPTZ");
+    expect(INITIAL_SCHEMA_SQL).toContain("ADD COLUMN IF NOT EXISTS execution_status TEXT");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_conversation_threads_user_status_updated");
   });
 
