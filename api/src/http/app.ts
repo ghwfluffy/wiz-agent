@@ -10,11 +10,18 @@ import { createPool } from "../db/pool.js";
 import { createMemoryStore, createPostgresStore } from "../domain/store.js";
 import type {
   AgentStore,
+  AuditRecord,
   ConnectorKind,
   ConnectorStatus,
+  ConversationThreadRecord,
   MarkdownConflict,
+  MarkdownDirectoryEntry,
+  MarkdownDocumentRecord,
+  MemoryChangeRecord,
+  OutboundMessageRecord,
   RequestContext,
-  SenderStatus
+  SenderStatus,
+  TaskRecord
 } from "../domain/types.js";
 import { decideApproval, editApproval } from "../security/approvalPolicy.js";
 import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
@@ -177,6 +184,78 @@ function linkValue(result: Record<string, unknown> | undefined, key: string): st
 
 function countByStatus<T extends { status: string }>(records: T[], status: string): number {
   return records.filter((record) => record.status === status).length;
+}
+
+function isActiveTask(task: TaskRecord): boolean {
+  return !["completed", "cancelled", "failed"].includes(task.status);
+}
+
+function isCredentialLikeLine(line: string): boolean {
+  return /(password|secret|token|api[_ -]?key|credential|authorization|bearer)/i.test(line);
+}
+
+function compactMarkdownSnippet(markdown: string, maxLines = 3): string {
+  return markdown
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("<!--"))
+    .filter((line) => !isCredentialLikeLine(line))
+    .slice(0, maxLines)
+    .join(" ")
+    .slice(0, 400);
+}
+
+function markdownExcerpt(document: MarkdownDocumentRecord | undefined): string | null {
+  if (!document) {
+    return null;
+  }
+  return compactMarkdownSnippet(document.markdown) || document.title || document.path;
+}
+
+function checkboxCounts(markdown: string): { total: number; archived: number; active: number } {
+  const checkboxLines = markdown.split("\n").filter((line) => /^\s*-\s+\[[ xX]\]/.test(line));
+  const archived = checkboxLines.filter((line) => /archived:\s*true/i.test(line) || /\[[xX]\]/.test(line)).length;
+  return {
+    total: checkboxLines.length,
+    archived,
+    active: Math.max(0, checkboxLines.length - archived)
+  };
+}
+
+function publicOutbound(message: OutboundMessageRecord) {
+  return {
+    id: message.id,
+    channel: message.channel,
+    status: message.status,
+    subject: message.subject,
+    bodyText: message.bodyText,
+    approvalId: message.approvalId,
+    createdAt: message.createdAt,
+    updatedAt: message.updatedAt,
+    sentAt: message.sentAt ?? null,
+    failureMessage: message.failureMessage ?? null
+  };
+}
+
+function threadAttention(thread: ConversationThreadRecord): string {
+  if (thread.unresolvedQuestion) {
+    return thread.unresolvedQuestion;
+  }
+  if (thread.linkedTaskIds.length > 0) {
+    return `${thread.linkedTaskIds.length} linked task${thread.linkedTaskIds.length === 1 ? "" : "s"}`;
+  }
+  return thread.lastOwnerIntentSummary ?? "No unresolved question recorded.";
+}
+
+function auditSummary(event: AuditRecord): string {
+  const message = event.details.message;
+  const reason = event.details.reason;
+  const guardrail = event.details.guardrail;
+  const failure = event.details.failure_message;
+  return [guardrail, reason, failure, message]
+    .filter((value): value is string | number | boolean => ["string", "number", "boolean"].includes(typeof value))
+    .map(String)
+    .join(" - ") || event.action;
 }
 
 export function buildApp(options: AppOptions = {}): Hono {
@@ -365,6 +444,253 @@ export function buildApp(options: AppOptions = {}): Hono {
     };
   }
 
+  async function buildDashboardPayload(authContext: RequestContext) {
+    const [
+      tasks,
+      approvals,
+      memoryChanges,
+      threads,
+      outbox,
+      audit,
+      runs,
+      toolCalls,
+      decisionEntries,
+      feedbackEntries,
+      listEntries
+    ] = await Promise.all([
+      store.listTasks(authContext),
+      store.listApprovals(authContext, ["pending", "approved", "rejected", "expired"]),
+      store.listMemoryChanges(authContext, { limit: 12 }),
+      store.listConversationThreads(authContext, ["active", "waiting"], 12),
+      store.listOutboundMessages(authContext),
+      store.listAudit(authContext, false),
+      store.listAgentRuns(authContext, false),
+      store.listToolCalls(authContext, false),
+      store.listMarkdownDirectory(authContext, "/assistant/decisions").catch(() => [] as MarkdownDirectoryEntry[]),
+      store.listMarkdownDirectory(authContext, "/assistant/feedback").catch(() => [] as MarkdownDirectoryEntry[]),
+      store.listMarkdownDirectory(authContext, "/personal/lists").catch(() => [] as MarkdownDirectoryEntry[])
+    ]);
+    const nowMs = Date.now();
+    const dayAgoMs = nowMs - 24 * 60 * 60 * 1000;
+    const weekAgoMs = nowMs - 7 * 24 * 60 * 60 * 1000;
+    const ownerVisibleStatuses = new Set(["requires_approval", "approved", "pending", "sending", "sent"]);
+    const ownerVisibleOutbox = outbox.filter((message) => ownerVisibleStatuses.has(message.status));
+    const outboundLast24h = ownerVisibleOutbox.filter((message) => Date.parse(message.createdAt) >= dayAgoMs).length;
+    const outboundLast7d = ownerVisibleOutbox.filter((message) => Date.parse(message.createdAt) >= weekAgoMs).length;
+    const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
+    const failedRuns = runs.filter((run) => run.status === "failed");
+    const failedToolCalls = toolCalls.filter((toolCall) => toolCall.status === "failed" || toolCall.status === "rejected");
+    const failedOutbox = outbox.filter((message) => message.status === "failed");
+    const guardrails = audit.filter((event) => event.action === "guardrail.exceeded");
+    const recentDecisionDocs = await Promise.all(
+      decisionEntries
+        .filter((entry) => entry.type === "file")
+        .sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")))
+        .slice(0, 3)
+        .map((entry) => store.getMarkdownDocument(authContext, entry.path))
+    );
+    const recentFeedbackDocs = await Promise.all(
+      feedbackEntries
+        .filter((entry) => entry.type === "file")
+        .sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")))
+        .slice(0, 3)
+        .map((entry) => store.getMarkdownDocument(authContext, entry.path))
+    );
+    const listDocs = await Promise.all(
+      listEntries
+        .filter((entry) => entry.type === "file")
+        .sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")))
+        .slice(0, 8)
+        .map((entry) => store.getMarkdownDocument(authContext, entry.path))
+    );
+    const activeTasks = tasks
+      .filter(isActiveTask)
+      .sort((a, b) => {
+        const aDue = a.dueAt ? Date.parse(a.dueAt) : Number.POSITIVE_INFINITY;
+        const bDue = b.dueAt ? Date.parse(b.dueAt) : Number.POSITIVE_INFINITY;
+        return aDue - bDue || b.priority - a.priority || b.updatedAt.localeCompare(a.updatedAt);
+      })
+      .slice(0, 12);
+    const attentionItems = [
+      ...pendingApprovals.map((approval) => ({
+        id: approval.id,
+        kind: "approval",
+        severity: approval.riskLevel,
+        title: approval.summary,
+        status: approval.status,
+        createdAt: approval.createdAt
+      })),
+      ...activeTasks
+        .filter((task) => task.ownerClarificationNeeded || task.blockedReason || task.waitingOn)
+        .map((task) => ({
+          id: task.id,
+          kind: "task",
+          severity: task.blockedReason ? "high" : "medium",
+          title: task.title,
+          status: task.blockedReason ?? task.waitingOn ?? "owner clarification needed",
+          createdAt: task.updatedAt
+        })),
+      ...failedRuns.slice(0, 5).map((run) => ({
+        id: run.id,
+        kind: "failed_run",
+        severity: "high",
+        title: run.failureMessage ?? "Agent run failed.",
+        status: run.status,
+        createdAt: run.startedAt
+      })),
+      ...guardrails.slice(0, 5).map((event) => ({
+        id: event.id,
+        kind: "guardrail",
+        severity: "high",
+        title: auditSummary(event),
+        status: event.action,
+        createdAt: event.createdAt
+      }))
+    ].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 16);
+    const cadenceStatus = outboundLast24h >= 5 || pendingApprovals.length >= 3
+      ? "high"
+      : outboundLast7d === 0
+        ? "quiet"
+        : "normal";
+    const cadenceGuidance = cadenceStatus === "high"
+      ? "Recent owner-visible contact or pending approvals are high; prefer batching or waiting unless urgent."
+      : cadenceStatus === "quiet"
+        ? "No owner-visible outbound contact in the last week."
+        : "Recent owner-visible contact is within normal bounds.";
+
+    return {
+      generatedAt: new Date().toISOString(),
+      metrics: {
+        activeTasks: activeTasks.length,
+        pendingApprovals: pendingApprovals.length,
+        activeThreads: threads.length,
+        recentMemoryChanges: memoryChanges.length,
+        failedRuns: failedRuns.length,
+        guardrailTrips: guardrails.length,
+        outboundLast24h,
+        outboundLast7d
+      },
+      attention: attentionItems,
+      activeTasks: activeTasks.map((task) => ({
+        id: task.id,
+        title: task.title,
+        status: task.status,
+        dueAt: task.dueAt,
+        priority: task.priority,
+        scheduleRationale: task.scheduleRationale,
+        recurrencePolicy: task.recurrencePolicy,
+        nextReviewAt: task.nextReviewAt,
+        waitingOn: task.waitingOn,
+        blockedReason: task.blockedReason,
+        ownerClarificationNeeded: task.ownerClarificationNeeded,
+        sourceMemoryPath: task.sourceMemoryPath,
+        sourceMessageId: task.sourceMessageId,
+        sourceTaskId: task.sourceTaskId,
+        updatedAt: task.updatedAt
+      })),
+      pendingApprovals: pendingApprovals.slice(0, 12).map((approval) => ({
+        id: approval.id,
+        actionType: approval.actionType,
+        riskLevel: approval.riskLevel,
+        summary: approval.summary,
+        expiresAt: approval.expiresAt,
+        sourceRunId: approval.sourceRunId,
+        sourceRef: approval.sourceRef,
+        executionStatus: approval.executionStatus,
+        createdAt: approval.createdAt
+      })),
+      recentDecisions: recentDecisionDocs
+        .filter((document): document is MarkdownDocumentRecord => Boolean(document))
+        .map((document) => ({
+          path: document.path,
+          title: document.title ?? document.basename,
+          updatedAt: document.updatedAt,
+          excerpt: markdownExcerpt(document)
+        })),
+      recentMemoryChanges: memoryChanges.map((change: MemoryChangeRecord) => ({
+        id: change.id,
+        path: change.path,
+        auditAction: change.auditAction,
+        actorType: change.actorType,
+        createdAt: change.createdAt,
+        summary: {
+          addedLines: change.addedLines,
+          removedLines: change.removedLines,
+          diffTruncated: change.diffTruncated
+        },
+        linkedTaskId: change.linkedTaskId,
+        linkedRunId: change.linkedRunId,
+        linkedToolCallId: change.linkedToolCallId,
+        linkedApprovalId: change.linkedApprovalId
+      })),
+      recentFeedback: recentFeedbackDocs
+        .filter((document): document is MarkdownDocumentRecord => Boolean(document))
+        .map((document) => ({
+          path: document.path,
+          title: document.title ?? document.basename,
+          updatedAt: document.updatedAt,
+          excerpt: markdownExcerpt(document)
+        })),
+      activeThreads: threads.map((thread) => ({
+        id: thread.id,
+        title: thread.title,
+        status: thread.status,
+        lastOwnerIntentSummary: thread.lastOwnerIntentSummary,
+        unresolvedQuestion: thread.unresolvedQuestion,
+        attention: threadAttention(thread),
+        linkedTaskCount: thread.linkedTaskIds.length,
+        linkedMessageCount: thread.linkedMessageIds.length,
+        linkedMemoryCount: thread.linkedMemoryPaths.length,
+        updatedAt: thread.updatedAt
+      })),
+      contactCadence: {
+        status: cadenceStatus,
+        ownerVisibleOutboundLast24h: outboundLast24h,
+        ownerVisibleOutboundLast7d: outboundLast7d,
+        pendingApprovals: pendingApprovals.length,
+        failedOutbound: failedOutbox.length,
+        guidance: cadenceGuidance,
+        recentOutbound: ownerVisibleOutbox.slice(0, 8).map(publicOutbound)
+      },
+      personalLists: listDocs
+        .filter((document): document is MarkdownDocumentRecord => Boolean(document))
+        .map((document) => ({
+          path: document.path,
+          title: document.title ?? document.basename.replace(/\.md$/i, ""),
+          updatedAt: document.updatedAt,
+          ...checkboxCounts(document.markdown),
+          excerpt: compactMarkdownSnippet(document.markdown, 2)
+        })),
+      safety: {
+        guardrails: guardrails.slice(0, 10).map((event) => ({
+          id: event.id,
+          action: event.action,
+          summary: auditSummary(event),
+          createdAt: event.createdAt
+        })),
+        failedRuns: failedRuns.slice(0, 10).map((run) => ({
+          id: run.id,
+          taskId: run.taskId,
+          modelTier: run.modelTier,
+          modelId: run.modelId,
+          failureMessage: run.failureMessage,
+          startedAt: run.startedAt,
+          finishedAt: run.finishedAt
+        })),
+        failedToolCalls: failedToolCalls.slice(0, 10).map((toolCall) => ({
+          id: toolCall.id,
+          runId: toolCall.runId,
+          toolName: toolCall.toolName,
+          status: toolCall.status,
+          validationError: toolCall.validationError,
+          createdAt: toolCall.createdAt,
+          completedAt: toolCall.completedAt
+        })),
+        failedOutbound: failedOutbox.slice(0, 10).map(publicOutbound)
+      }
+    };
+  }
+
   app.get("/healthz", (context) => context.json({ status: "ok" }));
 
   app.get("/api/v1/status", (context) => context.json({
@@ -381,6 +707,14 @@ export function buildApp(options: AppOptions = {}): Hono {
       return authContext;
     }
     return context.json(await buildJobsPayload(authContext, false));
+  });
+
+  app.get("/api/v1/dashboard", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    return context.json(await buildDashboardPayload(authContext));
   });
 
   app.get("/api/v1/auth/me", async (context) => {

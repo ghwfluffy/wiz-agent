@@ -144,7 +144,7 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Tasks");
     expect(wrapper.text()).toContain("Memory");
     expect(wrapper.text()).toContain("Settings");
-    expect(wrapper.text()).toContain("Audit events");
+    expect(wrapper.text()).toContain("Memory changes");
     expect(wrapper.text()).toContain("owner@example.test");
     expect(wrapper.text()).toContain("AI configuration");
     expect(wrapper.text()).toContain("Account settings");
@@ -154,6 +154,95 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("sent@example.test");
     expect(wrapper.text()).toContain("SMTP error");
     expect(wrapper.text()).toContain("Newsletter Preferences");
+  });
+
+  it("renders personal assistant insight sections on the overview", async () => {
+    const insightPayload = {
+      generatedAt: "2026-06-13T12:00:00.000Z",
+      metrics: {
+        activeTasks: 1,
+        pendingApprovals: 1,
+        activeThreads: 1,
+        recentMemoryChanges: 1,
+        failedRuns: 1,
+        guardrailTrips: 1,
+        outboundLast24h: 2,
+        outboundLast7d: 4
+      },
+      attention: [{ id: "approval-1", kind: "approval", severity: "medium", title: "Approve check-in", status: "pending", createdAt: "2026-06-13T12:00:00.000Z" }],
+      activeTasks: [{ id: "task-1", title: "Review travel plan", status: "pending", dueAt: null, priority: 0, scheduleRationale: "Owner asked for a follow-up.", recurrencePolicy: null, nextReviewAt: null, waitingOn: null, blockedReason: null, ownerClarificationNeeded: false, sourceMemoryPath: null, sourceMessageId: null, sourceTaskId: null, updatedAt: "2026-06-13T12:00:00.000Z" }],
+      pendingApprovals: [{ id: "approval-1", actionType: "send_outbound_message", riskLevel: "medium", summary: "Send owner a travel-plan check-in.", expiresAt: "2026-06-13T13:00:00.000Z", sourceRunId: null, sourceRef: null, executionStatus: "not_applicable", createdAt: "2026-06-13T12:00:00.000Z" }],
+      recentDecisions: [{ path: "/assistant/decisions/2026-06.md", title: "Assistant Decisions", updatedAt: "2026-06-13T12:00:00.000Z", excerpt: "Queued a check-in because the task is due soon." }],
+      recentMemoryChanges: [{ id: "change-1", path: "/assistant/feedback/2026-06.md", auditAction: "owner_feedback.recorded", actorType: "agent", createdAt: "2026-06-13T12:00:00.000Z", summary: { addedLines: 3, removedLines: 0, diffTruncated: false }, linkedTaskId: null, linkedRunId: "run-1", linkedToolCallId: null, linkedApprovalId: null }],
+      recentFeedback: [{ path: "/assistant/feedback/2026-06.md", title: "Owner Feedback", updatedAt: "2026-06-13T12:00:00.000Z", excerpt: "Owner said to avoid early texts." }],
+      activeThreads: [{ id: "thread-1", title: "Travel planning", status: "waiting", lastOwnerIntentSummary: "Choosing a hotel.", unresolvedQuestion: "Which hotel should be used?", attention: "Which hotel should be used?", linkedTaskCount: 1, linkedMessageCount: 2, linkedMemoryCount: 1, updatedAt: "2026-06-13T12:00:00.000Z" }],
+      contactCadence: { status: "high", ownerVisibleOutboundLast24h: 2, ownerVisibleOutboundLast7d: 4, pendingApprovals: 1, failedOutbound: 1, guidance: "Prefer batching or waiting unless urgent.", recentOutbound: [] },
+      personalLists: [{ path: "/personal/lists/books.md", title: "Books", updatedAt: "2026-06-13T12:00:00.000Z", total: 2, archived: 1, active: 1, excerpt: "The Design of Everyday Things" }],
+      safety: {
+        guardrails: [{ id: "guardrail-1", action: "guardrail.exceeded", summary: "owner-visible outbound cap", createdAt: "2026-06-13T12:00:00.000Z" }],
+        failedRuns: [{ id: "run-1", taskId: null, modelTier: "fast", modelId: "mock-fast", failureMessage: "Model returned no usable action.", startedAt: "2026-06-13T12:00:00.000Z", finishedAt: null }],
+        failedToolCalls: [{ id: "tool-1", runId: "run-1", toolName: "create_task", status: "rejected", validationError: "prompt is required", createdAt: "2026-06-13T12:00:00.000Z", completedAt: null }],
+        failedOutbound: [{ id: "outbound-1", channel: "sms", status: "failed", subject: null, bodyText: "Message", approvalId: null, createdAt: "2026-06-13T12:00:00.000Z", updatedAt: "2026-06-13T12:00:00.000Z", sentAt: null, failureMessage: "SMTP refused the message." }]
+      }
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/dashboard")) {
+        return { ok: true, json: async () => insightPayload };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome();
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("Attention queue");
+    expect(wrapper.text()).toContain("Approve check-in");
+    expect(wrapper.text()).toContain("Contact cadence");
+    expect(wrapper.text()).toContain("Prefer batching or waiting unless urgent.");
+    expect(wrapper.text()).toContain("Active tasks");
+    expect(wrapper.text()).toContain("Review travel plan");
+    expect(wrapper.text()).toContain("Recent decisions");
+    expect(wrapper.text()).toContain("Queued a check-in");
+    expect(wrapper.text()).toContain("Memory changes");
+    expect(wrapper.text()).toContain("/assistant/feedback/2026-06.md");
+    expect(wrapper.text()).toContain("Active threads");
+    expect(wrapper.text()).toContain("Which hotel should be used?");
+    expect(wrapper.text()).toContain("Personal lists");
+    expect(wrapper.text()).toContain("The Design of Everyday Things");
+    expect(wrapper.text()).toContain("Owner feedback");
+    expect(wrapper.text()).toContain("avoid early texts");
+    expect(wrapper.text()).toContain("Guardrails and failed runs");
+    expect(wrapper.text()).toContain("Model returned no usable action.");
+    expect(wrapper.text()).toContain("Talk to the agent");
   });
 
   it("keeps the active dashboard tab in the route query", async () => {

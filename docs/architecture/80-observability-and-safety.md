@@ -9,6 +9,20 @@ Authenticated users can call `GET /api/v1/jobs` for their own operational
 status. Administrators can call `GET /api/v1/admin/jobs` for the same shape
 with admin-scoped audit, run, tool-call, and RAG visibility.
 
+Authenticated users can also call `GET /api/v1/dashboard` for the owner
+command-center summary used by the Overview tab. The endpoint is read-only,
+user-scoped, and derived from source records rather than cached state. It
+returns compact sections for active tasks and schedule rationale, pending
+approvals, recent assistant decision ledger files, recent memory changes,
+recent owner feedback files, active/waiting conversation threads, owner-visible
+contact cadence, personal list counts, guardrail trips, failed runs, failed
+tool calls, and failed outbound delivery.
+
+The dashboard surface intentionally does not return connector configuration,
+connector passwords, MCP bearer tokens, raw tool-call arguments/results, or
+deployment-owned host/secret values. Outbound summaries omit recipient
+addresses; memory snippets skip credential-like lines before display.
+
 The response includes:
 
 - API status and recent audit time.

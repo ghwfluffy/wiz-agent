@@ -316,6 +316,117 @@ export type ImapTestResult = {
   };
 };
 
+export type DashboardAttentionItem = {
+  id: string;
+  kind: string;
+  severity: string;
+  title: string;
+  status: string;
+  createdAt: string;
+};
+
+export type DashboardActiveTask = Pick<Task,
+  "id" | "title" | "status" | "dueAt" | "priority" | "scheduleRationale" | "recurrencePolicy" |
+  "nextReviewAt" | "waitingOn" | "blockedReason" | "ownerClarificationNeeded" | "sourceMemoryPath" |
+  "sourceMessageId" | "sourceTaskId" | "updatedAt"
+>;
+
+export type DashboardApproval = {
+  id: string;
+  actionType: string;
+  riskLevel: string;
+  summary: string;
+  expiresAt: string;
+  sourceRunId: string | null;
+  sourceRef: string | null;
+  executionStatus: string;
+  createdAt: string;
+};
+
+export type DashboardMemoryChange = {
+  id: string;
+  path: string;
+  auditAction: string;
+  actorType: string;
+  createdAt: string;
+  summary: {
+    addedLines: number | null;
+    removedLines: number | null;
+    diffTruncated: boolean;
+  };
+  linkedTaskId: string | null;
+  linkedRunId: string | null;
+  linkedToolCallId: string | null;
+  linkedApprovalId: string | null;
+};
+
+export type DashboardDocumentInsight = {
+  path: string;
+  title: string;
+  updatedAt: string;
+  excerpt: string | null;
+};
+
+export type DashboardThread = {
+  id: string;
+  title: string;
+  status: string;
+  lastOwnerIntentSummary: string | null;
+  unresolvedQuestion: string | null;
+  attention: string;
+  linkedTaskCount: number;
+  linkedMessageCount: number;
+  linkedMemoryCount: number;
+  updatedAt: string;
+};
+
+export type DashboardListSummary = {
+  path: string;
+  title: string;
+  updatedAt: string;
+  total: number;
+  archived: number;
+  active: number;
+  excerpt: string;
+};
+
+export type PersonalDashboard = {
+  generatedAt: string;
+  metrics: {
+    activeTasks: number;
+    pendingApprovals: number;
+    activeThreads: number;
+    recentMemoryChanges: number;
+    failedRuns: number;
+    guardrailTrips: number;
+    outboundLast24h: number;
+    outboundLast7d: number;
+  };
+  attention: DashboardAttentionItem[];
+  activeTasks: DashboardActiveTask[];
+  pendingApprovals: DashboardApproval[];
+  recentDecisions: DashboardDocumentInsight[];
+  recentMemoryChanges: DashboardMemoryChange[];
+  recentFeedback: DashboardDocumentInsight[];
+  activeThreads: DashboardThread[];
+  contactCadence: {
+    status: string;
+    ownerVisibleOutboundLast24h: number;
+    ownerVisibleOutboundLast7d: number;
+    pendingApprovals: number;
+    failedOutbound: number;
+    guidance: string;
+    recentOutbound: Array<Omit<OutboxMessage, "toAddr">>;
+  };
+  personalLists: DashboardListSummary[];
+  safety: {
+    guardrails: Array<{ id: string; action: string; summary: string; createdAt: string }>;
+    failedRuns: Array<{ id: string; taskId: string | null; modelTier: string; modelId: string; failureMessage: string | null; startedAt: string; finishedAt: string | null }>;
+    failedToolCalls: Array<{ id: string; runId: string | null; toolName: string; status: string; validationError: string | null; createdAt: string; completedAt: string | null }>;
+    failedOutbound: Array<Omit<OutboxMessage, "toAddr">>;
+  };
+};
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(apiUrl(path), {
     credentials: "include",
@@ -486,6 +597,9 @@ export const api = {
   },
   listJobs(): Promise<JobsResponse> {
     return request<JobsResponse>("/jobs");
+  },
+  getPersonalDashboard(): Promise<PersonalDashboard> {
+    return request<PersonalDashboard>("/dashboard");
   },
   retryRagIndexJob(id: string): Promise<{ job: RagIndexJob }> {
     return request<{ job: RagIndexJob }>(`/admin/rag-index-jobs/${encodeURIComponent(id)}/retry`, {

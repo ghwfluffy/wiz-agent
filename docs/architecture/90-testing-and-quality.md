@@ -109,6 +109,12 @@ Current tests cover:
 - outbox listing, status updates, SMTP queue delivery, and fail-closed outbound
   delivery.
 - operations dashboard rendering.
+- personal dashboard insight API coverage for user scoping, active tasks,
+  approvals, decisions, feedback, memory changes, threads, contact cadence,
+  personal lists, guardrail/failed-run visibility, and omission of connector
+  secrets or outbound recipients.
+- personal dashboard Overview rendering with representative dense insight
+  sections and compact empty-state behavior.
 - operational jobs visibility, budget exposure, RAG failure listing, and manual
   RAG retry audit.
 - runaway guardrails for hourly agent runs, per-run MCP/tool calls,

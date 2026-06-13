@@ -20,6 +20,7 @@ import {
   type MemoryChange,
   type MemoryDocument,
   type OutboxMessage,
+  type PersonalDashboard,
   type RagIndexHealth,
   type RagIndexJob,
   type Sender,
@@ -73,6 +74,7 @@ const senders = ref<Sender[]>([]);
 const connectors = ref<Connector[]>([]);
 const memoryDocuments = ref<MemoryDocument[]>([]);
 const memoryChanges = ref<MemoryChange[]>([]);
+const personalDashboard = ref<PersonalDashboard | null>(null);
 const knowledgeTree = ref<KnowledgeEntry[]>([]);
 const knowledgeDocument = ref<KnowledgeDocument | null>(null);
 const knowledgeSections = ref<KnowledgeSection[]>([]);
@@ -183,6 +185,16 @@ const activeOutbox = computed(() => outbox.value.filter((message) => ["requires_
 const pendingApprovals = computed(() => approvals.value.filter((approval) => approval.status === "pending"));
 const approvalInboxCount = computed(() => approvals.value.length);
 const outboxHistory = computed(() => outbox.value.filter((message) => ["sent", "failed"].includes(message.status)));
+const dashboardMetrics = computed(() => personalDashboard.value?.metrics ?? {
+  activeTasks: tasks.value.filter((task) => !["completed", "cancelled", "failed"].includes(task.status)).length,
+  pendingApprovals: pendingApprovals.value.length,
+  activeThreads: 0,
+  recentMemoryChanges: memoryChanges.value.length,
+  failedRuns: 0,
+  guardrailTrips: 0,
+  outboundLast24h: 0,
+  outboundLast7d: outbox.value.filter((message) => ["requires_approval", "approved", "pending", "sending", "sent"].includes(message.status)).length
+});
 const recentAudit = computed(() => audit.value.slice(0, 12));
 const agentRunEvents = computed(() => audit.value.filter((event) => event.action.startsWith("agent_run.")).slice(0, 12));
 const toolCallEvents = computed(() => audit.value.filter((event) => event.action.startsWith("tool_call.") || event.action.startsWith("mcp.tool_call.")).slice(0, 12));
@@ -538,6 +550,40 @@ function linkedChangeRefs(change: MemoryChange): string {
   return refs.length > 0 ? refs.join(" · ") : "none";
 }
 
+function isPersonalDashboard(value: unknown): value is PersonalDashboard {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+  const candidate = value as Partial<PersonalDashboard>;
+  return Boolean(candidate.metrics) &&
+    Array.isArray(candidate.attention) &&
+    Array.isArray(candidate.activeTasks) &&
+    Array.isArray(candidate.pendingApprovals) &&
+    Array.isArray(candidate.recentDecisions) &&
+    Array.isArray(candidate.recentMemoryChanges) &&
+    Array.isArray(candidate.recentFeedback) &&
+    Array.isArray(candidate.activeThreads) &&
+    Boolean(candidate.contactCadence) &&
+    Array.isArray(candidate.personalLists) &&
+    Boolean(candidate.safety);
+}
+
+function dashboardChangeSummary(change: PersonalDashboard["recentMemoryChanges"][number]): string {
+  const added = change.summary.addedLines ?? 0;
+  const removed = change.summary.removedLines ?? 0;
+  return `+${added} / -${removed}${change.summary.diffTruncated ? " truncated" : ""}`;
+}
+
+function dashboardRefSummary(change: PersonalDashboard["recentMemoryChanges"][number]): string {
+  const refs = [
+    change.linkedRunId ? `run ${formatId(change.linkedRunId)}` : "",
+    change.linkedToolCallId ? `tool ${formatId(change.linkedToolCallId)}` : "",
+    change.linkedTaskId ? `task ${formatId(change.linkedTaskId)}` : "",
+    change.linkedApprovalId ? `approval ${formatId(change.linkedApprovalId)}` : ""
+  ].filter(Boolean);
+  return refs.length > 0 ? refs.join(" · ") : "no links";
+}
+
 async function refreshApprovals(): Promise<void> {
   approvals.value = (await api.listApprovals("pending,approved,rejected,expired")).approvals;
 }
@@ -721,6 +767,12 @@ async function loadDashboard(): Promise<void> {
     applyJobsResponse(data.jobs);
     applyConnectors(data.connectors);
     applyAiConfig(data.aiConfig);
+    if (activeTab.value === "overview") {
+      const insight = await api.getPersonalDashboard().catch(() => null);
+      if (isPersonalDashboard(insight)) {
+        personalDashboard.value = insight;
+      }
+    }
     clampPages();
     dashboardError.value = null;
   } catch {
@@ -1310,24 +1362,24 @@ onUnmounted(() => {
       <section v-show="activeTab === 'overview'" id="panel-overview" class="tab-panel" role="tabpanel" aria-labelledby="tab-overview">
         <div class="metric-grid" aria-label="Operational summary">
           <section class="metric-card">
-            <p class="label">Tasks</p>
-            <p class="metric-value">{{ tasks.length }}</p>
+            <p class="label">Active tasks</p>
+            <p class="metric-value">{{ dashboardMetrics.activeTasks }}</p>
           </section>
           <section class="metric-card">
-            <p class="label">Outbox</p>
-            <p class="metric-value">{{ outbox.length }}</p>
+            <p class="label">Approvals</p>
+            <p class="metric-value">{{ dashboardMetrics.pendingApprovals }}</p>
           </section>
           <section class="metric-card">
-            <p class="label">Agent inbox</p>
-            <p class="metric-value">{{ inbox.length }}</p>
+            <p class="label">Threads</p>
+            <p class="metric-value">{{ dashboardMetrics.activeThreads }}</p>
           </section>
           <section class="metric-card">
-            <p class="label">Senders</p>
-            <p class="metric-value">{{ senders.length }}</p>
+            <p class="label">Memory changes</p>
+            <p class="metric-value">{{ dashboardMetrics.recentMemoryChanges }}</p>
           </section>
           <section class="metric-card">
-            <p class="label">Audit events</p>
-            <p class="metric-value">{{ audit.length }}</p>
+            <p class="label">Guardrails / failures</p>
+            <p class="metric-value">{{ dashboardMetrics.guardrailTrips }} / {{ dashboardMetrics.failedRuns }}</p>
           </section>
         </div>
 
@@ -1407,6 +1459,210 @@ onUnmounted(() => {
               </p>
             </div>
           </div>
+        </section>
+
+        <section class="insight-grid" aria-label="Personal assistant insights">
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Attention queue</h2>
+              <p class="label">{{ personalDashboard?.attention.length ?? 0 }} open</p>
+            </div>
+            <p v-if="!personalDashboard || personalDashboard.attention.length === 0" class="empty">No approvals, blocked work, failed runs, or guardrail trips need attention.</p>
+            <ul v-else class="compact-list">
+              <li v-for="item in personalDashboard.attention" :key="`${item.kind}-${item.id}`">
+                <div>
+                  <p class="item-title">{{ item.title }}</p>
+                  <p class="label">{{ item.kind }} · {{ formatDate(item.createdAt) }}</p>
+                </div>
+                <span class="cds--tag" :class="statusTagClass(item.status)">{{ item.status }}</span>
+              </li>
+            </ul>
+          </article>
+
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Contact cadence</h2>
+              <span class="cds--tag" :class="statusTagClass(personalDashboard?.contactCadence.status ?? 'unknown')">{{ personalDashboard?.contactCadence.status ?? "unknown" }}</span>
+            </div>
+            <div class="mini-metrics">
+              <div>
+                <p class="label">24h</p>
+                <p class="metric-text">{{ personalDashboard?.contactCadence.ownerVisibleOutboundLast24h ?? dashboardMetrics.outboundLast24h }}</p>
+              </div>
+              <div>
+                <p class="label">7d</p>
+                <p class="metric-text">{{ personalDashboard?.contactCadence.ownerVisibleOutboundLast7d ?? dashboardMetrics.outboundLast7d }}</p>
+              </div>
+              <div>
+                <p class="label">Failed</p>
+                <p class="metric-text">{{ personalDashboard?.contactCadence.failedOutbound ?? 0 }}</p>
+              </div>
+            </div>
+            <p class="dense-copy">{{ personalDashboard?.contactCadence.guidance ?? "Contact cadence is not available yet." }}</p>
+          </article>
+        </section>
+
+        <section class="insight-grid insight-grid-wide" aria-label="Operational work surfaces">
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Active tasks</h2>
+              <p class="label">schedule rationale</p>
+            </div>
+            <p v-if="!personalDashboard || personalDashboard.activeTasks.length === 0" class="empty">No active tasks.</p>
+            <ul v-else class="compact-list">
+              <li v-for="task in personalDashboard.activeTasks" :key="task.id">
+                <div>
+                  <p class="item-title">{{ task.title }}</p>
+                  <p class="label">{{ task.scheduleRationale || task.waitingOn || task.blockedReason || "No rationale recorded." }}</p>
+                  <p class="label">due {{ formatDate(task.dueAt) }} · next review {{ formatDate(task.nextReviewAt) }}</p>
+                </div>
+                <span class="cds--tag" :class="statusTagClass(task.status)">{{ task.status }}</span>
+              </li>
+            </ul>
+          </article>
+
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Approvals</h2>
+              <p class="label">pending decisions</p>
+            </div>
+            <p v-if="!personalDashboard || personalDashboard.pendingApprovals.length === 0" class="empty">No pending approvals.</p>
+            <ul v-else class="compact-list">
+              <li v-for="approval in personalDashboard.pendingApprovals" :key="approval.id">
+                <div>
+                  <p class="item-title">{{ approval.summary }}</p>
+                  <p class="label">{{ approval.actionType }} · expires {{ formatDate(approval.expiresAt) }}</p>
+                </div>
+                <span class="cds--tag" :class="statusTagClass(approval.riskLevel)">{{ approval.riskLevel }}</span>
+              </li>
+            </ul>
+          </article>
+        </section>
+
+        <section class="insight-grid insight-grid-wide" aria-label="Assistant memory and decision surfaces">
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Recent decisions</h2>
+              <p class="label">ledger</p>
+            </div>
+            <p v-if="!personalDashboard || personalDashboard.recentDecisions.length === 0" class="empty">No decision ledger entries yet.</p>
+            <ul v-else class="compact-list">
+              <li v-for="decision in personalDashboard.recentDecisions" :key="decision.path">
+                <div>
+                  <p class="item-title">{{ decision.title }}</p>
+                  <p class="dense-copy">{{ decision.excerpt || decision.path }}</p>
+                  <p class="label">{{ decision.path }} · {{ formatDate(decision.updatedAt) }}</p>
+                </div>
+              </li>
+            </ul>
+          </article>
+
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Memory changes</h2>
+              <p class="label">recent diffs</p>
+            </div>
+            <p v-if="!personalDashboard || personalDashboard.recentMemoryChanges.length === 0" class="empty">No recent memory changes.</p>
+            <ul v-else class="compact-list">
+              <li v-for="change in personalDashboard.recentMemoryChanges" :key="change.id">
+                <div>
+                  <p class="item-title">{{ change.path }}</p>
+                  <p class="label">{{ change.auditAction }} · {{ dashboardChangeSummary(change) }} · {{ dashboardRefSummary(change) }}</p>
+                </div>
+                <span class="cds--tag" :class="statusTagClass(change.actorType)">{{ change.actorType }}</span>
+              </li>
+            </ul>
+          </article>
+        </section>
+
+        <section class="insight-grid insight-grid-wide" aria-label="Conversation and memory list surfaces">
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Active threads</h2>
+              <p class="label">continuity</p>
+            </div>
+            <p v-if="!personalDashboard || personalDashboard.activeThreads.length === 0" class="empty">No active or waiting threads.</p>
+            <ul v-else class="compact-list">
+              <li v-for="thread in personalDashboard.activeThreads" :key="thread.id">
+                <div>
+                  <p class="item-title">{{ thread.title }}</p>
+                  <p class="dense-copy">{{ thread.attention }}</p>
+                  <p class="label">{{ thread.linkedTaskCount }} tasks · {{ thread.linkedMessageCount }} messages · {{ thread.linkedMemoryCount }} memory paths</p>
+                </div>
+                <span class="cds--tag" :class="statusTagClass(thread.status)">{{ thread.status }}</span>
+              </li>
+            </ul>
+          </article>
+
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Personal lists</h2>
+              <p class="label">summaries</p>
+            </div>
+            <p v-if="!personalDashboard || personalDashboard.personalLists.length === 0" class="empty">No personal lists recorded.</p>
+            <ul v-else class="compact-list">
+              <li v-for="list in personalDashboard.personalLists" :key="list.path">
+                <div>
+                  <p class="item-title">{{ list.title }}</p>
+                  <p class="dense-copy">{{ list.excerpt || list.path }}</p>
+                  <p class="label">{{ list.active }} active · {{ list.archived }} archived · {{ list.total }} total</p>
+                </div>
+              </li>
+            </ul>
+          </article>
+        </section>
+
+        <section class="insight-grid insight-grid-wide" aria-label="Feedback and safety surfaces">
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Owner feedback</h2>
+              <p class="label">training signal</p>
+            </div>
+            <p v-if="!personalDashboard || personalDashboard.recentFeedback.length === 0" class="empty">No recent owner feedback.</p>
+            <ul v-else class="compact-list">
+              <li v-for="feedback in personalDashboard.recentFeedback" :key="feedback.path">
+                <div>
+                  <p class="item-title">{{ feedback.title }}</p>
+                  <p class="dense-copy">{{ feedback.excerpt || feedback.path }}</p>
+                  <p class="label">{{ feedback.path }} · {{ formatDate(feedback.updatedAt) }}</p>
+                </div>
+              </li>
+            </ul>
+          </article>
+
+          <article class="activity-section insight-panel">
+            <div class="section-heading">
+              <h2>Guardrails and failed runs</h2>
+              <p class="label">safety</p>
+            </div>
+            <p v-if="!personalDashboard || (personalDashboard.safety.guardrails.length === 0 && personalDashboard.safety.failedRuns.length === 0 && personalDashboard.safety.failedToolCalls.length === 0 && personalDashboard.safety.failedOutbound.length === 0)" class="empty">No guardrail trips or failed runs.</p>
+            <ul v-else class="compact-list">
+              <li v-for="event in personalDashboard.safety.guardrails" :key="`guardrail-${event.id}`">
+                <div>
+                  <p class="item-title">{{ event.summary }}</p>
+                  <p class="label">guardrail · {{ formatDate(event.createdAt) }}</p>
+                </div>
+              </li>
+              <li v-for="run in personalDashboard.safety.failedRuns" :key="`run-${run.id}`">
+                <div>
+                  <p class="item-title">{{ run.failureMessage || "Agent run failed." }}</p>
+                  <p class="label">run {{ formatId(run.id) }} · {{ run.modelTier }} · {{ formatDate(run.startedAt) }}</p>
+                </div>
+              </li>
+              <li v-for="tool in personalDashboard.safety.failedToolCalls" :key="`tool-${tool.id}`">
+                <div>
+                  <p class="item-title">{{ tool.toolName }}</p>
+                  <p class="label">{{ tool.status }} · {{ tool.validationError || "No validation message." }}</p>
+                </div>
+              </li>
+              <li v-for="message in personalDashboard.safety.failedOutbound" :key="`outbound-${message.id}`">
+                <div>
+                  <p class="item-title">{{ message.failureMessage || "Outbound delivery failed." }}</p>
+                  <p class="label">{{ message.channel }} · {{ formatDate(message.updatedAt) }}</p>
+                </div>
+              </li>
+            </ul>
+          </article>
         </section>
 
         <section class="activity-section" aria-label="Active outbound queue">

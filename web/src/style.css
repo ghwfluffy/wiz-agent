@@ -179,6 +179,67 @@ h3 {
   align-items: center;
 }
 
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.insight-grid-wide {
+  align-items: start;
+}
+
+.insight-panel {
+  min-width: 0;
+  align-content: start;
+}
+
+.compact-list {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  background: #e0e0e0;
+  list-style: none;
+}
+
+.compact-list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+  background: #ffffff;
+  padding: 12px;
+}
+
+.item-title,
+.dense-copy {
+  margin: 0 0 6px;
+  overflow-wrap: anywhere;
+}
+
+.item-title {
+  font-weight: 600;
+}
+
+.dense-copy {
+  color: #393939;
+  font-size: 0.875rem;
+  line-height: 1.35;
+}
+
+.mini-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1px;
+  background: #e0e0e0;
+}
+
+.mini-metrics > div {
+  background: #f4f4f4;
+  padding: 12px;
+}
+
 .form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -589,6 +650,7 @@ h3 {
   .sender-form,
   .config-form,
   .connector-grid,
+  .insight-grid,
   .memory-browser,
   .memory-change-layout,
   .knowledge-layout,

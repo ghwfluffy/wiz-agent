@@ -30,6 +30,14 @@ signed-in user is an administrator. OAuth callback failures redirect back to the
 UI with an `oauth_error` token; the web store converts that token into a
 friendly message and removes it from the URL.
 
+The Overview tab is backed by `GET /api/v1/dashboard`, a read-only owner-scoped
+insight aggregate. It summarizes active tasks, pending approvals, recent
+decision and feedback notes, recent memory changes, active threads, contact
+cadence, personal list counts, guardrail trips, failed runs/tool calls, and
+failed outbound delivery. The endpoint derives those panels from existing
+source records and does not return connector credentials, MCP tokens, raw
+tool-call payloads, or outbound recipient addresses.
+
 Phase 08 approvals are visible in the Approval inbox. High-risk outbound owner
 messages and cross-app write proposals create approval records instead of
 executing immediately. The owner can approve, reject, edit outbound text, or
