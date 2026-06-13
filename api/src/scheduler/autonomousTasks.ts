@@ -1,4 +1,5 @@
 import type { AgentStore, RequestContext, TaskRecord } from "../domain/types.js";
+import { taskOutcomeMemoryPath } from "../memory/taskOutcomeMemory.js";
 
 const NEWSLETTER_SYNTHESIS_TITLE = "Daily newsletter synthesis";
 const AUTONOMOUS_WAKE_TITLE = "Autonomous agent wake review";
@@ -245,6 +246,7 @@ export async function buildScheduledTaskPrompt(options: {
   const notificationPolicy = await readMemoryExcerpt(options.store, options.context, NOTIFICATION_POLICY_PATH);
   const communicationPreferences = await readMemoryExcerpt(options.store, options.context, COMMUNICATION_PREFERENCES_PATH);
   const newsletterPreferences = await readMemoryExcerpt(options.store, options.context, NEWSLETTER_PREFERENCES_PATH);
+  const taskOutcomeMemory = await readMemoryExcerpt(options.store, options.context, taskOutcomeMemoryPath(now));
   const outcomeGuidance = options.task.title === AUTONOMOUS_WAKE_TITLE
     ? "Choose one outcome: acted, observed, needs owner, or failed. Use host tools for task/schedule/memory/outbox changes. For no action, call record_observation."
     : options.task.title === SELF_REVIEW_TITLE
@@ -270,6 +272,9 @@ export async function buildScheduledTaskPrompt(options: {
     "",
     "Newsletter preferences:",
     newsletterPreferences,
+    "",
+    "Recent task outcome memory:",
+    taskOutcomeMemory,
     "",
     "Active tasks:",
     activeTasks.length > 0 ? activeTasks.join("\n") : "- none",

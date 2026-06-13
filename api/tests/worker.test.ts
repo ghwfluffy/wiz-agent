@@ -5,6 +5,7 @@ import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import { buildScheduledTaskPrompt } from "../src/scheduler/autonomousTasks.js";
 import { daemonOnce } from "../src/scheduler/taskQueue.js";
+import { recordTaskOutcomeMemory } from "../src/memory/taskOutcomeMemory.js";
 import { isWorkerEntrypoint, workerTick } from "../src/worker.js";
 
 describe("worker loop", () => {
@@ -182,6 +183,230 @@ describe("worker loop", () => {
       entry.status === "pending" &&
       entry.id !== selfReview!.id
     )).toHaveLength(1);
+  });
+
+  it("records completed scheduled task outcomes once in monthly markdown memory", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-outcome-complete-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-outcome-complete-test",
+      session
+    };
+    const task = await store.createTask(context, {
+      title: "Summarize project notes",
+      prompt: "Summarize the current project notes.",
+      dueAt: "2026-06-13T12:00:00.000Z",
+      sourceMemoryPath: "/projects/alpha/notes.md",
+      scheduleRationale: "Owner asked for a compact summary."
+    });
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_observation",
+            arguments: {
+              summary: "Project notes were already current.",
+              source: "unit-test"
+            }
+          }
+        ]
+      }),
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+    await recordTaskOutcomeMemory({
+      store,
+      context,
+      taskId: task.id,
+      now: new Date("2026-06-13T12:01:00.000Z")
+    });
+
+    const document = await store.getMarkdownDocument(context, "/tasks/outcomes/2026-06.md");
+    expect(document).toMatchObject({
+      userId: session.user.id,
+      markdown: expect.stringContaining(`<!-- task-outcome:${task.id}:completed -->`)
+    });
+    expect(document?.markdown).toContain("Summarize project notes");
+    expect(document?.markdown).toContain("- Final status: completed");
+    expect(document?.markdown).toContain("memory /projects/alpha/notes.md");
+    expect((document?.markdown.match(new RegExp(`task-outcome:${task.id}:completed`, "g")) ?? [])).toHaveLength(1);
+    await expect(store.getMarkdownIndexStatus(context, "/tasks/outcomes")).resolves.toEqual([
+      expect.objectContaining({
+        path: "/tasks/outcomes/2026-06.md",
+        pendingJobs: 1
+      })
+    ]);
+    await expect(store.listAudit(context, false)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "markdown.write",
+        entityType: "markdown_document",
+        details: expect.objectContaining({
+          path: "/tasks/outcomes/2026-06.md"
+        })
+      })
+    ]));
+  });
+
+  it("records scheduled task failure reasons in outcome memory", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-outcome-failure-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-outcome-failure-test",
+      session
+    };
+    const task = await store.createTask(context, {
+      title: "Run fragile model task",
+      prompt: "This will fail.",
+      dueAt: "2026-06-13T12:00:00.000Z"
+    });
+    const failingModel = {
+      async runStructured() {
+        return {};
+      },
+      async runWithTools(_request: ToolModelRequest) {
+        throw new Error("model unavailable");
+      },
+      async repairToolArguments() {
+        return {};
+      }
+    };
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: failingModel,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+
+    await expect(store.getMarkdownDocument(context, "/tasks/outcomes/2026-06.md")).resolves.toMatchObject({
+      markdown: expect.stringContaining(`<!-- task-outcome:${task.id}:failed -->`)
+    });
+    const document = await store.getMarkdownDocument(context, "/tasks/outcomes/2026-06.md");
+    expect(document?.markdown).toContain("- Failure reason: model unavailable");
+  });
+
+  it("preserves split and follow-up source task links in outcome memory", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-outcome-links-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-outcome-links-test",
+      session
+    };
+    const source = await store.createTask(context, {
+      title: "Plan travel",
+      prompt: "Split the travel planning work."
+    });
+    const child = await store.createTask(context, {
+      title: "Book hotel",
+      prompt: "Find hotels.",
+      sourceTaskId: source.id
+    });
+    await store.recordTaskEvent(context, source.id, "task.split", {
+      child_task_ids: [child.id],
+      rationale: "Separate booking from research.",
+      summary: "Agent split this task into follow-up tasks."
+    });
+    await store.recordTaskEvent(context, source.id, "task.followup_created", {
+      followup_task_id: child.id,
+      rationale: "Book the hotel after destination is known.",
+      summary: "Agent created a follow-up task."
+    });
+    await store.updateTask(context, source.id, { status: "completed" });
+
+    await recordTaskOutcomeMemory({
+      store,
+      context,
+      taskId: source.id,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+
+    const document = await store.getMarkdownDocument(context, "/tasks/outcomes/2026-06.md");
+    expect(document?.markdown).toContain(`child task ${child.id}`);
+    expect(document?.markdown).toContain(`followup task id ${child.id}`);
+    expect(document?.markdown).toContain("Use the linked follow-up/source tasks");
+  });
+
+  it("keeps task outcome markdown user scoped and includes it in scheduled prompts", async () => {
+    const store = createMemoryStore();
+    const ownerSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "owner",
+      DEV_USER_EMAIL: "owner@example.test"
+    });
+    const otherSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "other",
+      DEV_USER_EMAIL: "other@example.test"
+    });
+    const ownerSession = await store.createDevelopmentSession(ownerSettings, "owner-outcome-login");
+    const otherSession = await store.createDevelopmentSession(otherSettings, "other-outcome-login");
+    const owner = {
+      userId: ownerSession.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "owner-outcome-test",
+      session: ownerSession
+    };
+    const other = {
+      userId: otherSession.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "other-outcome-test",
+      session: otherSession
+    };
+    const completed = await store.createTask(owner, {
+      title: "Finish owner-only task",
+      prompt: "Owner scoped work."
+    });
+    await store.updateTask(owner, completed.id, { status: "completed" });
+    await recordTaskOutcomeMemory({
+      store,
+      context: owner,
+      taskId: completed.id,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+    const wake = await store.createTask(owner, {
+      title: "Autonomous agent wake review",
+      prompt: "Wake and reassess work.",
+      dueAt: "2026-06-13T15:00:00.000Z"
+    });
+
+    await expect(store.getMarkdownDocument(other, "/tasks/outcomes/2026-06.md")).resolves.toBeUndefined();
+    const prompt = await buildScheduledTaskPrompt({
+      store,
+      context: owner,
+      task: wake,
+      now: new Date("2026-06-13T15:00:00.000Z")
+    });
+    expect(prompt).toContain("Recent task outcome memory:");
+    expect(prompt).toContain("Finish owner-only task");
   });
 
   it("lets the autonomous wake reschedule another task with rationale and creates the next wake", async () => {

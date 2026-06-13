@@ -4,6 +4,7 @@ import { callIntegrationActionApi, type IntegrationTokenProvider } from "./integ
 import type { ToolName } from "./contracts.js";
 import { createCrossAppApproval, createOutboundApproval } from "../security/approvalPolicy.js";
 import { listAppCapabilities, type IntegrationActionId, type IntegrationAppId } from "../integrations/capabilityRegistry.js";
+import { recordTaskOutcomeMemory } from "../memory/taskOutcomeMemory.js";
 
 export type ToolExecutionResult = {
   executed: boolean;
@@ -652,6 +653,13 @@ export async function executeToolCall(options: {
         owner_clarification_needed: updated?.ownerClarificationNeeded ?? false,
         summary: "Agent updated the task status with rationale."
       });
+      if (updated && ["completed", "failed", "cancelled"].includes(updated.status)) {
+        await recordTaskOutcomeMemory({
+          store: options.store,
+          context: options.context,
+          taskId
+        });
+      }
       return {
         executed: Boolean(updated),
         sideEffect: "local_persistence",

@@ -358,8 +358,26 @@ active tasks, and schedule rationale so the agent can decide whether to act or
 adjust future work timing through controlled tools. Before each recurring
 scheduled run, host code composes a fresh prompt from active tasks,
 `/assistant/schedule.md`, `/tasks/schedule-rationale.md`,
-`/assistant/notification-policy.md`, recent owner messages, and recent
-newsletter knowledge. This gives the model current schedule context without
-letting newsletter content become instructions. The next recurring wake is
-created in a `finally` path, so failed wake runs still schedule the next
-roughly-three-hour review.
+`/assistant/notification-policy.md`, the current monthly task outcome memory
+under `/tasks/outcomes/YYYY-MM.md`, recent owner messages, and recent newsletter
+knowledge. This gives the model current schedule context without letting
+newsletter content become instructions or loading full task logs into prompts.
+The next recurring wake is created in a `finally` path, so failed wake runs
+still schedule the next roughly-three-hour review.
+
+## Task Outcome Memory
+
+Task outcome memory is host-created long-term markdown memory. Scheduled task
+completion/failure paths and the `update_task_status` tool write compact
+terminal summaries under `/tasks/outcomes/YYYY-MM.md` when a task reaches
+`completed`, `failed`, or `cancelled`. Entries include the task id/title/status,
+timestamps, source memory/message/task links, recent task event summaries,
+failure reason when available, owner correction/preference details if a task
+event recorded them, whether the lesson appears durable or one-off, and a short
+future-use note.
+
+The model is not called just to create these notes. The writer uses existing
+task records/events and existing markdown APIs, so user scope, audit events,
+markdown section parsing, and RAG indexing remain deterministic host behavior.
+Each entry has a deterministic task/status marker to avoid duplicates when a
+worker tick or status update is retried.

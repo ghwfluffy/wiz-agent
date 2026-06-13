@@ -109,6 +109,17 @@ see why the task re-entered the queue.
 agent-managed schedules. Long-lived rationale may also be written under
 `/tasks/schedule-rationale.md` when it is useful beyond a single task event.
 
+When a task reaches a terminal status (`completed`, `failed`, or `cancelled`),
+host code writes a compact outcome note to monthly markdown memory at
+`/tasks/outcomes/YYYY-MM.md`. The note includes the task id, title, final
+status, relevant dates, source memory/message/task references, recent task-event
+summaries, failure reason when present, owner correction/preference fields when
+recorded, durability, and a short future-use note. Each entry carries a
+deterministic hidden marker for the task id and terminal status so repeated
+terminal updates do not duplicate the same outcome. Outcome files are ordinary
+user-scoped markdown documents, so writes are audited, parsed into sections, and
+queued for RAG indexing through the existing markdown store behavior.
+
 Inbound owner messages that the agent associates with a task also record
 `message.inbound.assigned` on that task. The inbox record stores the task id,
 task event id, agent run id, outbound review id where applicable, and handling

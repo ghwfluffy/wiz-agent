@@ -11,6 +11,7 @@ import {
   scheduleNextAutonomousTask
 } from "./autonomousTasks.js";
 import { executeApprovedCrossAppApprovals } from "./approvalExecutor.js";
+import { recordTaskOutcomeMemory } from "../memory/taskOutcomeMemory.js";
 
 export async function claimDueTasks(options: {
   store: AgentStore;
@@ -97,6 +98,12 @@ export async function daemonOnce(options: {
             summary: `Scheduled task outcome: ${outcome}.`
           });
         }
+        await recordTaskOutcomeMemory({
+          store: options.store,
+          context: options.context,
+          taskId: task.id,
+          now: options.now
+        });
       } catch (error) {
         runFailed = true;
         await options.store.updateTask(options.context, task.id, {
@@ -106,6 +113,12 @@ export async function daemonOnce(options: {
         await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.failed", {
           failure_message: error instanceof Error ? error.message : String(error),
           summary: "Scheduled task run failed; recurrence will still be scheduled."
+        });
+        await recordTaskOutcomeMemory({
+          store: options.store,
+          context: options.context,
+          taskId: task.id,
+          now: options.now
         });
       } finally {
         if (isAutonomousRecurringTask(task)) {

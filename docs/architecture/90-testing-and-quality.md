@@ -72,6 +72,9 @@ Current tests cover:
 - owner-message memory writes through the controlled agent tool path.
 - recurring daily newsletter synthesis and three-hour autonomous wake task
   scheduling with durable schedule rationale.
+- compact task outcome markdown memory for completed/failed work, duplicate
+  prevention, source-task links, user scoping, RAG job enqueueing, and scheduled
+  prompt inclusion.
 - newsletter preference memory writes from explicit owner messages.
 - personal-profile memory injection into future owner prompts.
 - memory document API, Memory tab rendering, and trusted-contact management.
