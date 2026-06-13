@@ -656,7 +656,8 @@ export function buildApp(options: AppOptions = {}): Hono {
         linkedTaskId: change.linkedTaskId,
         linkedRunId: change.linkedRunId,
         linkedToolCallId: change.linkedToolCallId,
-        linkedApprovalId: change.linkedApprovalId
+        linkedApprovalId: change.linkedApprovalId,
+        provenance: change.provenance
       })),
       recentFeedback: recentFeedbackDocs
         .filter((document): document is MarkdownDocumentRecord => Boolean(document))
@@ -1234,7 +1235,14 @@ export function buildApp(options: AppOptions = {}): Hono {
     const result = await store.writeMarkdownDocument(authContext, {
       path,
       markdown: payload.content,
-      expectedVersion: typeof payload.expectedVersion === "number" ? payload.expectedVersion : undefined
+      expectedVersion: typeof payload.expectedVersion === "number" ? payload.expectedVersion : undefined,
+      provenance: {
+        sourceKind: "manual_edit",
+        sourceLabel: "web console edit",
+        confidence: "medium",
+        evidence: ["Assistant instruction file edited from the authenticated web console."],
+        durability: "durable"
+      }
     });
     if (isMarkdownConflict(result)) {
       return context.json({ error: result }, 409);

@@ -160,7 +160,19 @@ export async function appendNewsletterKnowledge(options: {
   ].join("\n");
   const written = await options.store.writeMarkdownDocument(options.context, {
     path,
-    markdown
+    markdown,
+    provenance: {
+      sourceKind: "newsletter",
+      sourceId: options.message.id ?? null,
+      sourceLabel: [options.message.fromAddr, options.message.subject].filter(Boolean).join(" - ") || null,
+      confidence: "medium",
+      evidence: [
+        options.message.subject ?? "newsletter message",
+        "Raw newsletter source ingested as knowledge without owner-visible summary."
+      ],
+      durability: "durable",
+      lastConfirmedAt: options.message.receivedAt ?? null
+    }
   });
   if ("code" in written) {
     throw new Error(`Unexpected newsletter markdown write conflict for ${path}`);

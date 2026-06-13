@@ -139,7 +139,23 @@ export async function recordOwnerFeedback(options: {
   const document = await options.store.writeMarkdownDocument(options.context, {
     path,
     markdown,
-    expectedVersion: existing?.version
+    expectedVersion: existing?.version,
+    provenance: {
+      sourceKind: "owner_feedback",
+      sourceId: options.runId ?? null,
+      sourceLabel: options.input.feedbackType,
+      confidence: options.input.durability === "tentative" ? "medium" : "high",
+      evidence: [options.input.correctionText, options.input.originalBehaviorSummary],
+      derivedFrom: [
+        ...(options.input.affectedMemoryPaths ?? []),
+        ...(options.input.affectedTaskIds ?? []),
+        ...(options.input.affectedToolCallIds ?? []),
+        ...(options.input.affectedMessageIds ?? []),
+        ...(options.input.affectedAppIds ?? [])
+      ],
+      durability: options.input.durability,
+      lastConfirmedAt: now.toISOString()
+    }
   });
   if (isConflict(document)) {
     return {

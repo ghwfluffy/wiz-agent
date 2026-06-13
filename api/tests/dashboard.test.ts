@@ -161,6 +161,7 @@ describe("personal dashboard API", () => {
       pendingApprovals: Array<{ summary: string }>;
       recentDecisions: Array<{ excerpt: string }>;
       recentFeedback: Array<{ excerpt: string }>;
+      recentMemoryChanges: Array<{ provenance: { sourceKind: string; confidence: string; durability: string | null } | null }>;
       activeThreads: Array<{ title: string; attention: string }>;
       contactCadence: { failedOutbound: number; recentOutbound: Array<{ toAddr?: string; failureMessage: string | null }> };
       personalLists: Array<{ path: string; active: number; archived: number }>;
@@ -180,6 +181,10 @@ describe("personal dashboard API", () => {
     expect(payload.recentDecisions[0]?.excerpt).toContain("travel check-in");
     expect(payload.recentDecisions[0]?.excerpt).not.toContain("older decision");
     expect(payload.recentFeedback[0]?.excerpt).toContain("avoid early texts");
+    expect(payload.recentMemoryChanges[0]?.provenance).toMatchObject({
+      confidence: expect.any(String),
+      sourceKind: expect.any(String)
+    });
     expect(payload.activeThreads).toEqual([
       expect.objectContaining({
         title: "Travel planning",

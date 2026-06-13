@@ -143,7 +143,17 @@ async function appendDecisionEntry(options: {
   const written = await options.store.writeMarkdownDocument(options.context, {
     path,
     markdown,
-    expectedVersion: existing?.version
+    expectedVersion: existing?.version,
+    provenance: {
+      sourceKind: "assistant_decision",
+      sourceId: options.entry.markerId,
+      sourceLabel: options.entry.action,
+      confidence: "medium",
+      evidence: [options.entry.rationale, options.entry.contextSummary],
+      derivedFrom: Object.values(options.entry.links ?? {}).filter((value): value is string => typeof value === "string" && value.trim() !== ""),
+      durability: "durable",
+      lastConfirmedAt: now.toISOString()
+    }
   });
   if (isConflict(written)) {
     return { wrote: false, path, reason: "conflict" };

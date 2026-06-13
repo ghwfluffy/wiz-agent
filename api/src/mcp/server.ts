@@ -189,7 +189,14 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
         result = await store.writeMarkdownDocument(authContext, {
           path: stringArg(args, "path"),
           markdown: stringArg(args, "content"),
-          expectedVersion: numberArg(args, "expectedVersion")
+          expectedVersion: numberArg(args, "expectedVersion"),
+          provenance: {
+            sourceKind: "manual_edit",
+            sourceLabel: "mcp write_file",
+            confidence: "medium",
+            evidence: ["Markdown file written through MCP session."],
+            durability: "durable"
+          }
         });
       } else if (tool === "delete_path") {
         result = await store.deleteMarkdownPath(authContext, stringArg(args, "path"), numberArg(args, "expectedVersion"));

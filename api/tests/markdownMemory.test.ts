@@ -104,12 +104,30 @@ describe("markdown memory filesystem", () => {
 
     await store.writeMarkdownDocument(owner, {
       path: "/preferences/newsletters.md",
-      markdown: "# Newsletters\n\n- Weekly security notes\napi_key: owner-secret-value"
+      markdown: "# Newsletters\n\n- Weekly security notes\napi_key: owner-secret-value",
+      provenance: {
+        sourceKind: "owner_message",
+        sourceId: "message-1",
+        sourceLabel: "newsletter preference",
+        confidence: "high",
+        evidence: ["Owner said to track weekly security notes.", "api token should redact"],
+        durability: "durable",
+        lastConfirmedAt: "2026-06-13T12:00:00.000Z"
+      }
     });
     await store.writeMarkdownDocument(owner, {
       path: "/preferences/newsletters.md",
       markdown: "# Newsletters\n\n- Weekly security notes\n- Databases\napi_key: owner-secret-value",
-      expectedVersion: 1
+      expectedVersion: 1,
+      provenance: {
+        sourceKind: "owner_message",
+        sourceId: "message-2",
+        sourceLabel: "database newsletters",
+        confidence: "high",
+        evidence: ["Owner added databases to newsletter preferences."],
+        durability: "durable",
+        lastConfirmedAt: "2026-06-13T12:05:00.000Z"
+      }
     });
     await store.writeMarkdownDocument(owner, {
       path: "/preferences/old.md",
@@ -137,6 +155,16 @@ describe("markdown memory filesystem", () => {
     expect(newsletterUpdate?.unifiedDiff).toContain("+- Databases");
     expect(newsletterUpdate?.afterMarkdown).toContain("api_key: [redacted]");
     expect(newsletterUpdate?.afterMarkdown).not.toContain("owner-secret-value");
+    expect(newsletterUpdate?.provenance).toMatchObject({
+      sourceKind: "owner_message",
+      sourceId: "message-2",
+      sourceLabel: "database newsletters",
+      confidence: "high",
+      evidence: ["Owner added databases to newsletter preferences."],
+      durability: "durable",
+      lastConfirmedAt: "2026-06-13T12:05:00.000Z"
+    });
+    expect(JSON.stringify(newsletterUpdate?.provenance)).not.toContain("api token should redact");
 
     await expect(store.listMemoryChanges(other, { pathPrefix: "/preferences", limit: 10 })).resolves.toEqual([
       expect.objectContaining({

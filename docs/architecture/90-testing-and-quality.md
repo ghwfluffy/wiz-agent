@@ -100,7 +100,7 @@ Current tests cover:
 - memory document API, Memory tab rendering, and trusted-contact management.
 - memory change API and Memory tab diff rendering, including user scoping,
   path filtering, read-file links, and redaction of credential-like markdown
-  lines in audit-backed diffs.
+  lines in audit-backed diffs and provenance evidence.
 - owner reply tool contract without model-selected recipients.
 - conversation thread schema coverage, in-memory store round trips, bounded
   prompt context, owner follow-up thread reuse, MCP list/update/link tools, and
@@ -114,7 +114,7 @@ Current tests cover:
   personal lists, guardrail/failed-run visibility, and omission of connector
   secrets or outbound recipients.
 - personal dashboard Overview rendering with representative dense insight
-  sections and compact empty-state behavior.
+  sections, memory provenance summaries, and compact empty-state behavior.
 - operational jobs visibility, budget exposure, RAG failure listing, and manual
   RAG retry audit.
 - runaway guardrails for hourly agent runs, per-run MCP/tool calls,

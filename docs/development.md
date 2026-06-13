@@ -38,6 +38,13 @@ failed outbound delivery. The endpoint derives those panels from existing
 source records and does not return connector credentials, MCP tokens, raw
 tool-call payloads, or outbound recipient addresses.
 
+Markdown memory writes include audit-backed provenance metadata. The agent
+should pass `sourceKind`, `confidence`, `evidence`, and `durability` when it
+uses `write_file`; host-owned writers fill those fields for newsletters,
+personal lists, owner feedback, task outcomes, assistant decisions, and manual
+edits. Memory-change API and dashboard surfaces expose this compact provenance
+so stale inferences and direct owner statements can be distinguished later.
+
 Phase 08 approvals are visible in the Approval inbox. High-risk outbound owner
 messages and cross-app write proposals create approval records instead of
 executing immediately. The owner can approve, reject, edit outbound text, or

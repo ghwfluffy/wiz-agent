@@ -179,7 +179,26 @@ export async function recordTaskOutcomeMemory(options: {
   const written = await options.store.writeMarkdownDocument(options.context, {
     path,
     markdown,
-    expectedVersion: existing?.version
+    expectedVersion: existing?.version,
+    provenance: {
+      sourceKind: "task_outcome",
+      sourceId: task.id,
+      sourcePath: task.sourceMemoryPath,
+      sourceLabel: task.title,
+      confidence: "high",
+      evidence: [
+        `task status: ${task.status}`,
+        task.scheduleRationale ?? "",
+        task.blockedReason ?? ""
+      ],
+      derivedFrom: [
+        task.id,
+        task.sourceMessageId ?? "",
+        task.sourceMemoryPath ?? ""
+      ],
+      durability: "durable",
+      lastConfirmedAt: now.toISOString()
+    }
   });
   if (isConflict(written)) {
     return { wrote: false, path, reason: "conflict" };

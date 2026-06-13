@@ -76,10 +76,11 @@ tokens, raw connector credentials, or deployment hostnames.
 Recent memory mutations are visible through the Memory tab and
 `GET /api/v1/memory/changes/recent`. The surface is derived from user-scoped
 markdown audit events and shows path, source action, actor type, version
-movement, linked ids, and a bounded unified diff. Diff snapshots are redacted at
-write-audit time for common credential-bearing lines and capped before storage
-and display. The surface is read-only; rollback or destructive memory controls
-require a separate host-validated design.
+movement, linked ids, provenance/confidence, and a bounded unified diff. Diff
+snapshots and provenance evidence are redacted at write-audit time for common
+credential-bearing lines and capped before storage and display. The surface is
+read-only; rollback or destructive memory controls require a separate
+host-validated design.
 
 ## Manual Recovery
 

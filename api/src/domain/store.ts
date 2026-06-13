@@ -44,6 +44,11 @@ import type {
   MarkdownHeadingMatch,
   MarkdownIndexStatus,
   MarkdownSectionRecord,
+  MemoryProvenance,
+  MemoryProvenanceConfidence,
+  MemoryProvenanceDurability,
+  MemoryProvenanceInput,
+  MemoryProvenanceSourceKind,
   MemoryChangeFilter,
   MemoryChangeRecord,
   MemoryDocumentRecord,
@@ -74,6 +79,22 @@ const DEFAULT_AI_CONFIG: AiConfig = {
   maxRuntimeSec: 120,
   repairAttemptLimit: 1
 };
+
+const provenanceSourceKinds = new Set<MemoryProvenanceSourceKind>([
+  "owner_message",
+  "owner_web_prompt",
+  "owner_statement",
+  "newsletter",
+  "task_outcome",
+  "owner_feedback",
+  "assistant_decision",
+  "agent_observation",
+  "manual_edit",
+  "system"
+]);
+const provenanceConfidences = new Set<MemoryProvenanceConfidence>(["low", "medium", "high"]);
+const provenanceDurabilities = new Set<MemoryProvenanceDurability>(["one_off", "tentative", "durable", "system"]);
+const sensitiveDetailPattern = /\b(password|passwd|pwd|secret|token|api\s*key|api[_-]?key|access[_-]?key|private[_-]?key|credential|authorization|bearer)\b/i;
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -217,6 +238,101 @@ function detailBoolean(details: Record<string, unknown>, key: string): boolean {
   return details[key] === true;
 }
 
+function detailStringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim() !== "").slice(0, 10)
+    : [];
+}
+
+function compactSafeString(value: string | null | undefined, limit = 240): string | null {
+  const normalized = (value ?? "").replace(/\s+/g, " ").trim();
+  if (!normalized || sensitiveDetailPattern.test(normalized)) {
+    return null;
+  }
+  return normalized.slice(0, limit);
+}
+
+function compactSafeStringArray(values: string[] | undefined, limit = 5): string[] {
+  return (values ?? [])
+    .map((value) => compactSafeString(value, 240))
+    .filter((value): value is string => Boolean(value))
+    .slice(0, limit);
+}
+
+function defaultProvenanceSourceKind(context: RequestContext, auditAction: string): MemoryProvenanceSourceKind {
+  if (auditAction.startsWith("newsletter.")) {
+    return "newsletter";
+  }
+  if (auditAction.startsWith("assistant_decision.")) {
+    return "assistant_decision";
+  }
+  if (auditAction.startsWith("owner_feedback.")) {
+    return "owner_feedback";
+  }
+  if (auditAction.startsWith("memory_list.")) {
+    return "owner_statement";
+  }
+  if (auditAction.startsWith("task.")) {
+    return "task_outcome";
+  }
+  return context.actorType === "admin" || context.actorType === "user" ? "manual_edit" : "agent_observation";
+}
+
+function normalizeMemoryProvenance(
+  context: RequestContext,
+  auditAction: string,
+  input?: MemoryProvenanceInput
+): MemoryProvenance {
+  const sourceKind = input?.sourceKind && provenanceSourceKinds.has(input.sourceKind)
+    ? input.sourceKind
+    : defaultProvenanceSourceKind(context, auditAction);
+  const confidence = input?.confidence && provenanceConfidences.has(input.confidence) ? input.confidence : "medium";
+  const durability = input?.durability && provenanceDurabilities.has(input.durability) ? input.durability : null;
+  return {
+    sourceKind,
+    sourceId: compactSafeString(input?.sourceId ?? null, 200),
+    sourcePath: compactSafeString(input?.sourcePath ?? null, 500),
+    sourceLabel: compactSafeString(input?.sourceLabel ?? null, 240),
+    confidence,
+    evidence: compactSafeStringArray(input?.evidence, 5),
+    derivedFrom: compactSafeStringArray(input?.derivedFrom, 10),
+    durability,
+    lastConfirmedAt: compactSafeString(input?.lastConfirmedAt ?? null, 80),
+    recordedAt: compactSafeString(input?.recordedAt, 80) ?? nowIso()
+  };
+}
+
+function memoryProvenanceFromDetail(value: unknown): MemoryProvenance | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  const sourceKind = typeof record.sourceKind === "string" && provenanceSourceKinds.has(record.sourceKind as MemoryProvenanceSourceKind)
+    ? record.sourceKind as MemoryProvenanceSourceKind
+    : null;
+  const confidence = typeof record.confidence === "string" && provenanceConfidences.has(record.confidence as MemoryProvenanceConfidence)
+    ? record.confidence as MemoryProvenanceConfidence
+    : null;
+  if (!sourceKind || !confidence) {
+    return null;
+  }
+  const durability = typeof record.durability === "string" && provenanceDurabilities.has(record.durability as MemoryProvenanceDurability)
+    ? record.durability as MemoryProvenanceDurability
+    : null;
+  return {
+    sourceKind,
+    sourceId: typeof record.sourceId === "string" ? record.sourceId : null,
+    sourcePath: typeof record.sourcePath === "string" ? record.sourcePath : null,
+    sourceLabel: typeof record.sourceLabel === "string" ? record.sourceLabel : null,
+    confidence,
+    evidence: detailStringArray(record.evidence),
+    derivedFrom: detailStringArray(record.derivedFrom),
+    durability,
+    lastConfirmedAt: typeof record.lastConfirmedAt === "string" ? record.lastConfirmedAt : null,
+    recordedAt: typeof record.recordedAt === "string" ? record.recordedAt : ""
+  };
+}
+
 function auditToMemoryChange(audit: AuditRecord): MemoryChangeRecord | undefined {
   const path = detailString(audit.details, "path");
   if (!path || audit.entityType !== "markdown_document") {
@@ -247,7 +363,8 @@ function auditToMemoryChange(audit: AuditRecord): MemoryChangeRecord | undefined
     linkedToolCallId: detailString(audit.details, "tool_call_id"),
     linkedMessageId: detailString(audit.details, "message_id") ?? detailString(audit.details, "source_message_id"),
     linkedApprovalId: detailString(audit.details, "approval_id"),
-    linkedOutboxMessageId: detailString(audit.details, "outbound_message_id")
+    linkedOutboxMessageId: detailString(audit.details, "outbound_message_id"),
+    provenance: memoryProvenanceFromDetail(audit.details.memory_provenance)
   };
 }
 
@@ -657,10 +774,11 @@ async function enqueueMarkdownIndexJob(
 async function writeMarkdownDocumentPostgres(
   pool: Pool,
   context: RequestContext,
-  input: { path: string; markdown: string; expectedVersion?: number },
+  input: { path: string; markdown: string; expectedVersion?: number; provenance?: MemoryProvenanceInput },
   auditAction = "markdown.write"
 ): Promise<MarkdownDocumentRecord | MarkdownConflict> {
   const path = normalizeMarkdownPath(input.path);
+  const provenance = normalizeMemoryProvenance(context, auditAction, input.provenance);
   const contentHash = hashMarkdown(input.markdown);
   const client = await pool.connect();
   try {
@@ -720,7 +838,8 @@ async function writeMarkdownDocumentPostgres(
           version: document.version,
           previousVersion,
           beforeMarkdown: previousMarkdown,
-          afterMarkdown: document.markdown
+          afterMarkdown: document.markdown,
+          provenance
         }),
         context.requestId
       ]
@@ -2775,10 +2894,11 @@ export function createMemoryStore(): AgentStore {
 
   function writeMarkdownMemory(
     context: RequestContext,
-    input: { path: string; markdown: string; expectedVersion?: number },
+    input: { path: string; markdown: string; expectedVersion?: number; provenance?: MemoryProvenanceInput },
     auditAction = "markdown.write"
   ): MarkdownDocumentRecord | MarkdownConflict {
     const path = normalizeMarkdownPath(input.path);
+    const provenance = normalizeMemoryProvenance(context, auditAction, input.provenance);
     const key = `${context.userId}:${path}`;
     const existing = markdownDocuments.get(key);
     if (input.expectedVersion !== undefined) {
@@ -2809,7 +2929,8 @@ export function createMemoryStore(): AgentStore {
       version: document.version,
       previousVersion: existing?.version ?? null,
       beforeMarkdown: existing?.markdown ?? "",
-      afterMarkdown: document.markdown
+      afterMarkdown: document.markdown,
+      provenance
     }));
     return document;
   }

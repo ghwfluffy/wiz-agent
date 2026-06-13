@@ -256,11 +256,35 @@ export const WriteMemoryToolSchema = z.object({
   rationale: z.string().min(1)
 });
 
+const MemoryProvenanceSourceKindSchema = z.enum([
+  "owner_message",
+  "owner_web_prompt",
+  "owner_statement",
+  "newsletter",
+  "task_outcome",
+  "owner_feedback",
+  "assistant_decision",
+  "agent_observation",
+  "manual_edit",
+  "system"
+]);
+
+const MemoryProvenanceDurabilitySchema = z.enum(["one_off", "tentative", "durable", "system"]);
+
 export const WriteFileToolSchema = z.object({
   path: z.string().min(1).max(500).regex(/^\/.*\.md$/),
   content: z.string().min(1),
   expectedVersion: z.number().int().positive().optional(),
-  rationale: z.string().min(1).optional()
+  rationale: z.string().min(1).optional(),
+  sourceKind: MemoryProvenanceSourceKindSchema.optional(),
+  sourceId: z.string().min(1).max(200).optional(),
+  sourcePath: z.string().min(1).max(500).optional(),
+  sourceLabel: z.string().min(1).max(240).optional(),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
+  evidence: z.array(z.string().min(1).max(240)).max(5).optional(),
+  derivedFrom: z.array(z.string().min(1).max(240)).max(10).optional(),
+  durability: MemoryProvenanceDurabilitySchema.optional(),
+  lastConfirmedAt: z.string().datetime().optional()
 });
 
 const AffectedIdListSchema = z.array(z.string().min(1).max(200)).max(20).default([]);

@@ -106,6 +106,7 @@ export function markdownAuditDetails(input: {
   previousVersion: number | null;
   beforeMarkdown: string;
   afterMarkdown: string;
+  provenance?: Record<string, unknown> | null;
 }): Record<string, unknown> {
   const before = redactedMarkdownSnapshot(input.beforeMarkdown);
   const after = redactedMarkdownSnapshot(input.afterMarkdown);
@@ -120,6 +121,7 @@ export function markdownAuditDetails(input: {
     unified_diff: diff.unified,
     diff_truncated: diff.truncated,
     added_lines: diff.addedLines,
-    removed_lines: diff.removedLines
+    removed_lines: diff.removedLines,
+    memory_provenance: input.provenance ?? null
   };
 }

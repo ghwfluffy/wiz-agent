@@ -321,6 +321,49 @@ export type MarkdownWriteInput = {
   path: string;
   markdown: string;
   expectedVersion?: number;
+  provenance?: MemoryProvenanceInput;
+};
+
+export type MemoryProvenanceConfidence = "low" | "medium" | "high";
+
+export type MemoryProvenanceSourceKind =
+  | "owner_message"
+  | "owner_web_prompt"
+  | "owner_statement"
+  | "newsletter"
+  | "task_outcome"
+  | "owner_feedback"
+  | "assistant_decision"
+  | "agent_observation"
+  | "manual_edit"
+  | "system";
+
+export type MemoryProvenanceDurability = "one_off" | "tentative" | "durable" | "system";
+
+export type MemoryProvenanceInput = {
+  sourceKind?: MemoryProvenanceSourceKind;
+  sourceId?: string | null;
+  sourcePath?: string | null;
+  sourceLabel?: string | null;
+  confidence?: MemoryProvenanceConfidence;
+  evidence?: string[];
+  derivedFrom?: string[];
+  durability?: MemoryProvenanceDurability;
+  lastConfirmedAt?: string | null;
+  recordedAt?: string;
+};
+
+export type MemoryProvenance = {
+  sourceKind: MemoryProvenanceSourceKind;
+  sourceId: string | null;
+  sourcePath: string | null;
+  sourceLabel: string | null;
+  confidence: MemoryProvenanceConfidence;
+  evidence: string[];
+  derivedFrom: string[];
+  durability: MemoryProvenanceDurability | null;
+  lastConfirmedAt: string | null;
+  recordedAt: string;
 };
 
 export type MarkdownMoveInput = {
@@ -359,6 +402,7 @@ export type MemoryChangeRecord = {
   linkedMessageId: string | null;
   linkedApprovalId: string | null;
   linkedOutboxMessageId: string | null;
+  provenance: MemoryProvenance | null;
 };
 
 export type MemoryChangeFilter = {

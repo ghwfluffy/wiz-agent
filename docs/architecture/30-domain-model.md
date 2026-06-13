@@ -260,6 +260,17 @@ version, linked ids when present, and the redacted diff payload. This endpoint i
 read-only and derives from audit history; it does not provide revert or delete
 controls.
 
+Markdown write audit entries also carry memory provenance metadata. Provenance
+records identify source kind, optional source id/path/label, confidence
+(`low`, `medium`, or `high`), short evidence snippets, optional derived-from
+references, durability, last-confirmed time, and recorded time. Host code
+normalizes and redacts this metadata before writing audit JSON. Direct owner
+statements should be recorded as high-confidence owner-message or owner-web
+prompt provenance; inferred observations should use medium or low confidence.
+The markdown document remains the source of truth for memory content, while the
+audit provenance explains why the write happened and how strongly it should be
+trusted.
+
 The legacy memory API remains available while the web UI is migrated. Legacy
 memory writes dual-write to markdown paths, and the Phase 01 migration backfills
 existing rows:

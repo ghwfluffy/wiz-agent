@@ -114,7 +114,15 @@ async function upsertSchedulerMemory(options: {
         "",
         "Task-specific rationale belongs here when it is useful beyond a single task event.",
         "Schedule-changing tools must also store rationale on the task timeline."
-      ].join("\n")
+      ].join("\n"),
+      provenance: {
+        sourceKind: "system",
+        sourceLabel: "schedule memory bootstrap",
+        confidence: "high",
+        evidence: ["Host created the default schedule rationale document."],
+        durability: "system",
+        lastConfirmedAt: options.now.toISOString()
+      }
     });
   }
   const existingPolicy = await options.store.getMarkdownDocument(options.context, NOTIFICATION_POLICY_PATH);
@@ -126,7 +134,15 @@ async function upsertSchedulerMemory(options: {
         "",
         "Default: avoid noisy proactive messages. Batch low-urgency questions for a daily briefing or next wake.",
         "Queue an owner message only when a timely decision, high-value discovery, or real blocker makes interruption worthwhile."
-      ].join("\n")
+      ].join("\n"),
+      provenance: {
+        sourceKind: "system",
+        sourceLabel: "notification policy bootstrap",
+        confidence: "high",
+        evidence: ["Host created the default notification policy."],
+        durability: "system",
+        lastConfirmedAt: options.now.toISOString()
+      }
     });
   }
   const existingCommunicationPreferences = await options.store.getMarkdownDocument(options.context, COMMUNICATION_PREFERENCES_PATH);
@@ -145,7 +161,15 @@ async function upsertSchedulerMemory(options: {
         "## Tentative observations",
         "",
         "- None recorded yet."
-      ].join("\n")
+      ].join("\n"),
+      provenance: {
+        sourceKind: "system",
+        sourceLabel: "communication preferences bootstrap",
+        confidence: "high",
+        evidence: ["Host created the default communication preferences document."],
+        durability: "system",
+        lastConfirmedAt: options.now.toISOString()
+      }
     });
   }
   const existingNewsletterPreferences = await options.store.getMarkdownDocument(options.context, NEWSLETTER_PREFERENCES_PATH);
@@ -164,7 +188,15 @@ async function upsertSchedulerMemory(options: {
         "## Tentative observations",
         "",
         "- None recorded yet."
-      ].join("\n")
+      ].join("\n"),
+      provenance: {
+        sourceKind: "system",
+        sourceLabel: "newsletter preferences bootstrap",
+        confidence: "high",
+        evidence: ["Host created the default newsletter preferences document."],
+        durability: "system",
+        lastConfirmedAt: options.now.toISOString()
+      }
     });
   }
 }

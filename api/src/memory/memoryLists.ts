@@ -242,7 +242,16 @@ export async function addMemoryListItem(options: {
   const written = await options.store.writeMarkdownDocument(options.context, {
     path: current.path,
     markdown: renderList(current.list),
-    expectedVersion: current.document?.version
+    expectedVersion: current.document?.version,
+    provenance: {
+      sourceKind: options.sourceMessageId ? "owner_message" : "owner_statement",
+      sourceId: options.sourceMessageId ?? null,
+      sourceLabel: options.item,
+      confidence: "high",
+      evidence: [options.rationale],
+      durability: "durable",
+      lastConfirmedAt: item.addedAt
+    }
   });
   if ("code" in written) {
     return written;
@@ -412,7 +421,16 @@ export async function updateMemoryListItem(options: {
   const written = await options.store.writeMarkdownDocument(options.context, {
     path: current.path,
     markdown: renderList(current.list),
-    expectedVersion: current.document.version
+    expectedVersion: current.document.version,
+    provenance: {
+      sourceKind: "owner_statement",
+      sourceId: target.id,
+      sourceLabel: target.item,
+      confidence: "high",
+      evidence: [options.rationale],
+      durability: "durable",
+      lastConfirmedAt: options.now?.toISOString()
+    }
   });
   if ("code" in written) {
     return written;
@@ -455,7 +473,16 @@ export async function removeMemoryListItem(options: {
   const written = await options.store.writeMarkdownDocument(options.context, {
     path: current.path,
     markdown: renderList(current.list),
-    expectedVersion: current.document.version
+    expectedVersion: current.document.version,
+    provenance: {
+      sourceKind: "owner_statement",
+      sourceId: target.id,
+      sourceLabel: target.item,
+      confidence: "high",
+      evidence: [options.rationale, options.reason ?? ""],
+      durability: "durable",
+      lastConfirmedAt: options.now?.toISOString()
+    }
   });
   if ("code" in written) {
     return written;

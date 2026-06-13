@@ -584,6 +584,19 @@ function dashboardRefSummary(change: PersonalDashboard["recentMemoryChanges"][nu
   return refs.length > 0 ? refs.join(" · ") : "no links";
 }
 
+function dashboardProvenanceSummary(change: Pick<MemoryChange, "provenance"> | PersonalDashboard["recentMemoryChanges"][number]): string {
+  const provenance = change.provenance;
+  if (!provenance) {
+    return "provenance unavailable";
+  }
+  return [
+    provenance.confidence,
+    provenance.sourceKind.replace(/_/g, " "),
+    provenance.durability,
+    provenance.sourceLabel
+  ].filter(Boolean).join(" · ");
+}
+
 async function refreshApprovals(): Promise<void> {
   approvals.value = (await api.listApprovals("pending,approved,rejected,expired")).approvals;
 }
@@ -1568,6 +1581,7 @@ onUnmounted(() => {
                 <div>
                   <p class="item-title">{{ change.path }}</p>
                   <p class="label">{{ change.auditAction }} · {{ dashboardChangeSummary(change) }} · {{ dashboardRefSummary(change) }}</p>
+                  <p class="label">{{ dashboardProvenanceSummary(change) }}</p>
                 </div>
                 <span class="cds--tag" :class="statusTagClass(change.actorType)">{{ change.actorType }}</span>
               </li>
@@ -2196,6 +2210,10 @@ onUnmounted(() => {
                 <div>
                   <dt>Linked ids</dt>
                   <dd>{{ linkedChangeRefs(selectedMemoryChange) }}</dd>
+                </div>
+                <div>
+                  <dt>Provenance</dt>
+                  <dd>{{ dashboardProvenanceSummary(selectedMemoryChange) }}</dd>
                 </div>
                 <div v-if="selectedMemoryChange.snapshotTruncated || selectedMemoryChange.diffTruncated">
                   <dt>Bounds</dt>

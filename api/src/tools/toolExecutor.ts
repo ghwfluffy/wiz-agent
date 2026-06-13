@@ -3,6 +3,9 @@ import type {
   AgentStore,
   ConversationThreadStatus,
   InboundMessageRecord,
+  MemoryProvenanceConfidence,
+  MemoryProvenanceDurability,
+  MemoryProvenanceSourceKind,
   RequestContext
 } from "../domain/types.js";
 import { callIntegrationActionApi, type IntegrationTokenProvider } from "./integrationGateway.js";
@@ -718,10 +721,26 @@ export async function executeToolCall(options: {
       };
     }
     case "write_file": {
+      const evidence = Array.isArray(options.args.evidence)
+        ? options.args.evidence.map(String)
+        : typeof options.args.rationale === "string"
+          ? [options.args.rationale]
+          : [];
       const document = await options.store.writeMarkdownDocument(options.context, {
         path: String(options.args.path),
         markdown: String(options.args.content),
-        expectedVersion: typeof options.args.expectedVersion === "number" ? options.args.expectedVersion : undefined
+        expectedVersion: typeof options.args.expectedVersion === "number" ? options.args.expectedVersion : undefined,
+        provenance: {
+          sourceKind: typeof options.args.sourceKind === "string" ? options.args.sourceKind as MemoryProvenanceSourceKind : "agent_observation",
+          sourceId: typeof options.args.sourceId === "string" ? options.args.sourceId : null,
+          sourcePath: typeof options.args.sourcePath === "string" ? options.args.sourcePath : null,
+          sourceLabel: typeof options.args.sourceLabel === "string" ? options.args.sourceLabel : null,
+          confidence: typeof options.args.confidence === "string" ? options.args.confidence as MemoryProvenanceConfidence : "medium",
+          evidence,
+          derivedFrom: Array.isArray(options.args.derivedFrom) ? options.args.derivedFrom.map(String) : [],
+          durability: typeof options.args.durability === "string" ? options.args.durability as MemoryProvenanceDurability : undefined,
+          lastConfirmedAt: typeof options.args.lastConfirmedAt === "string" ? options.args.lastConfirmedAt : null
+        }
       });
       if ("code" in document) {
         return {

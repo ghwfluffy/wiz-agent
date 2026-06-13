@@ -295,6 +295,20 @@ export type MemoryChange = {
   linkedMessageId: string | null;
   linkedApprovalId: string | null;
   linkedOutboxMessageId: string | null;
+  provenance: MemoryProvenance | null;
+};
+
+export type MemoryProvenance = {
+  sourceKind: string;
+  sourceId: string | null;
+  sourcePath: string | null;
+  sourceLabel: string | null;
+  confidence: "low" | "medium" | "high";
+  evidence: string[];
+  derivedFrom: string[];
+  durability: string | null;
+  lastConfirmedAt: string | null;
+  recordedAt: string;
 };
 
 export type ImapTestResult = {
@@ -358,6 +372,7 @@ export type DashboardMemoryChange = {
   linkedRunId: string | null;
   linkedToolCallId: string | null;
   linkedApprovalId: string | null;
+  provenance: MemoryProvenance | null;
 };
 
 export type DashboardDocumentInsight = {

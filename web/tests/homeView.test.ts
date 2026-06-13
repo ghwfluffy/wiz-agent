@@ -173,7 +173,30 @@ describe("home view", () => {
       activeTasks: [{ id: "task-1", title: "Review travel plan", status: "pending", dueAt: null, priority: 0, scheduleRationale: "Owner asked for a follow-up.", recurrencePolicy: null, nextReviewAt: null, waitingOn: null, blockedReason: null, ownerClarificationNeeded: false, sourceMemoryPath: null, sourceMessageId: null, sourceTaskId: null, updatedAt: "2026-06-13T12:00:00.000Z" }],
       pendingApprovals: [{ id: "approval-1", actionType: "send_outbound_message", riskLevel: "medium", summary: "Send owner a travel-plan check-in.", expiresAt: "2026-06-13T13:00:00.000Z", sourceRunId: null, sourceRef: null, executionStatus: "not_applicable", createdAt: "2026-06-13T12:00:00.000Z" }],
       recentDecisions: [{ path: "/assistant/decisions/2026-06.md", title: "Assistant Decisions", updatedAt: "2026-06-13T12:00:00.000Z", excerpt: "Queued a check-in because the task is due soon." }],
-      recentMemoryChanges: [{ id: "change-1", path: "/assistant/feedback/2026-06.md", auditAction: "owner_feedback.recorded", actorType: "agent", createdAt: "2026-06-13T12:00:00.000Z", summary: { addedLines: 3, removedLines: 0, diffTruncated: false }, linkedTaskId: null, linkedRunId: "run-1", linkedToolCallId: null, linkedApprovalId: null }],
+      recentMemoryChanges: [{
+        id: "change-1",
+        path: "/assistant/feedback/2026-06.md",
+        auditAction: "owner_feedback.recorded",
+        actorType: "agent",
+        createdAt: "2026-06-13T12:00:00.000Z",
+        summary: { addedLines: 3, removedLines: 0, diffTruncated: false },
+        linkedTaskId: null,
+        linkedRunId: "run-1",
+        linkedToolCallId: null,
+        linkedApprovalId: null,
+        provenance: {
+          sourceKind: "owner_feedback",
+          sourceId: "run-1",
+          sourcePath: null,
+          sourceLabel: "communication",
+          confidence: "high",
+          evidence: ["Owner said to avoid early texts."],
+          derivedFrom: ["run-1"],
+          durability: "durable",
+          lastConfirmedAt: "2026-06-13T12:00:00.000Z",
+          recordedAt: "2026-06-13T12:00:00.000Z"
+        }
+      }],
       recentFeedback: [{ path: "/assistant/feedback/2026-06.md", title: "Owner Feedback", updatedAt: "2026-06-13T12:00:00.000Z", excerpt: "Owner said to avoid early texts." }],
       activeThreads: [{ id: "thread-1", title: "Travel planning", status: "waiting", lastOwnerIntentSummary: "Choosing a hotel.", unresolvedQuestion: "Which hotel should be used?", attention: "Which hotel should be used?", linkedTaskCount: 1, linkedMessageCount: 2, linkedMemoryCount: 1, updatedAt: "2026-06-13T12:00:00.000Z" }],
       contactCadence: { status: "high", ownerVisibleOutboundLast24h: 2, ownerVisibleOutboundLast7d: 4, pendingApprovals: 1, failedOutbound: 1, guidance: "Prefer batching or waiting unless urgent.", recentOutbound: [] },
@@ -234,6 +257,7 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Queued a check-in");
     expect(wrapper.text()).toContain("Memory changes");
     expect(wrapper.text()).toContain("/assistant/feedback/2026-06.md");
+    expect(wrapper.text()).toContain("high · owner feedback · durable · communication");
     expect(wrapper.text()).toContain("Active threads");
     expect(wrapper.text()).toContain("Which hotel should be used?");
     expect(wrapper.text()).toContain("Personal lists");
@@ -421,7 +445,19 @@ describe("home view", () => {
       linkedToolCallId: "tool-1",
       linkedMessageId: null,
       linkedApprovalId: null,
-      linkedOutboxMessageId: null
+      linkedOutboxMessageId: null,
+      provenance: {
+        sourceKind: "owner_message",
+        sourceId: "message-1",
+        sourcePath: null,
+        sourceLabel: "movie night",
+        confidence: "high",
+        evidence: ["Owner wanted to save Desperado."],
+        derivedFrom: ["message-1"],
+        durability: "durable",
+        lastConfirmedAt: "2026-06-13T12:00:00.000Z",
+        recordedAt: "2026-06-13T12:00:00.000Z"
+      }
     };
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -476,6 +512,7 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("markdown.write");
     expect(wrapper.text()).toContain("+- [ ] Desperado");
     expect(wrapper.text()).toContain("run run-1");
+    expect(wrapper.text()).toContain("high · owner message · durable · movie night");
 
     const readButton = wrapper.findAll("button").find((button) => button.text() === "Read file");
     expect(readButton).toBeTruthy();
