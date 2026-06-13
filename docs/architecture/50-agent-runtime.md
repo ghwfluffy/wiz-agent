@@ -348,13 +348,21 @@ but the model still receives only bounded context and can act only through the
 same validated tool/MCP path. If a context task is supplied, the agent run links
 to that task and task events record the prompt/tool outcomes. The endpoint
 returns the run id, selected action, tool status/result, and host-derived links
-to created or updated task, outbox, memory, or clarification records. When the
-model answers without selecting a tool, the endpoint returns the plain answer as
-`responseText` so conversational UI can show the answer instead of a generic
-completion status. When a selected read-only tool succeeds, the runtime performs
-a second text-only synthesis pass over the owner prompt and tool result and
-returns that interpreted answer as `responseText`; the raw tool result remains
-available for audit/debug views but is not the primary chat reply.
+to created or updated task, outbox, memory, or clarification records. Controlled
+agent failures, such as guardrail failures, still return this prompt result
+envelope with `status: failed` so chat clients can display `failureMessage`
+instead of treating the response as a transport failure. When the model answers
+without selecting a tool, the endpoint returns the plain answer as `responseText`
+so conversational UI can show the answer instead of a generic completion status.
+When a selected read-only tool succeeds, the runtime performs a fast text-only
+synthesis pass over the owner prompt and tool result and returns that
+interpreted answer as `responseText`; the raw tool result remains available for
+audit/debug views but is not the primary chat reply.
+
+The dedicated Chat tab sends prompts with `quick_reply` mode and includes recent
+browser chat turns inside the prompt body. This keeps interactive follow-ups on
+the fast model tier while preserving enough context for pronouns and references
+to previous answers.
 
 Owner messages must not be pre-written to long-term memory by regex or other
 host heuristics. Durable owner facts, preferences, and schedule rationale should

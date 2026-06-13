@@ -316,6 +316,57 @@ describe("agent task execution", () => {
     ]));
   });
 
+  it("returns controlled web prompt failures as prompt results", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_MAX_RUNS_PER_USER_PER_HOUR: "1"
+    });
+    const store = createMemoryStore();
+    const app = buildApp({
+      settings,
+      store,
+      modelClient: new MockModelClient()
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+    const session = await store.getSession(cookie.match(/agent_session=([^;]+)/)?.[1]);
+    expect(session).toBeTruthy();
+    await store.createAgentRun({
+      userId: session!.user.id,
+      actorType: "admin",
+      permissions: ["user", "admin"],
+      requestId: "web-guardrail-test",
+      session: session!
+    }, {
+      taskId: null,
+      status: "completed",
+      modelTier: "fast",
+      modelId: "test-model",
+      promptVersion: "test"
+    });
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: "Tell me what to do next.",
+        mode: "quick_reply"
+      })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "failed",
+      selectedAction: null,
+      toolStatus: "none",
+      failureMessage: "Agent run hourly guardrail exceeded."
+    });
+  });
+
   it("fails a run cleanly when the MCP/tool-call guardrail is exceeded", async () => {
     const { context, store } = await testContext();
     await store.updateAiConfig(context, {

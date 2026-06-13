@@ -1185,7 +1185,7 @@ export function buildApp(options: AppOptions = {}): Hono {
       toolResult: result.executionResult ?? null,
       links,
       failureMessage: result.failureMessage ?? null
-    }, result.status === "failed" ? 500 : 200);
+    }, 200);
   });
 
   app.get("/api/v1/knowledge/tree", async (context) => {

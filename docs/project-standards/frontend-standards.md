@@ -48,10 +48,11 @@ The Chat tab should behave like a normal conversation surface: one message
 composer, Enter-to-send with Shift+Enter for newlines, one chronological message
 thread, and a clear-chat action. Follow-up messages must include bounded recent
 browser chat context in the submitted prompt so pronouns and references to prior
-answers remain understandable. Keep run ids, selected tool names, raw tool JSON,
-prompt modes, task selectors, memory selectors, and other debugging or operator
-controls out of this screen. Put advanced prompt controls in
-admin/overview/operator surfaces instead.
+answers remain understandable. Chat prompt submissions should use the
+`quick_reply` mode so interactive turns stay on the fast runtime path. Keep run
+ids, selected tool names, raw tool JSON, prompt modes, task selectors, memory
+selectors, and other debugging or operator controls out of this screen. Put
+advanced prompt controls in admin/overview/operator surfaces instead.
 
 ## API Error Feedback
 
