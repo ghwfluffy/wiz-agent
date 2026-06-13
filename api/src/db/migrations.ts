@@ -4,6 +4,7 @@ export const MCP_TOOL_ALLOWLIST_MIGRATION_ID = "0004_mcp_tool_allowlist";
 export const TASK_SCHEDULE_CONTEXT_MIGRATION_ID = "0005_task_schedule_context";
 export const APPROVAL_POLICY_MIGRATION_ID = "0006_approval_policy";
 export const APPROVAL_EXECUTION_MIGRATION_ID = "0007_approval_execution";
+export const CONVERSATION_THREADING_MIGRATION_ID = "0008_conversation_threading";
 
 const tenantOwnedTables = [
   "identities",
@@ -184,4 +185,23 @@ WHERE status = 'approved'
 
 CREATE INDEX IF NOT EXISTS idx_approvals_cross_app_execution ON approvals(user_id, execution_status, created_at)
   WHERE status = 'approved' AND action_type = 'cross_app_write_action';
+`;
+
+export const CONVERSATION_THREADING_SQL = `
+CREATE TABLE IF NOT EXISTS conversation_threads (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  last_owner_intent_summary TEXT,
+  unresolved_question TEXT,
+  linked_task_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  linked_message_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  linked_memory_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_threads_user_status_updated
+  ON conversation_threads(user_id, status, updated_at DESC);
 `;

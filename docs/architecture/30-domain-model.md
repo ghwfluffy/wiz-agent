@@ -10,6 +10,8 @@ integration activity. `users.id` is the isolation boundary for user-owned data.
 - Session: server-side session tied to one user.
 - Connector: configured external integration such as IMAP or SMTP.
 - Conversation: grouped messages and agent interactions.
+- Conversation thread: lightweight owner-scoped continuity record that groups
+  related owner/assistant exchanges across messages, tasks, and memory paths.
 - Message: inbound, outbound, or internal communication.
 - Task: scheduled or on-demand work item for the agent or worker.
 - Task event: append-only task state transition history.
@@ -158,6 +160,27 @@ Inbound owner messages that the agent associates with a task also record
 task event id, agent run id, outbound review id where applicable, and handling
 action in `messages.auth_json` so the web UI can link from a message to the
 task timeline without adding deployment-specific columns.
+
+## Conversation Threads
+
+Conversation threads are user-owned records in `conversation_threads`. They are
+lighter than the older generic `conversations` table and exist specifically to
+help owner follow-ups refer to prior work. Each thread stores a title, status
+(`active`, `waiting`, `resolved`, or `archived`), the latest owner intent
+summary, an unresolved question when applicable, linked task ids, linked message
+ids, linked markdown memory paths, and created/updated timestamps.
+
+Owner inbound handling creates a thread for new owner topics and may attach
+short follow-ups such as "any update on that from yesterday?" to a recent active
+or waiting thread before the model call. The current thread id is also written
+into `messages.auth_json` as `conversation_thread_id` when the message is routed
+to the agent. Existing unthreaded messages remain valid because this metadata is
+optional.
+
+Model-facing thread mutations go through controlled tools. The host resolves
+user scope from the MCP session and validates linked tasks, messages, and
+markdown paths before adding them to a thread. A missing or foreign linked
+record is rejected rather than silently creating a cross-user reference.
 
 ## Inbox Messages
 

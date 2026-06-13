@@ -179,6 +179,9 @@ describe("app capability registry", () => {
         expect.objectContaining({ name: "create_budget_contract", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "create_budget_expense", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "integration_action" }),
+        expect.objectContaining({ name: "list_conversation_threads", access: "read", sideEffect: "none" }),
+        expect.objectContaining({ name: "update_conversation_thread", access: "write", sideEffect: "local_persistence" }),
+        expect.objectContaining({ name: "link_conversation_thread", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "create_task" })
       ])
     );
@@ -886,6 +889,87 @@ describe("agent task execution", () => {
       status: "pending",
       prompt: expect.stringContaining("Owner added a morning preference.")
     });
+    const threads = await store.listConversationThreads(context, ["active"], 5);
+    expect(threads).toEqual([
+      expect.objectContaining({
+        linkedTaskIds: [task.id],
+        linkedMessageIds: [message.id]
+      })
+    ]);
+  });
+
+  it("stores conversation thread state and includes it in owner prompts", async () => {
+    const { context, store } = await testContext();
+    const task = await store.createTask(context, {
+      title: "Insurance renewal",
+      prompt: "Compare renewal options."
+    });
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "thread-message-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "What happened with the insurance thing from yesterday?",
+      source: "sms"
+    }, "owner");
+    const document = await store.writeMarkdownDocument(context, {
+      path: "/projects/insurance/notes.md",
+      markdown: "# Insurance Notes\n\nRenewal notes."
+    });
+    expect("code" in document).toBe(false);
+
+    const thread = await store.createConversationThread(context, {
+      title: "Insurance renewal",
+      status: "waiting",
+      lastOwnerIntentSummary: "Owner asked about renewal status.",
+      unresolvedQuestion: "Which policy should be renewed?",
+      linkedTaskIds: [task.id],
+      linkedMessageIds: [message.id],
+      linkedMemoryPaths: ["/projects/insurance/notes.md"]
+    });
+
+    const prompt = await buildOwnerInboundPrompt({ context, store, message, currentThread: thread });
+    expect(prompt).toContain("Conversation threads:");
+    expect(prompt).toContain(thread.id);
+    expect(prompt).toContain("Which policy should be renewed?");
+  });
+
+  it("lets owner inbound messages reuse an active conversation thread for follow-ups", async () => {
+    const { context, store } = await testContext();
+    const thread = await store.createConversationThread(context, {
+      title: "Dentist appointment",
+      status: "active",
+      lastOwnerIntentSummary: "Owner is scheduling a dentist appointment."
+    });
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "thread-followup-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Any update on that from yesterday?",
+      source: "sms"
+    }, "owner");
+
+    const result = await runOwnerInboundAgent({
+      context,
+      store,
+      message,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_observation",
+            arguments: {
+              summary: "Owner asked for a status update.",
+              source: "owner follow-up"
+            }
+          }
+        ]
+      })
+    });
+
+    expect(result.conversationThreadId).toBe(thread.id);
+    await expect(store.getConversationThread(context, thread.id)).resolves.toMatchObject({
+      linkedMessageIds: [message.id],
+      lastOwnerIntentSummary: "Any update on that from yesterday?"
+    });
   });
 
   it("includes bounded recent owner context so short SMS follow-ups can refer to completed work", async () => {
@@ -1319,6 +1403,106 @@ describe("agent task execution", () => {
         })
       ])
     );
+  });
+
+  it("lists, updates, and scope-checks conversation thread tools", async () => {
+    const { context, store } = await testContext();
+    const task = await store.createTask(context, {
+      title: "Roof quote",
+      prompt: "Compare quotes."
+    });
+    const thread = await store.createConversationThread(context, {
+      title: "Roof quotes",
+      status: "active"
+    });
+
+    const listResult = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "list_conversation_threads",
+            arguments: { statuses: ["active"], reason: "Find related work." }
+          }
+        ]
+      }),
+      request: { prompt: "List threads." }
+    });
+    expect(listResult.executionResult?.threads).toEqual([
+      expect.objectContaining({ thread_id: thread.id, title: "Roof quotes" })
+    ]);
+
+    const updateResult = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "update_conversation_thread",
+            arguments: {
+              threadId: thread.id,
+              status: "waiting",
+              unresolvedQuestion: "Which quote should be accepted?",
+              rationale: "Owner needs to choose."
+            }
+          }
+        ]
+      }),
+      request: { prompt: "Update thread." }
+    });
+    expect(updateResult.executionResult).toMatchObject({
+      thread_id: thread.id,
+      status: "waiting"
+    });
+
+    const linkResult = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "link_conversation_thread",
+            arguments: {
+              threadId: thread.id,
+              taskIds: [task.id],
+              messageIds: [],
+              memoryPaths: [],
+              rationale: "The task belongs to the thread."
+            }
+          }
+        ]
+      }),
+      request: { prompt: "Link thread." }
+    });
+    expect(linkResult.executionResult).toMatchObject({
+      thread_id: thread.id,
+      linked_task_ids: [task.id]
+    });
+
+    const rejected = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "link_conversation_thread",
+            arguments: {
+              threadId: thread.id,
+              taskIds: ["foreign-task-id"],
+              messageIds: [],
+              memoryPaths: [],
+              rationale: "Should be rejected."
+            }
+          }
+        ]
+      }),
+      request: { prompt: "Try foreign link." }
+    });
+    expect(rejected.executionResult).toMatchObject({
+      rejected: true,
+      reason: "linked_record_missing_or_foreign"
+    });
   });
 
   it("exposes recent bot activity insights through MCP", async () => {

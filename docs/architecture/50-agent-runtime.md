@@ -65,6 +65,9 @@ Current tool contracts:
 - `list_ongoing_tasks`
 - `list_recent_context`
 - `list_recent_owner_conversations`
+- `list_conversation_threads`
+- `update_conversation_thread`
+- `link_conversation_thread`
 - `get_recent_bot_activity`
 - `list_app_capabilities`
 - `list_goals`
@@ -150,6 +153,14 @@ Current migrated agent tools:
   without side effects.
 - `list_recent_owner_conversations` returns recent owner inbound/outbound
   conversation excerpts so the agent can resolve short follow-up messages.
+- `list_conversation_threads` returns bounded user-scoped thread summaries for
+  active, waiting, resolved, or archived conversation threads.
+- `update_conversation_thread` refreshes a thread title, status, owner intent
+  summary, or unresolved question under the authenticated user's scope.
+- `link_conversation_thread` links a thread to existing user-owned tasks,
+  inbound/outbound messages, and markdown memory paths. Host code verifies each
+  referenced record before updating the thread and rejects missing or foreign
+  ids.
 - `get_recent_bot_activity` returns bounded operational activity insight,
   including owner-visible outbound counts, pending approvals, failures, recent
   outbound excerpts, and a host-computed contact-cadence assessment. The
@@ -309,13 +320,15 @@ derived from persisted task, event, run, and tool state; the runtime does not
 call the model again solely to create ledger prose.
 
 Owner inbound SMS/MMS/email handling uses the same runtime boundary. After
-sender policy classifies a message as `owner`, host code builds an inbound
-prompt that includes bounded active task, recent conversation, and saved memory
+sender policy classifies a message as `owner`, host code creates or reuses a
+lightweight conversation thread, then builds an inbound prompt that includes
+bounded active task, recent conversation, recent thread, and saved memory
 context. The model then decides what to do: write memory, append to an existing
-task, create/schedule a new task, queue a reply, call a registered app
-integration, request recent owner conversation context, ask for clarification,
-or record an observation. The inbox record is updated with the agent run id and
-any linked task/task-event ids so the UI can show what the message triggered.
+task, create/schedule a new task, update/link a conversation thread, queue a
+reply, call a registered app integration, request recent owner conversation
+context, ask for clarification, or record an observation. The inbox record is
+updated with the agent run id, optional conversation thread id, and any linked
+task/task-event ids so the UI can show what the message triggered.
 
 Authenticated direct web prompts use the same owner-command decision loop via
 `POST /api/v1/agent/prompts`. The request body includes `prompt`, optional

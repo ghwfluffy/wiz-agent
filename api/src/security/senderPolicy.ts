@@ -141,6 +141,7 @@ export async function handleInboundMessage(
     rateLimiter: InboundRateLimiter;
     ownerAgentRunner?: (message: InboundMessageRecord) => Promise<{
       runId?: string;
+      conversationThreadId?: string;
       taskId?: string;
       taskEventId?: string;
     }>;
@@ -220,6 +221,7 @@ export async function handleInboundMessage(
     }
     await options.store.updateInboundMessageHandling(options.context, recorded.id, {
       action: "routed_to_agent",
+      conversationThreadId: agentResult?.conversationThreadId ?? null,
       taskId: agentResult?.taskId ?? null,
       taskEventId: taskEventId ?? null,
       agentRunId: agentResult?.runId ?? null
@@ -228,6 +230,7 @@ export async function handleInboundMessage(
       classification,
       action: "routed_to_agent",
       messageId: recorded.id,
+      conversationThreadId: agentResult?.conversationThreadId,
       taskId: agentResult?.taskId,
       taskEventId,
       agentRunId: agentResult?.runId

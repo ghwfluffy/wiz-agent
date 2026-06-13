@@ -26,6 +26,10 @@ import type {
   ApprovalRecord,
   ApprovalStatus,
   AiConfig,
+  ConversationThreadInput,
+  ConversationThreadRecord,
+  ConversationThreadStatus,
+  ConversationThreadUpdate,
   ConnectorInput,
   ConnectorKind,
   ConnectorRecord,
@@ -254,11 +258,36 @@ function inboundFromRow(row: Record<string, unknown>): InboundMessageRecord {
     handlingAction: typeof authJson.handling_action === "string"
       ? authJson.handling_action as InboundMessageRecord["handlingAction"]
       : null,
+    conversationThreadId: typeof authJson.conversation_thread_id === "string" ? authJson.conversation_thread_id : null,
     taskId: typeof authJson.task_id === "string" ? authJson.task_id : null,
     taskEventId: typeof authJson.task_event_id === "string" ? authJson.task_event_id : null,
     agentRunId: typeof authJson.agent_run_id === "string" ? authJson.agent_run_id : null,
     outboundMessageId: typeof authJson.outbound_message_id === "string" ? authJson.outbound_message_id : null,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
+  };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
+}
+
+function uniqueStrings(values: string[] = []): string[] {
+  return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+}
+
+function conversationThreadFromRow(row: Record<string, unknown>): ConversationThreadRecord {
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    title: String(row.title),
+    status: row.status as ConversationThreadStatus,
+    lastOwnerIntentSummary: row.last_owner_intent_summary ? String(row.last_owner_intent_summary) : null,
+    unresolvedQuestion: row.unresolved_question ? String(row.unresolved_question) : null,
+    linkedTaskIds: stringArray(row.linked_task_ids_json),
+    linkedMessageIds: stringArray(row.linked_message_ids_json),
+    linkedMemoryPaths: stringArray(row.linked_memory_paths_json),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
   };
 }
 
@@ -949,6 +978,122 @@ export function createPostgresStore(pool: Pool): AgentStore {
 
     async recordTaskEvent(context, taskId, eventType, details = {}) {
       return insertTaskEvent(pool, context, taskId, eventType, details);
+    },
+
+    async createConversationThread(context, input: ConversationThreadInput): Promise<ConversationThreadRecord> {
+      const result = await pool.query(
+        `INSERT INTO conversation_threads
+          (id, user_id, title, status, last_owner_intent_summary, unresolved_question,
+           linked_task_ids_json, linked_message_ids_json, linked_memory_paths_json)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8::jsonb, $9::jsonb)
+         RETURNING *`,
+        [
+          randomUUID(),
+          context.userId,
+          input.title,
+          input.status ?? "active",
+          input.lastOwnerIntentSummary ?? null,
+          input.unresolvedQuestion ?? null,
+          JSON.stringify(uniqueStrings(input.linkedTaskIds)),
+          JSON.stringify(uniqueStrings(input.linkedMessageIds)),
+          JSON.stringify(uniqueStrings(input.linkedMemoryPaths))
+        ]
+      );
+      const thread = conversationThreadFromRow(result.rows[0]);
+      await recordAudit(pool, context, "conversation_thread.create", "conversation_thread", thread.id, {
+        status: thread.status,
+        linked_task_ids: thread.linkedTaskIds,
+        linked_message_ids: thread.linkedMessageIds,
+        linked_memory_paths: thread.linkedMemoryPaths
+      });
+      return thread;
+    },
+
+    async listConversationThreads(context, statuses, limit = 20): Promise<ConversationThreadRecord[]> {
+      const statusFilter = statuses && statuses.length > 0;
+      const result = await pool.query(
+        statusFilter
+          ? `SELECT * FROM conversation_threads
+             WHERE user_id = $1 AND status = ANY($2::text[])
+             ORDER BY updated_at DESC
+             LIMIT $3`
+          : `SELECT * FROM conversation_threads
+             WHERE user_id = $1
+             ORDER BY updated_at DESC
+             LIMIT $2`,
+        statusFilter ? [context.userId, statuses, limit] : [context.userId, limit]
+      );
+      return result.rows.map(conversationThreadFromRow);
+    },
+
+    async getConversationThread(context, threadId): Promise<ConversationThreadRecord | undefined> {
+      const result = await pool.query(
+        `SELECT * FROM conversation_threads
+         WHERE id = $1 AND user_id = $2`,
+        [threadId, context.userId]
+      );
+      return result.rows[0] ? conversationThreadFromRow(result.rows[0]) : undefined;
+    },
+
+    async updateConversationThread(context, threadId, update: ConversationThreadUpdate): Promise<ConversationThreadRecord | undefined> {
+      const existing = await this.getConversationThread(context, threadId);
+      if (!existing) {
+        return undefined;
+      }
+      const next = {
+        title: update.title ?? existing.title,
+        status: update.status ?? existing.status,
+        lastOwnerIntentSummary: update.lastOwnerIntentSummary === undefined ? existing.lastOwnerIntentSummary : update.lastOwnerIntentSummary,
+        unresolvedQuestion: update.unresolvedQuestion === undefined ? existing.unresolvedQuestion : update.unresolvedQuestion,
+        linkedTaskIds: update.linkedTaskIds === undefined ? existing.linkedTaskIds : uniqueStrings(update.linkedTaskIds),
+        linkedMessageIds: update.linkedMessageIds === undefined ? existing.linkedMessageIds : uniqueStrings(update.linkedMessageIds),
+        linkedMemoryPaths: update.linkedMemoryPaths === undefined ? existing.linkedMemoryPaths : uniqueStrings(update.linkedMemoryPaths)
+      };
+      const result = await pool.query(
+        `UPDATE conversation_threads
+         SET title = $3,
+             status = $4,
+             last_owner_intent_summary = $5,
+             unresolved_question = $6,
+             linked_task_ids_json = $7::jsonb,
+             linked_message_ids_json = $8::jsonb,
+             linked_memory_paths_json = $9::jsonb,
+             updated_at = now()
+         WHERE id = $1 AND user_id = $2
+         RETURNING *`,
+        [
+          threadId,
+          context.userId,
+          next.title,
+          next.status,
+          next.lastOwnerIntentSummary,
+          next.unresolvedQuestion,
+          JSON.stringify(next.linkedTaskIds),
+          JSON.stringify(next.linkedMessageIds),
+          JSON.stringify(next.linkedMemoryPaths)
+        ]
+      );
+      const thread = conversationThreadFromRow(result.rows[0]);
+      await recordAudit(pool, context, "conversation_thread.update", "conversation_thread", thread.id, {
+        status: thread.status
+      });
+      return thread;
+    },
+
+    async linkConversationThread(context, threadId, links) {
+      const existing = await this.getConversationThread(context, threadId);
+      if (!existing) {
+        return undefined;
+      }
+      const updated = await this.updateConversationThread(context, threadId, {
+        linkedTaskIds: uniqueStrings([...existing.linkedTaskIds, ...(links.taskIds ?? [])]),
+        linkedMessageIds: uniqueStrings([...existing.linkedMessageIds, ...(links.messageIds ?? [])]),
+        linkedMemoryPaths: uniqueStrings([...existing.linkedMemoryPaths, ...(links.memoryPaths ?? [])])
+      });
+      if (updated) {
+        await recordAudit(pool, context, "conversation_thread.link", "conversation_thread", threadId, links);
+      }
+      return updated;
     },
 
     async claimDueTasks(context: RequestContext, limit: number, now = new Date()): Promise<TaskRecord[]> {
@@ -2073,6 +2218,24 @@ export function createPostgresStore(pool: Pool): AgentStore {
     },
 
     async updateInboundMessageHandling(context, messageId, handling) {
+      const patch: Record<string, unknown> = {
+        handling_action: handling.action
+      };
+      if ("conversationThreadId" in handling) {
+        patch.conversation_thread_id = handling.conversationThreadId ?? null;
+      }
+      if ("taskId" in handling) {
+        patch.task_id = handling.taskId ?? null;
+      }
+      if ("taskEventId" in handling) {
+        patch.task_event_id = handling.taskEventId ?? null;
+      }
+      if ("agentRunId" in handling) {
+        patch.agent_run_id = handling.agentRunId ?? null;
+      }
+      if ("outboundMessageId" in handling) {
+        patch.outbound_message_id = handling.outboundMessageId ?? null;
+      }
       const result = await pool.query(
         `UPDATE messages
          SET auth_json = auth_json || $3::jsonb
@@ -2081,26 +2244,22 @@ export function createPostgresStore(pool: Pool): AgentStore {
         [
           messageId,
           context.userId,
-          JSON.stringify({
-            handling_action: handling.action,
-            task_id: handling.taskId ?? null,
-            task_event_id: handling.taskEventId ?? null,
-            agent_run_id: handling.agentRunId ?? null,
-            outbound_message_id: handling.outboundMessageId ?? null
-          })
+          JSON.stringify(patch)
         ]
       );
       if (!result.rows[0]) {
         return undefined;
       }
+      const updated = inboundFromRow(result.rows[0]);
       await recordAudit(pool, context, "message.inbound.handled", "message", messageId, {
         action: handling.action,
-        task_id: handling.taskId ?? null,
-        task_event_id: handling.taskEventId ?? null,
-        agent_run_id: handling.agentRunId ?? null,
-        outbound_message_id: handling.outboundMessageId ?? null
+        conversation_thread_id: updated.conversationThreadId,
+        task_id: updated.taskId,
+        task_event_id: updated.taskEventId,
+        agent_run_id: updated.agentRunId,
+        outbound_message_id: updated.outboundMessageId
       });
-      return inboundFromRow(result.rows[0]);
+      return updated;
     },
 
     async queueOutboundMessage(context, input) {
@@ -2402,6 +2561,7 @@ export function createMemoryStore(): AgentStore {
   const taskEvents = new Map<string, TaskEventRecord[]>();
   const runs = new Map<string, AgentRunRecord>();
   const toolCalls = new Map<string, ToolCallRecord>();
+  const conversationThreads = new Map<string, ConversationThreadRecord>();
   const senderStatuses = new Map<string, SenderRecord>();
   const memoryDocuments = new Map<string, MemoryDocumentRecord>();
   const markdownDocuments = new Map<string, MarkdownDocumentRecord>();
@@ -2748,6 +2908,78 @@ export function createMemoryStore(): AgentStore {
     },
     async recordTaskEvent(context, taskId, eventType, details = {}) {
       return pushTaskEvent(context, taskId, eventType, details);
+    },
+    async createConversationThread(context, input) {
+      const now = nowIso();
+      const thread: ConversationThreadRecord = {
+        id: randomUUID(),
+        userId: context.userId,
+        title: input.title,
+        status: input.status ?? "active",
+        lastOwnerIntentSummary: input.lastOwnerIntentSummary ?? null,
+        unresolvedQuestion: input.unresolvedQuestion ?? null,
+        linkedTaskIds: uniqueStrings(input.linkedTaskIds),
+        linkedMessageIds: uniqueStrings(input.linkedMessageIds),
+        linkedMemoryPaths: uniqueStrings(input.linkedMemoryPaths),
+        createdAt: now,
+        updatedAt: now
+      };
+      conversationThreads.set(thread.id, thread);
+      pushAudit(context, "conversation_thread.create", "conversation_thread", thread.id, {
+        status: thread.status,
+        linked_task_ids: thread.linkedTaskIds,
+        linked_message_ids: thread.linkedMessageIds,
+        linked_memory_paths: thread.linkedMemoryPaths
+      });
+      return thread;
+    },
+    async listConversationThreads(context, statuses, limit = 20) {
+      return [...conversationThreads.values()]
+        .filter((thread) => thread.userId === context.userId)
+        .filter((thread) => !statuses || statuses.length === 0 || statuses.includes(thread.status))
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, limit);
+    },
+    async getConversationThread(context, threadId) {
+      const thread = conversationThreads.get(threadId);
+      return thread && thread.userId === context.userId ? thread : undefined;
+    },
+    async updateConversationThread(context, threadId, update) {
+      const existing = await this.getConversationThread(context, threadId);
+      if (!existing) {
+        return undefined;
+      }
+      const updated: ConversationThreadRecord = {
+        ...existing,
+        title: update.title ?? existing.title,
+        status: update.status ?? existing.status,
+        lastOwnerIntentSummary: update.lastOwnerIntentSummary === undefined ? existing.lastOwnerIntentSummary : update.lastOwnerIntentSummary,
+        unresolvedQuestion: update.unresolvedQuestion === undefined ? existing.unresolvedQuestion : update.unresolvedQuestion,
+        linkedTaskIds: update.linkedTaskIds === undefined ? existing.linkedTaskIds : uniqueStrings(update.linkedTaskIds),
+        linkedMessageIds: update.linkedMessageIds === undefined ? existing.linkedMessageIds : uniqueStrings(update.linkedMessageIds),
+        linkedMemoryPaths: update.linkedMemoryPaths === undefined ? existing.linkedMemoryPaths : uniqueStrings(update.linkedMemoryPaths),
+        updatedAt: nowIso()
+      };
+      conversationThreads.set(threadId, updated);
+      pushAudit(context, "conversation_thread.update", "conversation_thread", threadId, {
+        status: updated.status
+      });
+      return updated;
+    },
+    async linkConversationThread(context, threadId, links) {
+      const existing = await this.getConversationThread(context, threadId);
+      if (!existing) {
+        return undefined;
+      }
+      const updated = await this.updateConversationThread(context, threadId, {
+        linkedTaskIds: uniqueStrings([...existing.linkedTaskIds, ...(links.taskIds ?? [])]),
+        linkedMessageIds: uniqueStrings([...existing.linkedMessageIds, ...(links.messageIds ?? [])]),
+        linkedMemoryPaths: uniqueStrings([...existing.linkedMemoryPaths, ...(links.memoryPaths ?? [])])
+      });
+      if (updated) {
+        pushAudit(context, "conversation_thread.link", "conversation_thread", threadId, links);
+      }
+      return updated;
     },
     async claimDueTasks(context: RequestContext, limit: number, now = new Date()): Promise<TaskRecord[]> {
       const claimed: TaskRecord[] = [];
@@ -3429,6 +3661,7 @@ export function createMemoryStore(): AgentStore {
             userId: context.userId,
             classification,
             handlingAction: null,
+            conversationThreadId: null,
             taskId: null,
             taskEventId: null,
             agentRunId: null,
@@ -3446,6 +3679,7 @@ export function createMemoryStore(): AgentStore {
         userId: context.userId,
         classification,
         handlingAction: null,
+        conversationThreadId: null,
         taskId: null,
         taskEventId: null,
         agentRunId: null,
@@ -3481,18 +3715,20 @@ export function createMemoryStore(): AgentStore {
       const updated: InboundMessageRecord = {
         ...message,
         handlingAction: handling.action,
-        taskId: handling.taskId ?? null,
-        taskEventId: handling.taskEventId ?? null,
-        agentRunId: handling.agentRunId ?? null,
-        outboundMessageId: handling.outboundMessageId ?? null
+        conversationThreadId: "conversationThreadId" in handling ? handling.conversationThreadId ?? null : message.conversationThreadId,
+        taskId: "taskId" in handling ? handling.taskId ?? null : message.taskId,
+        taskEventId: "taskEventId" in handling ? handling.taskEventId ?? null : message.taskEventId,
+        agentRunId: "agentRunId" in handling ? handling.agentRunId ?? null : message.agentRunId,
+        outboundMessageId: "outboundMessageId" in handling ? handling.outboundMessageId ?? null : message.outboundMessageId
       };
       inboundMessages.set(messageId, updated);
       pushAudit(context, "message.inbound.handled", "message", messageId, {
         action: handling.action,
-        task_id: handling.taskId ?? null,
-        task_event_id: handling.taskEventId ?? null,
-        agent_run_id: handling.agentRunId ?? null,
-        outbound_message_id: handling.outboundMessageId ?? null
+        conversation_thread_id: updated.conversationThreadId,
+        task_id: updated.taskId,
+        task_event_id: updated.taskEventId,
+        agent_run_id: updated.agentRunId,
+        outbound_message_id: updated.outboundMessageId
       });
       return updated;
     },

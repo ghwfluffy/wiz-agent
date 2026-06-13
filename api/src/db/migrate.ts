@@ -13,7 +13,9 @@ import {
   APPROVAL_POLICY_MIGRATION_ID,
   APPROVAL_POLICY_SQL,
   APPROVAL_EXECUTION_MIGRATION_ID,
-  APPROVAL_EXECUTION_SQL
+  APPROVAL_EXECUTION_SQL,
+  CONVERSATION_THREADING_MIGRATION_ID,
+  CONVERSATION_THREADING_SQL
 } from "./migrations.js";
 
 export async function runMigrations(): Promise<void> {
@@ -162,6 +164,26 @@ export async function runMigrations(): Promise<void> {
         await client.query(APPROVAL_EXECUTION_SQL);
         await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
           APPROVAL_EXECUTION_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const conversationThreadingApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      CONVERSATION_THREADING_MIGRATION_ID
+    ]);
+    if (conversationThreadingApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(CONVERSATION_THREADING_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          CONVERSATION_THREADING_MIGRATION_ID
         ]);
         await client.query("COMMIT");
       } catch (error) {

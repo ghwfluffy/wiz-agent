@@ -72,6 +72,23 @@ CREATE TABLE IF NOT EXISTS conversations (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS conversation_threads (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'active',
+  last_owner_intent_summary TEXT,
+  unresolved_question TEXT,
+  linked_task_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  linked_message_ids_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  linked_memory_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_conversation_threads_user_status_updated
+  ON conversation_threads(user_id, status, updated_at DESC);
+
 CREATE TABLE IF NOT EXISTS messages (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,

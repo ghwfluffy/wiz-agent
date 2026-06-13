@@ -94,6 +94,7 @@ export type InboundMessageRecord = InboundMessageInput & {
   userId: string;
   classification: SenderClassification;
   handlingAction: InboundHandlingResult["action"] | null;
+  conversationThreadId: string | null;
   taskId: string | null;
   taskEventId: string | null;
   agentRunId: string | null;
@@ -118,6 +119,42 @@ export type OutboundMessageRecord = OutboundMessageInput & {
   updatedAt: string;
   sentAt?: string | null;
   failureMessage?: string | null;
+};
+
+export type ConversationThreadStatus = "active" | "waiting" | "resolved" | "archived";
+
+export type ConversationThreadRecord = {
+  id: string;
+  userId: string;
+  title: string;
+  status: ConversationThreadStatus;
+  lastOwnerIntentSummary: string | null;
+  unresolvedQuestion: string | null;
+  linkedTaskIds: string[];
+  linkedMessageIds: string[];
+  linkedMemoryPaths: string[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ConversationThreadInput = {
+  title: string;
+  status?: ConversationThreadStatus;
+  lastOwnerIntentSummary?: string | null;
+  unresolvedQuestion?: string | null;
+  linkedTaskIds?: string[];
+  linkedMessageIds?: string[];
+  linkedMemoryPaths?: string[];
+};
+
+export type ConversationThreadUpdate = {
+  title?: string;
+  status?: ConversationThreadStatus;
+  lastOwnerIntentSummary?: string | null;
+  unresolvedQuestion?: string | null;
+  linkedTaskIds?: string[];
+  linkedMessageIds?: string[];
+  linkedMemoryPaths?: string[];
 };
 
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
@@ -171,6 +208,7 @@ export type InboundHandlingResult = {
     | "sender_reviewed"
     | "approval_decided";
   messageId?: string;
+  conversationThreadId?: string;
   taskId?: string;
   taskEventId?: string;
   agentRunId?: string;
@@ -447,6 +485,23 @@ export type AgentStore = {
     eventType: string,
     details?: Record<string, unknown>
   ): Promise<TaskEventRecord>;
+  createConversationThread(context: RequestContext, input: ConversationThreadInput): Promise<ConversationThreadRecord>;
+  listConversationThreads(context: RequestContext, statuses?: ConversationThreadStatus[], limit?: number): Promise<ConversationThreadRecord[]>;
+  getConversationThread(context: RequestContext, threadId: string): Promise<ConversationThreadRecord | undefined>;
+  updateConversationThread(
+    context: RequestContext,
+    threadId: string,
+    update: ConversationThreadUpdate
+  ): Promise<ConversationThreadRecord | undefined>;
+  linkConversationThread(
+    context: RequestContext,
+    threadId: string,
+    links: {
+      taskIds?: string[];
+      messageIds?: string[];
+      memoryPaths?: string[];
+    }
+  ): Promise<ConversationThreadRecord | undefined>;
   claimDueTasks(context: RequestContext, limit: number, now?: Date): Promise<TaskRecord[]>;
   listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]>;
   recordAudit(
@@ -588,6 +643,7 @@ export type AgentStore = {
     messageId: string,
     handling: {
       action: InboundHandlingResult["action"];
+      conversationThreadId?: string | null;
       taskId?: string | null;
       taskEventId?: string | null;
       agentRunId?: string | null;

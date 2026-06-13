@@ -7,7 +7,9 @@ import {
   MCP_TOOL_ALLOWLIST_MIGRATION_ID,
   MCP_TOOL_ALLOWLIST_SQL,
   APPROVAL_POLICY_MIGRATION_ID,
-  APPROVAL_POLICY_SQL
+  APPROVAL_POLICY_SQL,
+  CONVERSATION_THREADING_MIGRATION_ID,
+  CONVERSATION_THREADING_SQL
 } from "../src/db/migrations.js";
 import { INITIAL_SCHEMA_SQL } from "../src/db/schema.js";
 
@@ -21,6 +23,7 @@ describe("initial schema", () => {
       "connectors",
       "connector_secret_refs",
       "conversations",
+      "conversation_threads",
       "messages",
       "tasks",
       "task_events",
@@ -67,6 +70,7 @@ describe("initial schema", () => {
     expect(INITIAL_SCHEMA_SQL).toContain("allowed_tools_json JSONB");
     expect(INITIAL_SCHEMA_SQL).toContain("source_run_id TEXT");
     expect(INITIAL_SCHEMA_SQL).toContain("expires_at TIMESTAMPTZ");
+    expect(INITIAL_SCHEMA_SQL).toContain("idx_conversation_threads_user_status_updated");
   });
 
   it("defines the tenant-collapse migration", () => {
@@ -95,5 +99,12 @@ describe("initial schema", () => {
     expect(APPROVAL_POLICY_MIGRATION_ID).toBe("0006_approval_policy");
     expect(APPROVAL_POLICY_SQL).toContain("ADD COLUMN IF NOT EXISTS source_run_id TEXT");
     expect(APPROVAL_POLICY_SQL).toContain("idx_approvals_user_status_created");
+  });
+
+  it("defines the conversation threading migration", () => {
+    expect(CONVERSATION_THREADING_MIGRATION_ID).toBe("0008_conversation_threading");
+    expect(CONVERSATION_THREADING_SQL).toContain("CREATE TABLE IF NOT EXISTS conversation_threads");
+    expect(CONVERSATION_THREADING_SQL).toContain("linked_task_ids_json JSONB");
+    expect(CONVERSATION_THREADING_SQL).toContain("idx_conversation_threads_user_status_updated");
   });
 });

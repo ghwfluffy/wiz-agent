@@ -27,6 +27,29 @@ export const ListRecentOwnerConversationsToolSchema = z.object({
   limit: z.number().int().min(1).max(20).default(8)
 });
 
+export const ListConversationThreadsToolSchema = z.object({
+  statuses: z.array(z.enum(["active", "waiting", "resolved", "archived"])).max(4).optional(),
+  limit: z.number().int().min(1).max(20).default(8),
+  reason: z.string().min(1).optional()
+});
+
+export const UpdateConversationThreadToolSchema = z.object({
+  threadId: z.string().min(1),
+  title: z.string().min(1).max(200).optional(),
+  status: z.enum(["active", "waiting", "resolved", "archived"]).optional(),
+  lastOwnerIntentSummary: z.string().min(1).max(1000).nullable().optional(),
+  unresolvedQuestion: z.string().min(1).max(1000).nullable().optional(),
+  rationale: z.string().min(1)
+});
+
+export const LinkConversationThreadToolSchema = z.object({
+  threadId: z.string().min(1),
+  taskIds: z.array(z.string().min(1)).max(10).default([]),
+  messageIds: z.array(z.string().min(1)).max(10).default([]),
+  memoryPaths: z.array(z.string().min(1).max(500).regex(/^\/.*\.md$/)).max(10).default([]),
+  rationale: z.string().min(1)
+});
+
 export const GetRecentBotActivityToolSchema = z.object({
   reason: z.string().min(1).optional(),
   lookbackHours: z.number().int().min(1).max(24 * 30).default(24 * 7),
@@ -413,6 +436,9 @@ export const ToolContracts = {
   list_ongoing_tasks: ListOngoingTasksToolSchema,
   list_recent_context: ListRecentContextToolSchema,
   list_recent_owner_conversations: ListRecentOwnerConversationsToolSchema,
+  list_conversation_threads: ListConversationThreadsToolSchema,
+  update_conversation_thread: UpdateConversationThreadToolSchema,
+  link_conversation_thread: LinkConversationThreadToolSchema,
   get_recent_bot_activity: GetRecentBotActivityToolSchema,
   list_app_capabilities: ListAppCapabilitiesToolSchema,
   list_goals: ListGoalsToolSchema,

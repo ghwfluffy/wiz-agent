@@ -90,6 +90,9 @@ Current tests cover:
 - personal-profile memory injection into future owner prompts.
 - memory document API, Memory tab rendering, and trusted-contact management.
 - owner reply tool contract without model-selected recipients.
+- conversation thread schema coverage, in-memory store round trips, bounded
+  prompt context, owner follow-up thread reuse, MCP list/update/link tools, and
+  rejection of missing or foreign linked records.
 - outbound fail-closed recipient checks and raw owner mobile gateway mapping.
 - outbox listing, status updates, SMTP queue delivery, and fail-closed outbound
   delivery.

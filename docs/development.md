@@ -107,6 +107,15 @@ indexing. Feedback is a training/review signal only; do not rewrite preference
 files or capability guidance from it unless a separate controlled tool call
 does so with clear rationale.
 
+Conversation threading is automatic for owner-command prompts that arrive
+through inbound SMS/MMS/email. The host creates or reuses a user-owned
+`conversation_threads` record before the model call, includes recent thread
+summaries in the prompt, and stores the selected thread id in inbox metadata
+when routed to the agent. The model can inspect and maintain this surface with
+`list_conversation_threads`, `update_conversation_thread`, and
+`link_conversation_thread`; link requests must point to records owned by the
+same authenticated user.
+
 Meaningful assistant decisions are captured by host code under
 `/assistant/decisions/YYYY-MM.md`. The ledger is written from existing
 run/task/tool/message/approval records after accepted tool calls and scheduled

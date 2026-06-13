@@ -461,6 +461,49 @@ describe("domain and user ownership APIs", () => {
     });
   });
 
+  it("preserves existing inbound handling metadata when later updates omit optional links", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "inbox-handling-merge-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "inbox-handling-merge-test",
+      session
+    };
+    const thread = await store.createConversationThread(context, {
+      title: "Roof quote",
+      status: "active"
+    });
+    const recorded = await store.recordInboundMessage(context, {
+      providerMessageId: "inbox-provider-thread-1",
+      fromAddr: "owner@example.test",
+      toAddr: "agent@example.test",
+      subject: "Follow-up",
+      bodyText: "what happened?",
+      source: "sms"
+    }, "owner");
+
+    await store.updateInboundMessageHandling(context, recorded.id, {
+      action: "routed_to_agent",
+      conversationThreadId: thread.id,
+      agentRunId: "run-1"
+    });
+    const updated = await store.updateInboundMessageHandling(context, recorded.id, {
+      action: "approval_decided"
+    });
+
+    expect(updated).toMatchObject({
+      handlingAction: "approval_decided",
+      conversationThreadId: thread.id,
+      agentRunId: "run-1"
+    });
+  });
+
   it("queues a missing owner review notification from an inbox row", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

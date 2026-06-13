@@ -1,5 +1,10 @@
 import type { Settings } from "../config/settings.js";
-import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain/types.js";
+import type {
+  AgentStore,
+  ConversationThreadStatus,
+  InboundMessageRecord,
+  RequestContext
+} from "../domain/types.js";
 import { callIntegrationActionApi, type IntegrationTokenProvider } from "./integrationGateway.js";
 import type { ToolName } from "./contracts.js";
 import { createCrossAppApproval, createOutboundApproval } from "../security/approvalPolicy.js";
@@ -295,6 +300,128 @@ export async function executeToolCall(options: {
           conversations: [...inbound, ...outbound]
             .sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp)))
             .slice(0, limit)
+        }
+      };
+    }
+    case "list_conversation_threads": {
+      const limit = typeof options.args.limit === "number" ? options.args.limit : 8;
+      const statuses = Array.isArray(options.args.statuses)
+        ? options.args.statuses.filter((status): status is ConversationThreadStatus =>
+            ["active", "waiting", "resolved", "archived"].includes(String(status))
+          )
+        : undefined;
+      const threads = (await options.store.listConversationThreads(options.context, statuses, limit))
+        .map((thread) => ({
+          thread_id: thread.id,
+          title: thread.title,
+          status: thread.status,
+          last_owner_intent_summary: thread.lastOwnerIntentSummary,
+          unresolved_question: thread.unresolvedQuestion,
+          linked_task_ids: thread.linkedTaskIds,
+          linked_message_ids: thread.linkedMessageIds,
+          linked_memory_paths: thread.linkedMemoryPaths,
+          updated_at: thread.updatedAt
+        }));
+      return {
+        executed: true,
+        sideEffect: "none",
+        result: { threads }
+      };
+    }
+    case "update_conversation_thread": {
+      const thread = await options.store.updateConversationThread(options.context, String(options.args.threadId), {
+        title: typeof options.args.title === "string" ? options.args.title : undefined,
+        status: typeof options.args.status === "string" ? options.args.status as ConversationThreadStatus : undefined,
+        lastOwnerIntentSummary: options.args.lastOwnerIntentSummary === null || typeof options.args.lastOwnerIntentSummary === "string"
+          ? options.args.lastOwnerIntentSummary
+          : undefined,
+        unresolvedQuestion: options.args.unresolvedQuestion === null || typeof options.args.unresolvedQuestion === "string"
+          ? options.args.unresolvedQuestion
+          : undefined
+      });
+      return {
+        executed: Boolean(thread),
+        sideEffect: thread ? "local_persistence" : "none",
+        result: thread
+          ? {
+              thread_id: thread.id,
+              status: thread.status,
+              title: thread.title,
+              updated_at: thread.updatedAt
+            }
+          : { missing: true, reason: "thread_not_found_for_user" }
+      };
+    }
+    case "link_conversation_thread": {
+      const threadId = String(options.args.threadId);
+      const existing = await options.store.getConversationThread(options.context, threadId);
+      if (!existing) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { missing: true, reason: "thread_not_found_for_user" }
+        };
+      }
+      const requestedTaskIds = Array.isArray(options.args.taskIds)
+        ? options.args.taskIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const requestedMessageIds = Array.isArray(options.args.messageIds)
+        ? options.args.messageIds.filter((id): id is string => typeof id === "string")
+        : [];
+      const requestedMemoryPaths = Array.isArray(options.args.memoryPaths)
+        ? options.args.memoryPaths.filter((path): path is string => typeof path === "string")
+        : [];
+      const validTaskIds: string[] = [];
+      for (const taskId of requestedTaskIds) {
+        if (await options.store.getTask(options.context, taskId)) {
+          validTaskIds.push(taskId);
+        }
+      }
+      const outbound = await options.store.listOutboundMessages(options.context);
+      const validMessageIds: string[] = [];
+      for (const messageId of requestedMessageIds) {
+        const inbound = await options.store.getInboundMessage(options.context, messageId);
+        const outboundMatch = outbound.find((message) => message.id === messageId);
+        if (inbound || outboundMatch) {
+          validMessageIds.push(messageId);
+        }
+      }
+      const validMemoryPaths: string[] = [];
+      for (const path of requestedMemoryPaths) {
+        if (await options.store.getMarkdownDocument(options.context, path)) {
+          validMemoryPaths.push(path);
+        }
+      }
+      if (
+        validTaskIds.length !== requestedTaskIds.length ||
+        validMessageIds.length !== requestedMessageIds.length ||
+        validMemoryPaths.length !== requestedMemoryPaths.length
+      ) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: {
+            rejected: true,
+            reason: "linked_record_missing_or_foreign",
+            valid_task_ids: validTaskIds,
+            valid_message_ids: validMessageIds,
+            valid_memory_paths: validMemoryPaths
+          }
+        };
+      }
+      const thread = await options.store.linkConversationThread(options.context, threadId, {
+        taskIds: validTaskIds,
+        messageIds: validMessageIds,
+        memoryPaths: validMemoryPaths
+      });
+      return {
+        executed: true,
+        sideEffect: "local_persistence",
+        result: {
+          thread_id: thread?.id ?? threadId,
+          linked_task_ids: thread?.linkedTaskIds ?? [],
+          linked_message_ids: thread?.linkedMessageIds ?? [],
+          linked_memory_paths: thread?.linkedMemoryPaths ?? []
         }
       };
     }
