@@ -639,8 +639,14 @@ describe("domain and user ownership APIs", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       budgets: expect.objectContaining({
+        maxAgentRunsPerUserPerHour: 20,
+        maxAutonomousRunsPerWorkerTick: 10,
         maxToolCallsPerRun: 10,
-        maxRuntimeSecPerRun: 120
+        maxRuntimeSecPerRun: 120,
+        maxOwnerVisibleOutboundMessagesPerUserPerDay: 10,
+        outboundMessagesPerWorkerTick: 1,
+        maxUntrustedReviewNotificationsPerSenderPerDay: 5,
+        maxNewsletterDocumentsPerInterestCheck: 25
       }),
       jobs: expect.arrayContaining([
         expect.objectContaining({
@@ -661,6 +667,10 @@ describe("domain and user ownership APIs", () => {
         }),
         expect.objectContaining({
           name: "qdrant-collections"
+        }),
+        expect.objectContaining({
+          name: "runaway-guardrails",
+          status: "configured"
         })
       ])
     });

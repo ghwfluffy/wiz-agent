@@ -5,6 +5,11 @@ import type { ToolName } from "./contracts.js";
 import { createCrossAppApproval, createOutboundApproval } from "../security/approvalPolicy.js";
 import { listAppCapabilities, type IntegrationActionId, type IntegrationAppId } from "../integrations/capabilityRegistry.js";
 import { recordTaskOutcomeMemory } from "../memory/taskOutcomeMemory.js";
+import {
+  GuardrailExceededError,
+  recordGuardrailExceeded,
+  runtimeSafetyPolicy
+} from "../security/safetyPolicy.js";
 
 export type ToolExecutionResult = {
   executed: boolean;
@@ -14,6 +19,38 @@ export type ToolExecutionResult = {
 
 function compactPayload(payload: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
+}
+
+async function assertOwnerVisibleOutboundBudget(options: {
+  context: RequestContext;
+  store: AgentStore;
+  settings?: Settings;
+  source: string;
+}): Promise<void> {
+  const safety = runtimeSafetyPolicy(options.settings);
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
+  const count = await options.store.countOwnerVisibleOutboundMessagesSince(options.context, since);
+  if (count < safety.maxOwnerVisibleOutboundMessagesPerUserPerDay) {
+    return;
+  }
+  const details = {
+    count,
+    limit: safety.maxOwnerVisibleOutboundMessagesPerUserPerDay,
+    window_start: since.toISOString(),
+    source: options.source
+  };
+  await recordGuardrailExceeded({
+    store: options.store,
+    context: options.context,
+    guardrail: "maxOwnerVisibleOutboundMessagesPerUserPerDay",
+    entityType: "outbound_message",
+    details
+  });
+  throw new GuardrailExceededError(
+    "maxOwnerVisibleOutboundMessagesPerUserPerDay",
+    "Owner-visible outbound message daily guardrail exceeded.",
+    details
+  );
 }
 
 function budgetContractPayload(args: Record<string, unknown>): Record<string, unknown> {
@@ -790,6 +827,12 @@ export async function executeToolCall(options: {
           result: { reason: "owner_reply_destination_unavailable" }
         };
       }
+      await assertOwnerVisibleOutboundBudget({
+        context: options.context,
+        store: options.store,
+        settings: options.settings,
+        source: "propose_outbound_message"
+      });
       const { approval, outbound } = await createOutboundApproval({
         context: options.context,
         store: options.store,
@@ -824,6 +867,12 @@ export async function executeToolCall(options: {
             result: { reason: "owner_clarification_destination_unavailable" }
           };
         }
+        await assertOwnerVisibleOutboundBudget({
+          context: options.context,
+          store: options.store,
+          settings: options.settings,
+          source: options.toolName
+        });
         const message = await options.store.queueOutboundMessage(options.context, {
           channel: destination.channel,
           status: "pending",

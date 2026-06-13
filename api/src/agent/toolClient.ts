@@ -6,6 +6,7 @@ import type { ToolName } from "../tools/contracts.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { executeToolCall, type ToolExecutionResult } from "../tools/toolExecutor.js";
 import { agentToolNames } from "../tools/registry.js";
+import { GuardrailExceededError } from "../security/safetyPolicy.js";
 
 export type AgentToolClientExecuteInput = {
   context: RequestContext;
@@ -58,6 +59,19 @@ export class McpToolClient implements AgentToolClient {
       const error = typeof body.error === "object" && body.error !== null
         ? body.error as { message?: unknown; code?: unknown }
         : {};
+      if (error.code === "guardrail_exceeded") {
+        const reason = typeof (error as { reason?: unknown }).reason === "string"
+          ? (error as { reason: string }).reason
+          : "guardrail_exceeded";
+        const details = typeof (error as { details?: unknown }).details === "object" && (error as { details?: unknown }).details !== null
+          ? (error as { details: Record<string, unknown> }).details
+          : {};
+        throw new GuardrailExceededError(
+          reason,
+          typeof error.message === "string" ? error.message : "Guardrail exceeded.",
+          details
+        );
+      }
       throw new Error(typeof error.message === "string" ? error.message : `MCP tool ${input.toolName} failed.`);
     }
     const result = typeof body.result === "object" && body.result !== null ? body.result as Record<string, unknown> : {};

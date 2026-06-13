@@ -11,6 +11,11 @@ import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { parseToolProposal, validateOrRepairToolCall } from "../tools/validator.js";
 import { McpToolClient, type AgentToolClient } from "./toolClient.js";
+import {
+  GuardrailExceededError,
+  recordGuardrailExceeded,
+  runtimeSafetyPolicy
+} from "../security/safetyPolicy.js";
 
 export type AgentTaskRequest = {
   prompt: string;
@@ -41,6 +46,30 @@ export async function runAgentTask(options: {
   toolClient?: AgentToolClient;
 }): Promise<AgentTaskResult> {
   const aiConfig = await options.store.getAiConfig();
+  const safety = runtimeSafetyPolicy(options.settings, aiConfig);
+  const runWindowStart = new Date(Date.now() - 60 * 60 * 1000);
+  const recentRuns = await options.store.countAgentRunsSince(options.context, runWindowStart);
+  if (recentRuns >= safety.maxAgentRunsPerUserPerHour) {
+    const message = "Agent run hourly guardrail exceeded.";
+    await recordGuardrailExceeded({
+      store: options.store,
+      context: options.context,
+      guardrail: "maxAgentRunsPerUserPerHour",
+      entityType: "agent_run",
+      details: {
+        count: recentRuns,
+        limit: safety.maxAgentRunsPerUserPerHour,
+        window_start: runWindowStart.toISOString()
+      }
+    });
+    return {
+      status: "failed",
+      runId: "",
+      toolStatus: "none",
+      repaired: false,
+      failureMessage: message
+    };
+  }
   const tier = chooseModelTier(options.request.complexity ?? {});
   const modelId = resolveModelId(modelTierConfigFromAiConfig(aiConfig), tier);
   const run = await options.store.createAgentRun(options.context, {
@@ -63,8 +92,8 @@ export async function runAgentTask(options: {
       await options.store.recordTaskEvent(options.context, options.request.taskId, "agent.prompted", {
         model_id: modelId,
         model_tier: tier,
-        prompt_excerpt: options.request.prompt.slice(0, 500),
-        response_summary: responseSummary.slice(0, 500),
+        prompt_excerpt: options.request.prompt.slice(0, safety.maxPromptExcerptChars),
+        response_summary: responseSummary.slice(0, safety.maxPromptExcerptChars),
         summary: "Agent was prompted and returned a response."
       });
     }
@@ -82,7 +111,7 @@ export async function runAgentTask(options: {
     const validated = await validateOrRepairToolCall(proposal, {
       modelClient: options.modelClient,
       repairModel: aiConfig.repairModel,
-      repairAttemptLimit: aiConfig.repairAttemptLimit
+      repairAttemptLimit: safety.repairAttemptLimit
     });
 
     if (!validated.ok) {
@@ -105,6 +134,45 @@ export async function runAgentTask(options: {
       };
     }
 
+    const toolCallsSoFar = await options.store.countToolCallsForRun(options.context, run.id);
+    if (toolCallsSoFar >= safety.maxToolCallsPerRun) {
+      const message = "MCP/tool call guardrail exceeded for this run.";
+      const details = {
+        count: toolCallsSoFar,
+        limit: safety.maxToolCallsPerRun,
+        tool_name: validated.toolName
+      };
+      await recordGuardrailExceeded({
+        store: options.store,
+        context: options.context,
+        guardrail: "maxToolCallsPerRun",
+        entityType: "agent_run",
+        entityId: run.id,
+        details
+      });
+      await options.store.recordToolCall(options.context, {
+        runId: run.id,
+        toolName: validated.toolName,
+        status: "rejected",
+        arguments: validated.arguments,
+        validationError: "guardrail_exceeded:maxToolCallsPerRun",
+        result: {
+          status: "guardrail_exceeded",
+          reason: "maxToolCallsPerRun",
+          ...details
+        }
+      });
+      await options.store.finishAgentRun(options.context, run.id, "failed", message);
+      return {
+        status: "failed",
+        runId: run.id,
+        toolStatus: "rejected",
+        repaired: validated.repaired,
+        toolName: validated.toolName,
+        failureMessage: message
+      };
+    }
+
     let execution;
     try {
       execution = await (options.toolClient ?? new McpToolClient()).execute({
@@ -119,13 +187,24 @@ export async function runAgentTask(options: {
         replyToMessage: options.request.replyToMessage
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Tool execution failed.";
+      const message = error instanceof GuardrailExceededError
+        ? error.message
+        : error instanceof Error ? error.message : "Tool execution failed.";
       await options.store.recordToolCall(options.context, {
         runId: run.id,
         toolName: validated.toolName,
         status: "failed",
         arguments: validated.arguments,
-        validationError: message
+        validationError: error instanceof GuardrailExceededError
+          ? `guardrail_exceeded:${error.guardrail}`
+          : message,
+        result: error instanceof GuardrailExceededError
+          ? {
+              status: "guardrail_exceeded",
+              reason: error.guardrail,
+              ...error.details
+            }
+          : undefined
       });
       await options.store.finishAgentRun(options.context, run.id, "failed", message);
       return {

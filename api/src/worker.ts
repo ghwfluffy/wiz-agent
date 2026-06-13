@@ -11,12 +11,22 @@ import { daemonOnce as runSchedulerOnce } from "./scheduler/taskQueue.js";
 import type { MailTransport } from "./connectors/smtpSender.js";
 import { imapErrorDetails, processImapInbox } from "./connectors/imapPoller.js";
 import { SlidingWindowRateLimiter } from "./security/senderPolicy.js";
+import { runtimeSafetyPolicy } from "./security/safetyPolicy.js";
 
 const WORKER_INTERVAL_MS = 20_000;
-const OUTBOUND_BATCH_LIMIT = 1;
 const INBOUND_BATCH_LIMIT = 10;
 const INBOUND_TIMEOUT_MS = 15_000;
-const inboundRateLimiter = new SlidingWindowRateLimiter(10, 60 * 60 * 1000);
+let inboundRateLimiter: SlidingWindowRateLimiter | undefined;
+let inboundRateLimiterLimit = 0;
+
+function reviewNotificationRateLimiter(settings: Settings): SlidingWindowRateLimiter {
+  const limit = runtimeSafetyPolicy(settings).maxUntrustedReviewNotificationsPerSenderPerDay;
+  if (!inboundRateLimiter || inboundRateLimiterLimit !== limit) {
+    inboundRateLimiter = new SlidingWindowRateLimiter(limit, 24 * 60 * 60 * 1000);
+    inboundRateLimiterLimit = limit;
+  }
+  return inboundRateLimiter;
+}
 
 class ImapIdleTimeout extends Error {
   constructor(message: string) {
@@ -82,7 +92,8 @@ export async function workerTick(options: {
     inboundRecorded: 0,
     inboundFailed: 0
   };
-  let remainingOutbound = OUTBOUND_BATCH_LIMIT;
+  const safety = runtimeSafetyPolicy(options.settings);
+  let remainingOutbound = safety.outboundMessagesPerWorkerTick;
   for (const user of users) {
     const context = workerContext(user);
     const result = await runSchedulerOnce({
@@ -110,7 +121,7 @@ export async function workerTick(options: {
         store: options.store,
         context,
         settings: options.settings,
-        rateLimiter: inboundRateLimiter,
+        rateLimiter: reviewNotificationRateLimiter(options.settings),
         modelClient: options.modelClient,
         limit: INBOUND_BATCH_LIMIT
       }), INBOUND_TIMEOUT_MS, "IMAP processing timed out.");
@@ -173,7 +184,7 @@ export function startWorker(): ReturnType<typeof setInterval> {
       logWorker("worker_tick", {
         auth_mode: settings.authMode,
         interval_ms: WORKER_INTERVAL_MS,
-        outbound_batch_limit: OUTBOUND_BATCH_LIMIT,
+        outbound_batch_limit: runtimeSafetyPolicy(settings).outboundMessagesPerWorkerTick,
         inbound_batch_limit: INBOUND_BATCH_LIMIT,
         ...result
       });

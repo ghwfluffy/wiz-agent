@@ -1883,6 +1883,17 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return result.rows.map(runFromRow);
     },
 
+    async countAgentRunsSince(context, since) {
+      const result = await pool.query(
+        `SELECT count(*)::int AS count
+         FROM agent_runs
+         WHERE user_id = $1
+           AND started_at >= $2`,
+        [context.userId, since.toISOString()]
+      );
+      return Number(result.rows[0]?.count ?? 0);
+    },
+
     async finishAgentRun(context, runId, status, failureMessage = null) {
       const taskId = await taskIdForRun(pool, context, runId);
       await pool.query(
@@ -1951,6 +1962,17 @@ export function createPostgresStore(pool: Pool): AgentStore {
         [context.userId, includeAllUsers]
       );
       return result.rows.map(toolCallFromRow);
+    },
+
+    async countToolCallsForRun(context, runId) {
+      const result = await pool.query(
+        `SELECT count(*)::int AS count
+         FROM tool_calls
+         WHERE user_id = $1
+           AND run_id = $2`,
+        [context.userId, runId]
+      );
+      return Number(result.rows[0]?.count ?? 0);
     },
 
     async listSenders(context) {
@@ -2120,6 +2142,22 @@ export function createPostgresStore(pool: Pool): AgentStore {
         statusFilter ? [context.userId, statuses] : [context.userId]
       );
       return result.rows.map(outboundFromRow);
+    },
+
+    async countOwnerVisibleOutboundMessagesSince(context, since) {
+      const result = await pool.query(
+        `SELECT count(*)::int AS count
+         FROM outbound_messages
+         WHERE user_id = $1
+           AND created_at >= $2
+           AND status = ANY($3::text[])`,
+        [
+          context.userId,
+          since.toISOString(),
+          ["requires_approval", "approved", "pending", "sending", "sent"]
+        ]
+      );
+      return Number(result.rows[0]?.count ?? 0);
     },
 
     async listUsersWithWork(statuses = ["pending", "approved"], now = new Date()) {
@@ -3279,6 +3317,11 @@ export function createMemoryStore(): AgentStore {
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
         .slice(0, 200);
     },
+    async countAgentRunsSince(context, since) {
+      return [...runs.values()]
+        .filter((run) => run.userId === context.userId && Date.parse(run.startedAt) >= since.getTime())
+        .length;
+    },
     async finishAgentRun(context, runId, status, failureMessage = null) {
       const run = runs.get(runId);
       if (run) {
@@ -3338,6 +3381,11 @@ export function createMemoryStore(): AgentStore {
         .filter((toolCall) => includeAllUsers || toolCall.userId === context.userId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, 200);
+    },
+    async countToolCallsForRun(context, runId) {
+      return [...toolCalls.values()]
+        .filter((toolCall) => toolCall.userId === context.userId && toolCall.runId === runId)
+        .length;
     },
     async listSenders(context) {
       return [...senderStatuses.values()]
@@ -3476,6 +3524,16 @@ export function createMemoryStore(): AgentStore {
         }
         return !statuses || statuses.length === 0 || statuses.includes(message.status);
       });
+    },
+    async countOwnerVisibleOutboundMessagesSince(context, since) {
+      const statuses = new Set(["requires_approval", "approved", "pending", "sending", "sent"]);
+      return [...outboundMessages.values()]
+        .filter((message) =>
+          message.userId === context.userId &&
+          statuses.has(message.status) &&
+          Date.parse(message.createdAt) >= since.getTime()
+        )
+        .length;
     },
     async listUsersWithWork(statuses = ["pending", "approved"], now = new Date()) {
       const userIds = new Set<string>();

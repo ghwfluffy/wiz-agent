@@ -18,6 +18,7 @@ import type {
 } from "../domain/types.js";
 import { decideApproval, editApproval } from "../security/approvalPolicy.js";
 import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
+import { runtimeSafetyPolicy } from "../security/safetyPolicy.js";
 
 export type AppOptions = {
   settings?: Settings;
@@ -261,13 +262,22 @@ export function buildApp(options: AppOptions = {}): Hono {
     const failedRuns = runs.filter((run) => run.status === "failed");
     const failedToolCalls = toolCalls.filter((toolCall) => toolCall.status === "failed" || toolCall.status === "rejected");
     const qdrantProblemCount = ragHealth.filter((entry) => !["ok", "healthy"].includes(entry.healthStatus)).length;
+    const safety = runtimeSafetyPolicy(settings, aiConfig);
+    const recentGuardrails = audit.filter((event) => event.action === "guardrail.exceeded");
     return {
       generatedAt: new Date().toISOString(),
       budgets: {
-        maxToolCallsPerRun: aiConfig.maxToolCalls,
+        maxAgentRunsPerUserPerHour: safety.maxAgentRunsPerUserPerHour,
+        maxAutonomousRunsPerWorkerTick: safety.maxAutonomousRunsPerWorkerTick,
+        maxToolCallsPerRun: safety.maxToolCallsPerRun,
         maxRuntimeSecPerRun: aiConfig.maxRuntimeSec,
-        repairAttemptLimit: aiConfig.repairAttemptLimit,
-        outboundMessagesPerWorkerTick: 1,
+        repairAttemptLimit: safety.repairAttemptLimit,
+        maxOwnerVisibleOutboundMessagesPerUserPerDay: safety.maxOwnerVisibleOutboundMessagesPerUserPerDay,
+        outboundMessagesPerWorkerTick: safety.outboundMessagesPerWorkerTick,
+        maxUntrustedReviewNotificationsPerSenderPerDay: safety.maxUntrustedReviewNotificationsPerSenderPerDay,
+        maxNewsletterDocumentsPerInterestCheck: safety.maxNewsletterDocumentsPerInterestCheck,
+        maxPromptExcerptChars: safety.maxPromptExcerptChars,
+        maxContextExcerptChars: safety.maxContextExcerptChars,
         workerTickSeconds: 20,
         maxRagSearchResultsPerCall: 25,
         browserMcpSessionTtlSeconds: 900
@@ -276,7 +286,8 @@ export function buildApp(options: AppOptions = {}): Hono {
       recentFailures: {
         agentRuns: failedRuns.slice(0, 20),
         toolCalls: failedToolCalls.slice(0, 20),
-        ragJobs: ragJobs.filter((job) => job.status === "failed" || job.status === "dead").slice(0, 20)
+        ragJobs: ragJobs.filter((job) => job.status === "failed" || job.status === "dead").slice(0, 20),
+        guardrails: recentGuardrails.slice(0, 20)
       },
       jobs: [
         {
@@ -300,18 +311,24 @@ export function buildApp(options: AppOptions = {}): Hono {
         },
         {
           name: "mcp-tools",
-          status: failedToolCalls.length > 0 ? "degraded" : "configured",
+          status: recentGuardrails.some((event) => event.details.guardrail === "maxToolCallsPerRun") || failedToolCalls.length > 0 ? "degraded" : "configured",
           failedToolCalls: failedToolCalls.length,
           lastAuditAt: audit.find((event) => event.action.startsWith("mcp.") || event.action.startsWith("tool_call."))?.createdAt ?? null
         },
         {
           name: "outbox",
-          status: countByStatus(outbox, "failed") > 0 ? "degraded" : "configured",
+          status: recentGuardrails.some((event) => event.details.guardrail === "maxOwnerVisibleOutboundMessagesPerUserPerDay") || countByStatus(outbox, "failed") > 0 ? "degraded" : "configured",
           pendingMessages: countByStatus(outbox, "pending"),
           approvedMessages: countByStatus(outbox, "approved"),
           sendingMessages: countByStatus(outbox, "sending"),
           failedMessages: countByStatus(outbox, "failed"),
           lastAuditAt: audit.find((event) => event.action.startsWith("outbound."))?.createdAt ?? null
+        },
+        {
+          name: "runaway-guardrails",
+          status: recentGuardrails.length > 0 ? "attention" : "configured",
+          recentTrips: recentGuardrails.length,
+          lastAuditAt: recentGuardrails[0]?.createdAt ?? null
         },
         {
           name: "inbound-mailbox",

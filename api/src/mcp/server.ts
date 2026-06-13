@@ -13,6 +13,7 @@ import type { InboundMessageRecord } from "../domain/types.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { isToolName } from "../tools/contracts.js";
 import { mcpToolDescriptors, ToolRegistry } from "../tools/registry.js";
+import { GuardrailExceededError, guardrailResult } from "../security/safetyPolicy.js";
 
 export type McpAppOptions = {
   settings?: Settings;
@@ -297,6 +298,16 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
         run_id: runId,
         error: error instanceof Error ? error.message : String(error)
       });
+      if (error instanceof GuardrailExceededError) {
+        return context.json({
+          error: {
+            code: "guardrail_exceeded",
+            message: error.message,
+            reason: error.guardrail,
+            details: guardrailResult(error)
+          }
+        }, 429);
+      }
       return context.json({ error: { code: "mcp_tool_failed", message: "MCP tool failed." } }, 400);
     }
   };

@@ -14,11 +14,15 @@ The response includes:
 - API status and recent audit time.
 - Worker tick, task-runner, inbound mailbox, outbox, approval, MCP/tool, RAG
   index, and Qdrant collection rows.
-- Host-owned run budgets: max tool calls per run, max runtime seconds, repair
-  attempts, outbound messages per worker tick, RAG search result cap, and
+- Host-owned run budgets: max agent runs per user per hour, autonomous runs per
+  worker tick, max tool calls per run, max runtime seconds, repair attempts,
+  owner-visible outbound messages per user per day, outbound messages per worker
+  tick, untrusted review notifications per sender per day, newsletter documents
+  per interest check, prompt/context excerpt caps, RAG search result cap, and
   browser MCP session TTL.
 - Recent failed agent runs, rejected or failed tool calls, and failed/dead RAG
   index jobs.
+- Recent `guardrail.exceeded` audit events and a `runaway-guardrails` job row.
 - RAG user index health rows with expected document/chunk counts and Qdrant
   point count when the RAG worker has reconciled it.
 
@@ -80,3 +84,8 @@ Self-review prompts are treated as internal operational work. They may inspect
 recent bot activity and write assistant memory, but they explicitly prohibit
 owner contact solely because the review ran. Any owner-visible message still
 uses the normal `propose_outbound_message` approval/outbox controls.
+
+Runaway guardrails are safety limits for accidental loops and provider abuse.
+They fail closed before side effects, record non-secret counts and limits in
+audit details, and show up in the Jobs/Workers status surface. They are not
+intended to tune assistant personality or newsletter quality.

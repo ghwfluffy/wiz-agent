@@ -233,6 +233,173 @@ describe("agent task execution", () => {
     );
   });
 
+  it("blocks agent runs after the per-user hourly guardrail is reached", async () => {
+    const { context, store } = await testContext();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_MAX_RUNS_PER_USER_PER_HOUR: "1"
+    });
+    await store.createAgentRun(context, {
+      taskId: null,
+      status: "completed",
+      modelTier: "fast",
+      modelId: "test-model",
+      promptVersion: "test"
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      settings,
+      modelClient: new MockModelClient(),
+      request: {
+        prompt: "This should be blocked before model execution."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      toolStatus: "none",
+      failureMessage: "Agent run hourly guardrail exceeded."
+    });
+    await expect(store.listAgentRuns(context)).resolves.toHaveLength(1);
+    await expect(store.listAudit(context, true)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "guardrail.exceeded",
+        details: expect.objectContaining({
+          guardrail: "maxAgentRunsPerUserPerHour",
+          limit: 1
+        })
+      })
+    ]));
+  });
+
+  it("fails a run cleanly when the MCP/tool-call guardrail is exceeded", async () => {
+    const { context, store } = await testContext();
+    await store.updateAiConfig(context, {
+      fastModel: "gpt-5-mini",
+      smartModel: "gpt-5",
+      orchestratorModel: "gpt-5",
+      repairModel: "gpt-5-mini",
+      maxToolCalls: 0,
+      maxRuntimeSec: 120,
+      repairAttemptLimit: 1
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      toolClient: new LocalToolClient(),
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_observation",
+            arguments: {
+              summary: "Should not execute.",
+              source: "unit-test"
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Record an observation."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      toolStatus: "rejected",
+      toolName: "record_observation",
+      failureMessage: "MCP/tool call guardrail exceeded for this run."
+    });
+    await expect(store.listToolCalls(context)).resolves.toEqual([
+      expect.objectContaining({
+        toolName: "record_observation",
+        status: "rejected",
+        validationError: "guardrail_exceeded:maxToolCallsPerRun",
+        result: expect.objectContaining({
+          status: "guardrail_exceeded",
+          reason: "maxToolCallsPerRun",
+          limit: 0
+        })
+      })
+    ]);
+    await expect(store.listAudit(context, true)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "guardrail.exceeded",
+        details: expect.objectContaining({
+          guardrail: "maxToolCallsPerRun",
+          tool_name: "record_observation"
+        })
+      })
+    ]));
+  });
+
+  it("blocks owner-visible outbound proposals after the daily guardrail is reached", async () => {
+    const { context, store } = await testContext();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_MAX_OWNER_VISIBLE_OUTBOUND_MESSAGES_PER_USER_PER_DAY: "1"
+    });
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        sms_gateway: "owner-sms@example.test"
+      }
+    });
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "requires_approval",
+      toAddr: "owner-sms@example.test",
+      bodyText: "Existing owner-visible proposal."
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      settings,
+      toolClient: new LocalToolClient(),
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "propose_outbound_message",
+            arguments: {
+              intent: "reply",
+              body: "This should be blocked."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Queue an owner-visible message."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "failed",
+      toolStatus: "rejected",
+      toolName: "propose_outbound_message",
+      failureMessage: "Owner-visible outbound message daily guardrail exceeded."
+    });
+    await expect(store.listOutboundMessages(context)).resolves.toHaveLength(1);
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
+    await expect(store.listToolCalls(context)).resolves.toEqual([
+      expect.objectContaining({
+        toolName: "propose_outbound_message",
+        status: "failed",
+        validationError: "guardrail_exceeded:maxOwnerVisibleOutboundMessagesPerUserPerDay",
+        result: expect.objectContaining({
+          status: "guardrail_exceeded",
+          reason: "maxOwnerVisibleOutboundMessagesPerUserPerDay",
+          limit: 1
+        })
+      })
+    ]);
+  });
+
   it("keeps the local tool client as a deterministic compatibility fallback", async () => {
     const { context, store } = await testContext();
 

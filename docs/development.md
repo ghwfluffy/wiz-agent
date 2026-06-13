@@ -99,6 +99,28 @@ sent as `contextTaskId`; selected memory paths and recent assistant-mailbox
 messages are folded into the prompt text as operator-selected context. Do not
 add browser-side access to write/action MCP tools for this workflow.
 
+Runaway guardrails are configured through host settings and shown in the
+Workers tab / `GET /api/v1/jobs`. Defaults are intentionally conservative loop
+protection: 20 agent runs per user per hour, 10 scheduled agent runs per worker
+tick, 10 owner-visible outbound proposals per user per day, one outbound send
+per worker tick, five untrusted review notifications per sender per day, and 25
+newsletter documents per interest check. Local overrides use:
+
+```text
+AGENT_MAX_RUNS_PER_USER_PER_HOUR
+AGENT_MAX_AUTONOMOUS_RUNS_PER_WORKER_TICK
+AGENT_MAX_OWNER_VISIBLE_OUTBOUND_MESSAGES_PER_USER_PER_DAY
+AGENT_OUTBOUND_MESSAGES_PER_WORKER_TICK
+AGENT_MAX_NEWSLETTER_DOCUMENTS_PER_INTEREST_CHECK
+INBOUND_MAX_UNTRUSTED_REVIEW_NOTIFICATIONS_PER_SENDER_PER_DAY
+AGENT_MAX_PROMPT_EXCERPT_CHARS
+AGENT_MAX_CONTEXT_EXCERPT_CHARS
+```
+
+Guardrail trips record `guardrail.exceeded` audit events with counts, limits,
+and non-secret reasons. They should be treated as operational safety events,
+not prompt-quality feedback.
+
 Scheduled task intelligence is worker-owned. The worker maintains a daily
 newsletter synthesis task and an autonomous wake task that recurs roughly every
 three hours. Before each recurring run, host code refreshes the model prompt

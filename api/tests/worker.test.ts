@@ -71,6 +71,56 @@ describe("worker loop", () => {
     });
   });
 
+  it("bounds scheduled agent runs claimed in one worker tick", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_MAX_AUTONOMOUS_RUNS_PER_WORKER_TICK: "1"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-run-guardrail-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-run-guardrail-test",
+      session
+    };
+    await store.createTask(context, {
+      title: "Due task one",
+      prompt: "Run first.",
+      dueAt: "2026-06-13T12:00:00.000Z"
+    });
+    await store.createTask(context, {
+      title: "Due task two",
+      prompt: "Run second.",
+      dueAt: "2026-06-13T12:00:00.000Z"
+    });
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_observation",
+            arguments: {
+              summary: "One bounded task ran.",
+              source: "unit-test"
+            }
+          }
+        ]
+      }),
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1 });
+    const tasks = await store.listTasks(context);
+    expect(tasks.filter((task) => task.status === "completed")).toHaveLength(1);
+    expect(tasks.filter((task) => task.status === "pending" && task.title.startsWith("Due task"))).toHaveLength(1);
+  });
+
   it("keeps an existing legacy newsletter synthesis task from duplicating and rolls it forward to interest checks", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
@@ -192,6 +242,45 @@ describe("worker loop", () => {
     expect(prompt).toContain("owner_visible_contact_attempts=");
     expect(prompt).toContain("Prefer staying quiet when recent contact cadence is high");
     expect(prompt).toContain("A surprising database outage writeup");
+  });
+
+  it("honors the newsletter document guardrail when composing interest prompts", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_MAX_NEWSLETTER_DOCUMENTS_PER_INTEREST_CHECK: "2"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-newsletter-budget-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-newsletter-budget-test",
+      session
+    };
+    for (const filename of ["one.md", "two.md", "three.md"]) {
+      await store.writeMarkdownDocument(context, {
+        path: `/newsletters/2026-06-13/${filename}`,
+        markdown: `# ${filename}\n\nMarker ${filename}`
+      });
+    }
+    const task = await store.createTask(context, {
+      title: "Newsletter interest check",
+      prompt: "Run newsletter interest check.",
+      dueAt: "2026-06-13T17:00:00.000Z"
+    });
+
+    const prompt = await buildScheduledTaskPrompt({
+      store,
+      context,
+      task,
+      settings,
+      now: new Date("2026-06-13T17:00:00.000Z")
+    });
+
+    const includedNewsletterDocuments = prompt.match(/\/newsletters\/2026-06-13\//g) ?? [];
+    expect(includedNewsletterDocuments).toHaveLength(2);
   });
 
   it("lets a scheduled newsletter interest check stay quiet and record rationale", async () => {

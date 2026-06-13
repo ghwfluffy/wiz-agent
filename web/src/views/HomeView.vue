@@ -2042,6 +2042,18 @@ onUnmounted(() => {
               <p class="metric-value">{{ jobBudgets.maxToolCallsPerRun ?? "set in admin" }}</p>
             </section>
             <section class="metric-card">
+              <p class="label">Runs/hour</p>
+              <p class="metric-value">{{ jobBudgets.maxAgentRunsPerUserPerHour ?? "default" }}</p>
+            </section>
+            <section class="metric-card">
+              <p class="label">Owner messages/day</p>
+              <p class="metric-value">{{ jobBudgets.maxOwnerVisibleOutboundMessagesPerUserPerDay ?? "default" }}</p>
+            </section>
+            <section class="metric-card">
+              <p class="label">Outbound/tick</p>
+              <p class="metric-value">{{ jobBudgets.outboundMessagesPerWorkerTick ?? "default" }}</p>
+            </section>
+            <section class="metric-card">
               <p class="label">Run budget</p>
               <p class="metric-value">{{ jobBudgets.maxRuntimeSecPerRun !== undefined ? `${jobBudgets.maxRuntimeSecPerRun}s` : "set in admin" }}</p>
             </section>

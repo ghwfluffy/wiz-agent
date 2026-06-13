@@ -557,6 +557,7 @@ export type AgentStore = {
     }
   ): Promise<AgentRunRecord>;
   listAgentRuns(context: RequestContext, includeAllUsers?: boolean): Promise<AgentRunRecord[]>;
+  countAgentRunsSince(context: Pick<RequestContext, "userId">, since: Date): Promise<number>;
   finishAgentRun(context: RequestContext, runId: string, status: string, failureMessage?: string | null): Promise<void>;
   recordToolCall(
     context: RequestContext,
@@ -570,6 +571,7 @@ export type AgentStore = {
     }
   ): Promise<ToolCallRecord>;
   listToolCalls(context: RequestContext, includeAllUsers?: boolean): Promise<ToolCallRecord[]>;
+  countToolCallsForRun(context: Pick<RequestContext, "userId">, runId: string): Promise<number>;
   listSenders(context: RequestContext): Promise<SenderRecord[]>;
   getSenderStatus(context: RequestContext, address: string): Promise<SenderStatus | undefined>;
   setSenderStatus(context: RequestContext, address: string, status: SenderStatus): Promise<void>;
@@ -594,6 +596,7 @@ export type AgentStore = {
   ): Promise<InboundMessageRecord | undefined>;
   queueOutboundMessage(context: RequestContext, input: OutboundMessageInput): Promise<OutboundMessageRecord>;
   listOutboundMessages(context: RequestContext, statuses?: string[]): Promise<OutboundMessageRecord[]>;
+  countOwnerVisibleOutboundMessagesSince(context: Pick<RequestContext, "userId">, since: Date): Promise<number>;
   listUsersWithWork(statuses?: string[], now?: Date): Promise<AuthenticatedUser[]>;
   updateOutboundMessageStatus(
     context: RequestContext,

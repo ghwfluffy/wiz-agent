@@ -149,6 +149,7 @@ export type JobStatus = {
   failedToolCalls?: number;
   collections?: number;
   unhealthyCollections?: number;
+  recentTrips?: number;
   lastAuditAt?: string | null;
 };
 
@@ -188,6 +189,7 @@ export type JobsResponse = {
     agentRuns: unknown[];
     toolCalls: unknown[];
     ragJobs: RagIndexJob[];
+    guardrails?: AuditEvent[];
   };
   jobs: JobStatus[];
 };

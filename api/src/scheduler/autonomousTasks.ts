@@ -1,5 +1,7 @@
 import type { AgentStore, RequestContext, TaskRecord } from "../domain/types.js";
 import { taskOutcomeMemoryPath } from "../memory/taskOutcomeMemory.js";
+import type { Settings } from "../config/settings.js";
+import { runtimeSafetyPolicy } from "../security/safetyPolicy.js";
 
 const NEWSLETTER_INTEREST_CHECK_TITLE = "Newsletter interest check";
 const LEGACY_NEWSLETTER_SYNTHESIS_TITLE = "Daily newsletter synthesis";
@@ -199,27 +201,37 @@ function excerpt(value: string, limit = 700): string {
   return value.replace(/\s+/g, " ").trim().slice(0, limit);
 }
 
-async function readMemoryExcerpt(store: AgentStore, context: RequestContext, path: string): Promise<string> {
+async function readMemoryExcerpt(store: AgentStore, context: RequestContext, path: string, limit: number): Promise<string> {
   const document = await store.getMarkdownDocument(context, path);
-  return document ? excerpt(document.markdown, 1000) : "(missing)";
+  return document ? excerpt(document.markdown, limit) : "(missing)";
 }
 
-async function recentNewsletterExcerpts(store: AgentStore, context: RequestContext): Promise<string[]> {
+async function recentNewsletterExcerpts(
+  store: AgentStore,
+  context: RequestContext,
+  maxDocuments: number,
+  excerptLimit: number
+): Promise<string[]> {
+  let remaining = maxDocuments;
   const days = (await store.listMarkdownDirectory(context, "/newsletters"))
     .filter((entry) => entry.type === "directory")
     .sort((a, b) => b.path.localeCompare(a.path))
-    .slice(0, 3);
+    .slice(0, Math.ceil(maxDocuments / 5));
   const excerpts: string[] = [];
   for (const day of days) {
+    if (remaining <= 0) {
+      break;
+    }
     const files = await store.listMarkdownDirectory(context, day.path);
-    for (const file of files.filter((entry) => entry.type === "file").slice(0, 5)) {
+    for (const file of files.filter((entry) => entry.type === "file").slice(0, Math.min(5, remaining))) {
       const document = await store.getMarkdownDocument(context, file.path);
       if (document) {
-        excerpts.push(`${document.path}: ${excerpt(document.markdown, 500)}`);
+        excerpts.push(`${document.path}: ${excerpt(document.markdown, excerptLimit)}`);
+        remaining -= 1;
       }
     }
   }
-  return excerpts.slice(0, 8);
+  return excerpts;
 }
 
 async function recentBotActivityEvidence(store: AgentStore, context: RequestContext, now: Date): Promise<string[]> {
@@ -261,9 +273,11 @@ export async function buildScheduledTaskPrompt(options: {
   store: AgentStore;
   context: RequestContext;
   task: TaskRecord;
+  settings?: Settings;
   now?: Date;
 }): Promise<string> {
   const now = options.now ?? new Date();
+  const safety = runtimeSafetyPolicy(options.settings);
   const activeTasks = (await options.store.listTasks(options.context))
     .filter((task) => task.id !== options.task.id && !["completed", "cancelled", "failed"].includes(task.status))
     .slice(0, 20)
@@ -280,15 +294,20 @@ export async function buildScheduledTaskPrompt(options: {
   const ownerMessages = (await options.store.listInboundMessages(options.context))
     .filter((message) => message.classification === "owner")
     .slice(0, 8)
-    .map((message) => `- ${message.receivedAt ?? message.createdAt}: ${excerpt(message.bodyText, 280)}`);
-  const newsletters = await recentNewsletterExcerpts(options.store, options.context);
+    .map((message) => `- ${message.receivedAt ?? message.createdAt}: ${excerpt(message.bodyText, safety.maxPromptExcerptChars)}`);
+  const newsletters = await recentNewsletterExcerpts(
+    options.store,
+    options.context,
+    safety.maxNewsletterDocumentsPerInterestCheck,
+    safety.maxPromptExcerptChars
+  );
   const botActivity = await recentBotActivityEvidence(options.store, options.context, now);
-  const schedule = await readMemoryExcerpt(options.store, options.context, SCHEDULE_MEMORY_PATH);
-  const rationale = await readMemoryExcerpt(options.store, options.context, TASK_RATIONALE_PATH);
-  const notificationPolicy = await readMemoryExcerpt(options.store, options.context, NOTIFICATION_POLICY_PATH);
-  const communicationPreferences = await readMemoryExcerpt(options.store, options.context, COMMUNICATION_PREFERENCES_PATH);
-  const newsletterPreferences = await readMemoryExcerpt(options.store, options.context, NEWSLETTER_PREFERENCES_PATH);
-  const taskOutcomeMemory = await readMemoryExcerpt(options.store, options.context, taskOutcomeMemoryPath(now));
+  const schedule = await readMemoryExcerpt(options.store, options.context, SCHEDULE_MEMORY_PATH, safety.maxContextExcerptChars);
+  const rationale = await readMemoryExcerpt(options.store, options.context, TASK_RATIONALE_PATH, safety.maxContextExcerptChars);
+  const notificationPolicy = await readMemoryExcerpt(options.store, options.context, NOTIFICATION_POLICY_PATH, safety.maxContextExcerptChars);
+  const communicationPreferences = await readMemoryExcerpt(options.store, options.context, COMMUNICATION_PREFERENCES_PATH, safety.maxContextExcerptChars);
+  const newsletterPreferences = await readMemoryExcerpt(options.store, options.context, NEWSLETTER_PREFERENCES_PATH, safety.maxContextExcerptChars);
+  const taskOutcomeMemory = await readMemoryExcerpt(options.store, options.context, taskOutcomeMemoryPath(now), safety.maxContextExcerptChars);
   const outcomeGuidance = options.task.title === AUTONOMOUS_WAKE_TITLE
     ? "Choose one outcome: acted, observed, needs owner, or failed. Use host tools for task/schedule/memory/outbox changes. For no action, call record_observation."
     : options.task.title === SELF_REVIEW_TITLE

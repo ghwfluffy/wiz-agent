@@ -206,8 +206,10 @@ Controls:
 - spam/rate limits prevent token burn and owner-notification floods.
 
 The current spam guard limits untrusted review notifications per sender within a
-sliding time window. IMAP polling also uses a bounded per-tick batch size so a
-large unread mailbox cannot process unbounded mail in one worker pass.
+sliding time window. The worker default is five review notifications per sender
+per day, configurable by `INBOUND_MAX_UNTRUSTED_REVIEW_NOTIFICATIONS_PER_SENDER_PER_DAY`.
+IMAP polling also uses a bounded per-tick batch size so a large unread mailbox
+cannot process unbounded mail in one worker pass.
 Worker-level IMAP failures are recorded as `worker.imap_error` audit events so
 operators can see connector failures in the Logs tab instead of needing Docker
 logs.
@@ -310,10 +312,13 @@ state explicit rather than reusing the approval button.
 
 The worker enforces outbound pacing. It discovers users with due tasks or
 deliverable outbound messages, then runs scheduler work with a global outbound
-batch limit of one message per 20 second tick. That keeps delivery below one
-message every 10 seconds and at no more than three messages per minute. The
-lower-level queue processor also defaults to one message per call so tests,
-manual scripts, and future workers do not accidentally send a large batch.
+batch limit defaulting to one message per 20 second tick. The lower-level queue
+processor also defaults to one message per call so tests, manual scripts, and
+future workers do not accidentally send a large batch.
+`AGENT_OUTBOUND_MESSAGES_PER_WORKER_TICK` controls the host-owned tick cap.
+Owner-visible model proposals are capped per user per rolling day before
+approvals or outbox records are created, so a bad loop cannot fill the approval
+queue or abuse SMTP/SMS/MMS gateways.
 
 Sender trust is operator-managed. The API and UI can list sender
 classifications, set a sender to `owner`, `newsletter`, `trusted`, `blocked`, or

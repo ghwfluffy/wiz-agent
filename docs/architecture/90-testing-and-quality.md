@@ -85,6 +85,9 @@ Current tests cover:
 - operations dashboard rendering.
 - operational jobs visibility, budget exposure, RAG failure listing, and manual
   RAG retry audit.
+- runaway guardrails for hourly agent runs, per-run MCP/tool calls,
+  owner-visible outbound proposal caps, bounded scheduled worker claims,
+  non-secret guardrail audit details, and Jobs/Workers budget visibility.
 - tabbed Carbon dashboard rendering, URL-backed active tabs, and focused tab
   polling.
 - markdown RAG chunking determinism, section metadata preservation, and

@@ -12,6 +12,7 @@ import {
 } from "./autonomousTasks.js";
 import { executeApprovedCrossAppApprovals } from "./approvalExecutor.js";
 import { recordTaskOutcomeMemory } from "../memory/taskOutcomeMemory.js";
+import { runtimeSafetyPolicy } from "../security/safetyPolicy.js";
 
 export async function claimDueTasks(options: {
   store: AgentStore;
@@ -53,6 +54,7 @@ export async function daemonOnce(options: {
     ? await claimDueTasks({
         store: options.store,
         context: options.context,
+        limit: runtimeSafetyPolicy(options.settings).maxAutonomousRunsPerWorkerTick,
         now: options.now
       })
     : [];
@@ -66,6 +68,7 @@ export async function daemonOnce(options: {
             store: options.store,
             context: options.context,
             task,
+            settings: options.settings,
             now: options.now
           })
           : task.prompt;
@@ -149,7 +152,10 @@ export async function daemonOnce(options: {
         context: options.context,
         settings: options.settings,
         transport: options.mailTransport,
-        limit: options.outboundLimit
+        limit: Math.min(
+          options.outboundLimit ?? runtimeSafetyPolicy(options.settings).outboundMessagesPerWorkerTick,
+          runtimeSafetyPolicy(options.settings).outboundMessagesPerWorkerTick
+        )
       })
     : { attempted: 0, sent: 0, failed: 0 };
   return {
