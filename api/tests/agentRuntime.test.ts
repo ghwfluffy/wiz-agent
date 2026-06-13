@@ -143,13 +143,14 @@ describe("tool validation and repair", () => {
 });
 
 describe("app capability registry", () => {
-  it("documents goals and budget purpose, access, and registered actions for model context", () => {
+  it("documents registered app purpose, access, and actions for model context", () => {
     const apps = listAppCapabilities();
     const context = buildCapabilityContext();
 
-    expect(apps.map((app) => app.id)).toEqual(["goals", "budget"]);
+    expect(apps.map((app) => app.id)).toEqual(["goals", "budget", "apartment_gate"]);
     expect(context).toContain("Personal goal tracking");
     expect(context).toContain("Personal finance planning");
+    expect(context).toContain("Federated-login protected mobile web app");
     expect(context).toContain("goals.record_metric_entry");
     expect(context).toContain("budget.get_net_worth_forecast");
     expect(getIntegrationAction("budget.update_account_value")).toMatchObject({

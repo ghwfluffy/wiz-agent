@@ -318,6 +318,23 @@ export type RagIndexJobRecord = {
   createdAt: string;
 };
 
+export type RagUserIndexHealthRecord = {
+  userId: string;
+  qdrantCollection: string;
+  collectionExists: boolean;
+  qdrantPointCount: number | null;
+  healthStatus: string;
+  lastError: string | null;
+  embeddingModel: string;
+  embeddingDimensions: number;
+  lastCollectionCheckAt: string | null;
+  lastReconciliationStartedAt: string | null;
+  lastReconciliationCompletedAt: string | null;
+  expectedDocumentCount: number;
+  expectedChunkCount: number;
+  updatedAt: string;
+};
+
 export type RagDocumentChunkInput = {
   id: string;
   documentVersion: number;
@@ -497,6 +514,12 @@ export type AgentStore = {
   ensureUserRagIndex(context: Pick<RequestContext, "userId">): Promise<string>;
   enqueueRagJob(context: Pick<RequestContext, "userId">, documentId: string, jobType: RagIndexJobType): Promise<RagIndexJobRecord>;
   claimRagIndexJobs(limit: number, now: Date): Promise<RagIndexJobRecord[]>;
+  listRagIndexJobs(
+    context: RequestContext,
+    includeAllUsers?: boolean,
+    statuses?: string[]
+  ): Promise<RagIndexJobRecord[]>;
+  retryRagIndexJob(context: RequestContext, jobId: string, includeAllUsers?: boolean): Promise<RagIndexJobRecord | undefined>;
   completeRagIndexJob(jobId: string): Promise<void>;
   failRagIndexJob(jobId: string, error: string, retryAt?: Date): Promise<void>;
   markRagIndexJobDead(jobId: string, error: string): Promise<void>;
@@ -507,6 +530,7 @@ export type AgentStore = {
     indexedDocument?: { version: number; contentHash: string }
   ): Promise<RagDocumentChunkRecord[]>;
   listChunksForDocument(context: Pick<RequestContext, "userId">, documentId: string): Promise<RagDocumentChunkRecord[]>;
+  listRagUserIndexHealth(context: RequestContext, includeAllUsers?: boolean): Promise<RagUserIndexHealthRecord[]>;
   updateRagIndexHealth(userId: string, input: RagIndexHealthInput): Promise<void>;
   createAgentMcpSession(context: RequestContext, input: {
     runId?: string | null;
@@ -527,6 +551,7 @@ export type AgentStore = {
       promptVersion?: string | null;
     }
   ): Promise<AgentRunRecord>;
+  listAgentRuns(context: RequestContext, includeAllUsers?: boolean): Promise<AgentRunRecord[]>;
   finishAgentRun(context: RequestContext, runId: string, status: string, failureMessage?: string | null): Promise<void>;
   recordToolCall(
     context: RequestContext,
@@ -539,6 +564,7 @@ export type AgentStore = {
       validationError?: string | null;
     }
   ): Promise<ToolCallRecord>;
+  listToolCalls(context: RequestContext, includeAllUsers?: boolean): Promise<ToolCallRecord[]>;
   listSenders(context: RequestContext): Promise<SenderRecord[]>;
   getSenderStatus(context: RequestContext, address: string): Promise<SenderStatus | undefined>;
   setSenderStatus(context: RequestContext, address: string, status: SenderStatus): Promise<void>;

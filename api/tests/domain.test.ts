@@ -638,7 +638,11 @@ describe("domain and user ownership APIs", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      jobs: [
+      budgets: expect.objectContaining({
+        maxToolCallsPerRun: 10,
+        maxRuntimeSecPerRun: 120
+      }),
+      jobs: expect.arrayContaining([
         expect.objectContaining({
           name: "task-runner",
           pendingTasks: 1,
@@ -650,8 +654,91 @@ describe("domain and user ownership APIs", () => {
         expect.objectContaining({
           name: "inbound-mailbox",
           status: "disabled"
+        }),
+        expect.objectContaining({
+          name: "rag-index",
+          pendingJobs: 0
+        }),
+        expect.objectContaining({
+          name: "qdrant-collections"
         })
-      ]
+      ])
     });
+  });
+
+  it("exposes scoped jobs and lets administrators retry failed RAG jobs", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_IS_ADMIN: "true"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "jobs-rag-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "admin" as const,
+      permissions: ["user", "admin"],
+      requestId: "jobs-rag-test",
+      session
+    };
+    const document = await store.writeMarkdownDocument(context, {
+      path: "/personal/retry.md",
+      markdown: "# Retry\n\nNeeds indexing."
+    });
+    if ("code" in document) {
+      throw new Error("unexpected markdown conflict");
+    }
+    const [job] = await store.claimRagIndexJobs(1, new Date());
+    await store.markRagIndexJobDead(job.id, "embedding provider unavailable");
+
+    const jobsResponse = await app.request("/api/v1/jobs", {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(jobsResponse.status).toBe(200);
+    const jobsPayload = await jobsResponse.json() as {
+      recentFailures: { ragJobs: Array<{ id: string; status: string; lastError: string | null }> };
+      jobs: Array<{ name: string; deadJobs?: number; status: string }>;
+    };
+    expect(jobsPayload.recentFailures.ragJobs).toEqual([
+      expect.objectContaining({
+        id: job.id,
+        status: "dead",
+        lastError: "embedding provider unavailable"
+      })
+    ]);
+    expect(jobsPayload.jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: "rag-index",
+        status: "degraded",
+        deadJobs: 1
+      })
+    ]));
+
+    const retryResponse = await app.request(`/api/v1/admin/rag-index-jobs/${job.id}/retry`, {
+      method: "POST",
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(retryResponse.status).toBe(200);
+    await expect(retryResponse.json()).resolves.toMatchObject({
+      job: {
+        id: job.id,
+        status: "pending",
+        attempts: 1,
+        lastError: null
+      }
+    });
+
+    const audit = await store.listAudit(context, true);
+    expect(audit).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "rag.index_job.retry",
+        entityId: job.id
+      })
+    ]));
   });
 });

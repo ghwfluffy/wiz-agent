@@ -172,6 +172,10 @@ function linkValue(result: Record<string, unknown> | undefined, key: string): st
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function countByStatus<T extends { status: string }>(records: T[], status: string): number {
+  return records.filter((record) => record.status === status).length;
+}
+
 export function buildApp(options: AppOptions = {}): Hono {
   const settings = options.settings ?? loadSettings();
   const store = options.store ?? createDefaultStore(settings);
@@ -235,6 +239,113 @@ export function buildApp(options: AppOptions = {}): Hono {
     return authContext;
   }
 
+  async function buildJobsPayload(authContext: RequestContext, includeAllUsers: boolean) {
+    const [tasks, outbox, audit, connectors, approvals, ragJobs, ragHealth, runs, toolCalls, aiConfig] = await Promise.all([
+      store.listTasks(authContext),
+      store.listOutboundMessages(authContext),
+      store.listAudit(authContext, includeAllUsers),
+      store.listConnectors(authContext),
+      store.listApprovals(authContext, ["pending"]),
+      store.listRagIndexJobs(authContext, includeAllUsers),
+      store.listRagUserIndexHealth(authContext, includeAllUsers),
+      store.listAgentRuns(authContext, includeAllUsers),
+      store.listToolCalls(authContext, includeAllUsers),
+      store.getAiConfig()
+    ]);
+    const dueTasks = tasks.filter((task) => {
+      if (task.status !== "pending" || !task.dueAt) {
+        return false;
+      }
+      return new Date(task.dueAt).getTime() <= Date.now();
+    });
+    const failedRuns = runs.filter((run) => run.status === "failed");
+    const failedToolCalls = toolCalls.filter((toolCall) => toolCall.status === "failed" || toolCall.status === "rejected");
+    const qdrantProblemCount = ragHealth.filter((entry) => !["ok", "healthy"].includes(entry.healthStatus)).length;
+    return {
+      generatedAt: new Date().toISOString(),
+      budgets: {
+        maxToolCallsPerRun: aiConfig.maxToolCalls,
+        maxRuntimeSecPerRun: aiConfig.maxRuntimeSec,
+        repairAttemptLimit: aiConfig.repairAttemptLimit,
+        outboundMessagesPerWorkerTick: 1,
+        workerTickSeconds: 20,
+        maxRagSearchResultsPerCall: 25,
+        browserMcpSessionTtlSeconds: 900
+      },
+      ragIndexHealth: ragHealth,
+      recentFailures: {
+        agentRuns: failedRuns.slice(0, 20),
+        toolCalls: failedToolCalls.slice(0, 20),
+        ragJobs: ragJobs.filter((job) => job.status === "failed" || job.status === "dead").slice(0, 20)
+      },
+      jobs: [
+        {
+          name: "api-health",
+          status: "ok",
+          lastAuditAt: audit[0]?.createdAt ?? null
+        },
+        {
+          name: "worker-tick",
+          status: audit.some((event) => event.action === "worker.imap_error") ? "degraded" : "unknown",
+          lastAuditAt: audit.find((event) => event.action.startsWith("worker."))?.createdAt ?? null
+        },
+        {
+          name: "task-runner",
+          status: failedRuns.length > 0 ? "degraded" : "configured",
+          pendingTasks: tasks.filter((task) => task.status === "pending").length,
+          dueTasks: dueTasks.length,
+          failedTasks: tasks.filter((task) => task.status === "failed").length,
+          failedRuns: failedRuns.length,
+          lastAuditAt: audit.find((event) => event.action.startsWith("agent_run."))?.createdAt ?? null
+        },
+        {
+          name: "mcp-tools",
+          status: failedToolCalls.length > 0 ? "degraded" : "configured",
+          failedToolCalls: failedToolCalls.length,
+          lastAuditAt: audit.find((event) => event.action.startsWith("mcp.") || event.action.startsWith("tool_call."))?.createdAt ?? null
+        },
+        {
+          name: "outbox",
+          status: countByStatus(outbox, "failed") > 0 ? "degraded" : "configured",
+          pendingMessages: countByStatus(outbox, "pending"),
+          approvedMessages: countByStatus(outbox, "approved"),
+          sendingMessages: countByStatus(outbox, "sending"),
+          failedMessages: countByStatus(outbox, "failed"),
+          lastAuditAt: audit.find((event) => event.action.startsWith("outbound."))?.createdAt ?? null
+        },
+        {
+          name: "inbound-mailbox",
+          status: connectors.find((connector) => connector.kind === "imap" && connector.status === "enabled")
+            ? "configured"
+            : "disabled",
+          lastAuditAt: audit.find((event) => event.action.startsWith("message.inbound") || event.action === "worker.imap_error")?.createdAt ?? null
+        },
+        {
+          name: "approvals",
+          status: approvals.length > 0 ? "attention" : "ok",
+          pendingApprovals: approvals.length,
+          lastAuditAt: audit.find((event) => event.action.startsWith("approval."))?.createdAt ?? null
+        },
+        {
+          name: "rag-index",
+          status: countByStatus(ragJobs, "dead") > 0 || countByStatus(ragJobs, "failed") > 0 ? "degraded" : "configured",
+          pendingJobs: countByStatus(ragJobs, "pending"),
+          claimedJobs: countByStatus(ragJobs, "claimed"),
+          failedJobs: countByStatus(ragJobs, "failed"),
+          deadJobs: countByStatus(ragJobs, "dead"),
+          lastAuditAt: audit.find((event) => event.action.startsWith("rag."))?.createdAt ?? null
+        },
+        {
+          name: "qdrant-collections",
+          status: qdrantProblemCount > 0 ? "degraded" : ragHealth.length > 0 ? "configured" : "unknown",
+          collections: ragHealth.length,
+          unhealthyCollections: qdrantProblemCount,
+          lastAuditAt: audit.find((event) => event.action.startsWith("rag."))?.createdAt ?? null
+        }
+      ]
+    };
+  }
+
   app.get("/healthz", (context) => context.json({ status: "ok" }));
 
   app.get("/api/v1/status", (context) => context.json({
@@ -244,6 +355,14 @@ export function buildApp(options: AppOptions = {}): Hono {
     auth_mode: settings.authMode,
     base_path: settings.appBasePath
   }));
+
+  app.get("/api/v1/jobs", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    return context.json(await buildJobsPayload(authContext, false));
+  });
 
   app.get("/api/v1/auth/me", async (context) => {
     const sessionId = getCookie(context, settings.sessionCookieName);
@@ -973,47 +1092,19 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (authContext instanceof Response) {
       return authContext;
     }
-    const [tasks, outbox, audit, connectors] = await Promise.all([
-      store.listTasks(authContext),
-      store.listOutboundMessages(authContext),
-      store.listAudit(authContext, true),
-      store.listConnectors(authContext)
-    ]);
-    const dueTasks = tasks.filter((task) => {
-      if (task.status !== "pending" || !task.dueAt) {
-        return false;
-      }
-      return new Date(task.dueAt).getTime() <= Date.now();
-    });
-    const countOutbox = (status: string) => outbox.filter((message) => message.status === status).length;
-    return context.json({
-      generatedAt: new Date().toISOString(),
-      jobs: [
-        {
-          name: "task-runner",
-          status: "configured",
-          pendingTasks: tasks.filter((task) => task.status === "pending").length,
-          dueTasks: dueTasks.length,
-          lastAuditAt: audit.find((event) => event.action.startsWith("agent_run."))?.createdAt ?? null
-        },
-        {
-          name: "outbox",
-          status: "configured",
-          pendingMessages: countOutbox("pending"),
-          approvedMessages: countOutbox("approved"),
-          sendingMessages: countOutbox("sending"),
-          failedMessages: countOutbox("failed"),
-          lastAuditAt: audit.find((event) => event.action.startsWith("outbound."))?.createdAt ?? null
-        },
-        {
-          name: "inbound-mailbox",
-          status: connectors.find((connector) => connector.kind === "imap" && connector.status === "enabled")
-            ? "configured"
-            : "disabled",
-          lastAuditAt: audit.find((event) => event.action.startsWith("message.inbound"))?.createdAt ?? null
-        }
-      ]
-    });
+    return context.json(await buildJobsPayload(authContext, true));
+  });
+
+  app.post("/api/v1/admin/rag-index-jobs/:id/retry", async (context) => {
+    const authContext = await requireAdmin(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const job = await store.retryRagIndexJob(authContext, context.req.param("id"), true);
+    if (!job) {
+      return context.json(errorPayload("http_404", "Failed or dead RAG index job not found.", authContext.requestId), 404);
+    }
+    return context.json({ job });
   });
 
   return app;

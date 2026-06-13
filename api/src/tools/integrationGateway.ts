@@ -29,6 +29,10 @@ export function integrationBaseUrl(settings: Settings, app: IntegrationApp): str
   return app === "goals" ? settings.goalsApiBaseUrl : settings.budgetApiBaseUrl;
 }
 
+function isApiBackedIntegrationApp(app: string): app is IntegrationApp {
+  return app === "goals" || app === "budget";
+}
+
 export function redactIntegrationData(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(redactIntegrationData);
@@ -121,6 +125,9 @@ export function resolveIntegrationActionRequest(options: {
     searchParams.set(key, String(value));
   }
   const queryString = searchParams.toString();
+  if (!isApiBackedIntegrationApp(action.app)) {
+    return { ok: false, reason: "integration_has_no_agent_api" };
+  }
 
   return {
     ok: true,

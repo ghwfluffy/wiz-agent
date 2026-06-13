@@ -123,3 +123,17 @@ Consider Playwright smoke tests once the web console stabilizes:
 - Safety boundaries are covered by tests.
 - Production-exposed services are documented and locked down.
 - `./scripts/validate.sh` passes.
+
+## Implemented Slice
+
+The Phase 09 implementation adds authenticated `GET /api/v1/jobs`,
+administrator `GET /api/v1/admin/jobs`, and administrator
+`POST /api/v1/admin/rag-index-jobs/:id/retry`. The jobs payload aggregates API,
+worker, outbox, inbound-mailbox, approvals, MCP/tool-call, RAG index, Qdrant
+collection, run-budget, and recent failure state. The web Workers tab exposes
+those fields and provides manual retry for failed/dead RAG jobs.
+
+RAG retry preserves attempt history, clears the current failure, requeues the
+job as pending, and writes `rag.index_job.retry` audit events. Qdrant collection
+names remain host-derived; callers cannot provide collection names, user IDs, or
+document IDs to retry jobs.

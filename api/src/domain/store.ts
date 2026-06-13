@@ -45,6 +45,7 @@ import type {
   RagDocumentChunkRecord,
   RagIndexJobRecord,
   RagIndexJobType,
+  RagUserIndexHealthRecord,
   RequestContext,
   SenderClassification,
   SenderRecord,
@@ -340,6 +341,37 @@ function ragIndexJobFromRow(row: Record<string, unknown>): RagIndexJobRecord {
     startedAt: row.started_at instanceof Date ? row.started_at.toISOString() : row.started_at ? String(row.started_at) : null,
     completedAt: row.completed_at instanceof Date ? row.completed_at.toISOString() : row.completed_at ? String(row.completed_at) : null,
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
+  };
+}
+
+function ragUserIndexHealthFromRow(row: Record<string, unknown>): RagUserIndexHealthRecord {
+  return {
+    userId: String(row.user_id),
+    qdrantCollection: String(row.qdrant_collection),
+    collectionExists: row.collection_exists === true,
+    qdrantPointCount: row.qdrant_point_count === null || row.qdrant_point_count === undefined ? null : Number(row.qdrant_point_count),
+    healthStatus: String(row.health_status),
+    lastError: row.last_error ? String(row.last_error) : null,
+    embeddingModel: String(row.embedding_model),
+    embeddingDimensions: Number(row.embedding_dimensions),
+    lastCollectionCheckAt: row.last_collection_check_at instanceof Date
+      ? row.last_collection_check_at.toISOString()
+      : row.last_collection_check_at
+        ? String(row.last_collection_check_at)
+        : null,
+    lastReconciliationStartedAt: row.last_reconciliation_started_at instanceof Date
+      ? row.last_reconciliation_started_at.toISOString()
+      : row.last_reconciliation_started_at
+        ? String(row.last_reconciliation_started_at)
+        : null,
+    lastReconciliationCompletedAt: row.last_reconciliation_completed_at instanceof Date
+      ? row.last_reconciliation_completed_at.toISOString()
+      : row.last_reconciliation_completed_at
+        ? String(row.last_reconciliation_completed_at)
+        : null,
+    expectedDocumentCount: Number(row.expected_document_count),
+    expectedChunkCount: Number(row.expected_chunk_count),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
   };
 }
 
@@ -1512,6 +1544,46 @@ export function createPostgresStore(pool: Pool): AgentStore {
       }
     },
 
+    async listRagIndexJobs(context, includeAllUsers = false, statuses) {
+      const statusFilter = statuses && statuses.length > 0 ? statuses : null;
+      const result = await pool.query(
+        `SELECT *
+         FROM rag_index_jobs
+         WHERE ($2 = true OR user_id = $1)
+           AND ($3::text[] IS NULL OR status = ANY($3::text[]))
+         ORDER BY created_at DESC
+         LIMIT 200`,
+        [context.userId, includeAllUsers, statusFilter]
+      );
+      return result.rows.map(ragIndexJobFromRow);
+    },
+
+    async retryRagIndexJob(context, jobId, includeAllUsers = false) {
+      const result = await pool.query(
+        `UPDATE rag_index_jobs
+         SET status = 'pending',
+             available_at = now(),
+             started_at = NULL,
+             completed_at = NULL,
+             last_error = NULL
+         WHERE id = $1
+           AND ($2 = true OR user_id = $3)
+           AND status IN ('failed', 'dead')
+         RETURNING *`,
+        [jobId, includeAllUsers, context.userId]
+      );
+      const record = result.rows[0] ? ragIndexJobFromRow(result.rows[0]) : undefined;
+      if (record) {
+        await recordAudit(pool, context, "rag.index_job.retry", "rag_index_job", record.id, {
+          target_user_id: record.userId,
+          document_id: record.documentId,
+          job_type: record.jobType,
+          attempts: record.attempts
+        });
+      }
+      return record;
+    },
+
     async completeRagIndexJob(jobId) {
       await pool.query(
         `UPDATE rag_index_jobs
@@ -1606,6 +1678,18 @@ export function createPostgresStore(pool: Pool): AgentStore {
         [context.userId, documentId]
       );
       return result.rows.map(ragDocumentChunkFromRow);
+    },
+
+    async listRagUserIndexHealth(context, includeAllUsers = false) {
+      const result = await pool.query(
+        `SELECT *
+         FROM rag_user_indexes
+         WHERE ($2 = true OR user_id = $1)
+         ORDER BY updated_at DESC
+         LIMIT 200`,
+        [context.userId, includeAllUsers]
+      );
+      return result.rows.map(ragUserIndexHealthFromRow);
     },
 
     async updateRagIndexHealth(userId, input) {
@@ -1783,6 +1867,18 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return runFromRow(result.rows[0]);
     },
 
+    async listAgentRuns(context, includeAllUsers = false) {
+      const result = await pool.query(
+        `SELECT *
+         FROM agent_runs
+         WHERE ($2 = true OR user_id = $1)
+         ORDER BY started_at DESC
+         LIMIT 200`,
+        [context.userId, includeAllUsers]
+      );
+      return result.rows.map(runFromRow);
+    },
+
     async finishAgentRun(context, runId, status, failureMessage = null) {
       const taskId = await taskIdForRun(pool, context, runId);
       await pool.query(
@@ -1839,6 +1935,18 @@ export function createPostgresStore(pool: Pool): AgentStore {
         }
       }
       return toolCallFromRow(result.rows[0]);
+    },
+
+    async listToolCalls(context, includeAllUsers = false) {
+      const result = await pool.query(
+        `SELECT *
+         FROM tool_calls
+         WHERE ($2 = true OR user_id = $1)
+         ORDER BY created_at DESC
+         LIMIT 200`,
+        [context.userId, includeAllUsers]
+      );
+      return result.rows.map(toolCallFromRow);
     },
 
     async listSenders(context) {
@@ -2170,6 +2278,7 @@ export function createMemoryStore(): AgentStore {
   const markdownIndexJobs: RagIndexJobRecord[] = [];
   const markdownChunks = new Map<string, RagDocumentChunkRecord[]>();
   const ragCollections = new Map<string, string>();
+  const ragHealth = new Map<string, RagUserIndexHealthRecord>();
   const agentMcpSessions = new Map<string, AgentMcpSession>();
   const connectors = new Map<string, ConnectorRecord>();
   const inboundProviderIds = new Map<string, string>();
@@ -2881,6 +2990,36 @@ export function createMemoryStore(): AgentStore {
       }
       return claimed;
     },
+    async listRagIndexJobs(context, includeAllUsers = false, statuses) {
+      const statusSet = statuses && statuses.length > 0 ? new Set(statuses) : null;
+      return markdownIndexJobs
+        .filter((job) => (includeAllUsers || job.userId === context.userId) && (!statusSet || statusSet.has(job.status)))
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 200)
+        .map((job) => ({ ...job }));
+    },
+    async retryRagIndexJob(context, jobId, includeAllUsers = false) {
+      const job = markdownIndexJobs.find((entry) => {
+        return entry.id === jobId
+          && (includeAllUsers || entry.userId === context.userId)
+          && ["failed", "dead"].includes(entry.status);
+      });
+      if (!job) {
+        return undefined;
+      }
+      job.status = "pending";
+      job.availableAt = nowIso();
+      job.startedAt = null;
+      job.completedAt = null;
+      job.lastError = null;
+      pushAudit(context, "rag.index_job.retry", "rag_index_job", job.id, {
+        target_user_id: job.userId,
+        document_id: job.documentId,
+        job_type: job.jobType,
+        attempts: job.attempts
+      });
+      return { ...job };
+    },
     async completeRagIndexJob(jobId) {
       const job = markdownIndexJobs.find((entry) => entry.id === jobId);
       if (job) {
@@ -2929,8 +3068,33 @@ export function createMemoryStore(): AgentStore {
     async listChunksForDocument(context, documentId) {
       return markdownChunks.get(`${context.userId}:${documentId}`) ?? [];
     },
-    async updateRagIndexHealth() {
-      return undefined;
+    async listRagUserIndexHealth(context, includeAllUsers = false) {
+      return [...ragHealth.values()]
+        .filter((entry) => includeAllUsers || entry.userId === context.userId)
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 200);
+    },
+    async updateRagIndexHealth(userId, input) {
+      const now = nowIso();
+      const existing = ragHealth.get(userId);
+      const chunks = [...markdownChunks.values()].flat().filter((chunk) => chunk.userId === userId);
+      const record: RagUserIndexHealthRecord = {
+        userId,
+        qdrantCollection: existing?.qdrantCollection ?? qdrantCollectionForUser(userId),
+        collectionExists: input.collectionExists ?? existing?.collectionExists ?? false,
+        qdrantPointCount: input.qdrantPointCount ?? existing?.qdrantPointCount ?? null,
+        healthStatus: input.healthStatus ?? existing?.healthStatus ?? "unknown",
+        lastError: input.lastError ?? null,
+        embeddingModel: input.embeddingModel ?? existing?.embeddingModel ?? "text-embedding-3-small",
+        embeddingDimensions: input.embeddingDimensions ?? existing?.embeddingDimensions ?? 1536,
+        lastCollectionCheckAt: now,
+        lastReconciliationStartedAt: input.reconciliationStartedAt ?? existing?.lastReconciliationStartedAt ?? null,
+        lastReconciliationCompletedAt: input.reconciliationCompletedAt ?? existing?.lastReconciliationCompletedAt ?? null,
+        expectedDocumentCount: [...markdownDocuments.values()].filter((document) => document.userId === userId).length,
+        expectedChunkCount: chunks.length,
+        updatedAt: now
+      };
+      ragHealth.set(userId, record);
     },
     async createAgentMcpSession(context, input) {
       const session: AgentMcpSession = {
@@ -3016,6 +3180,12 @@ export function createMemoryStore(): AgentStore {
       }
       return run;
     },
+    async listAgentRuns(context, includeAllUsers = false) {
+      return [...runs.values()]
+        .filter((run) => includeAllUsers || run.userId === context.userId)
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+        .slice(0, 200);
+    },
     async finishAgentRun(context, runId, status, failureMessage = null) {
       const run = runs.get(runId);
       if (run) {
@@ -3069,6 +3239,12 @@ export function createMemoryStore(): AgentStore {
         });
       }
       return toolCall;
+    },
+    async listToolCalls(context, includeAllUsers = false) {
+      return [...toolCalls.values()]
+        .filter((toolCall) => includeAllUsers || toolCall.userId === context.userId)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 200);
     },
     async listSenders(context) {
       return [...senderStatuses.values()]

@@ -77,6 +77,8 @@ Current tests cover:
 - outbox listing, status updates, SMTP queue delivery, and fail-closed outbound
   delivery.
 - operations dashboard rendering.
+- operational jobs visibility, budget exposure, RAG failure listing, and manual
+  RAG retry audit.
 - tabbed Carbon dashboard rendering, URL-backed active tabs, and focused tab
   polling.
 - markdown RAG chunking determinism, section metadata preservation, and

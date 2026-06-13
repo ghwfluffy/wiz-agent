@@ -545,6 +545,77 @@ describe("home view", () => {
     ]));
   });
 
+  it("shows failed RAG jobs without retry controls for non-admin users", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return {
+          ok: true,
+          json: async () => ({
+            authenticated: true,
+            user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: false }
+          })
+        };
+      }
+      if (url.includes("/jobs")) {
+        return {
+          ok: true,
+          json: async () => ({
+            jobs: [{ name: "rag-index", status: "degraded", deadJobs: 1 }],
+            recentFailures: {
+              agentRuns: [],
+              toolCalls: [],
+              ragJobs: [{
+                id: "rag-job-1",
+                userId: "u1",
+                documentId: "doc-1",
+                jobType: "upsert",
+                status: "dead",
+                attempts: 3,
+                lastError: "embedding provider unavailable",
+                availableAt: "",
+                startedAt: null,
+                completedAt: null,
+                createdAt: ""
+              }]
+            },
+            ragIndexHealth: []
+          })
+        };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: false, json: async () => ({ error: { message: "Administrator access required." } }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { wrapper } = await mountHome("/?tab=workers");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("embedding provider unavailable");
+    expect(wrapper.text()).toContain("Admin only");
+    expect(wrapper.findAll("button").some((button) => button.text() === "Retry")).toBe(false);
+  });
+
   it("polls only the active tab data every ten seconds", async () => {
     vi.useFakeTimers();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");

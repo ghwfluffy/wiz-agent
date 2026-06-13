@@ -14,4 +14,5 @@ and approved deviations from `docs/project-standards/`.
 - [Agent Runtime](./50-agent-runtime.md)
 - [Connectors And Side Effects](./60-connectors-and-side-effects.md)
 - [App Capability Registry](./70-app-capability-registry.md)
+- [Observability And Safety](./80-observability-and-safety.md)
 - [Testing And Quality](./90-testing-and-quality.md)

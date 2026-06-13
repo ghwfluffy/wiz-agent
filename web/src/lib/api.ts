@@ -131,11 +131,61 @@ export type JobStatus = {
   status: string;
   pendingTasks?: number;
   dueTasks?: number;
+  failedTasks?: number;
+  failedRuns?: number;
   pendingMessages?: number;
   approvedMessages?: number;
   sendingMessages?: number;
   failedMessages?: number;
+  pendingApprovals?: number;
+  pendingJobs?: number;
+  claimedJobs?: number;
+  failedJobs?: number;
+  deadJobs?: number;
+  failedToolCalls?: number;
+  collections?: number;
+  unhealthyCollections?: number;
   lastAuditAt?: string | null;
+};
+
+export type RagIndexJob = {
+  id: string;
+  userId: string;
+  documentId: string;
+  requestedVersion: number | null;
+  requestedContentHash: string | null;
+  jobType: string;
+  status: string;
+  attempts: number;
+  lastError: string | null;
+  availableAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  createdAt: string;
+};
+
+export type RagIndexHealth = {
+  userId: string;
+  qdrantCollection: string;
+  collectionExists: boolean;
+  qdrantPointCount: number | null;
+  healthStatus: string;
+  lastError: string | null;
+  expectedDocumentCount: number;
+  expectedChunkCount: number;
+  updatedAt: string;
+};
+
+export type JobsResponse = {
+  generatedAt?: string;
+  budgets?: Record<string, number>;
+  ragIndexHealth?: RagIndexHealth[];
+  recentFailures?: {
+    agentRuns: unknown[];
+    toolCalls: unknown[];
+    ragJobs: RagIndexJob[];
+  };
+  jobs: JobStatus[];
 };
 
 export type ConnectorKind = "owner-contact" | "imap" | "smtp" | "openai";
@@ -389,8 +439,13 @@ export const api = {
       body: JSON.stringify(config)
     });
   },
-  listJobs(): Promise<{ jobs: JobStatus[] }> {
-    return request<{ jobs: JobStatus[] }>("/admin/jobs");
+  listJobs(): Promise<JobsResponse> {
+    return request<JobsResponse>("/jobs");
+  },
+  retryRagIndexJob(id: string): Promise<{ job: RagIndexJob }> {
+    return request<{ job: RagIndexJob }>(`/admin/rag-index-jobs/${encodeURIComponent(id)}/retry`, {
+      method: "POST"
+    });
   },
   async dashboard(): Promise<{
     tasks: Task[];
@@ -400,7 +455,7 @@ export const api = {
     senders: Sender[];
     connectors: Connector[];
     aiConfig: AiConfig | null;
-    jobs: JobStatus[];
+    jobs: JobsResponse;
     memory: MemoryDocument[];
   }> {
     const [tasks, inbox, outbox, audit, senders, connectors, aiConfig, jobs, memory] = await Promise.all([
@@ -422,7 +477,7 @@ export const api = {
       senders: senders.senders,
       connectors: connectors.connectors,
       aiConfig,
-      jobs: jobs.jobs,
+      jobs,
       memory: memory.documents
     };
   }

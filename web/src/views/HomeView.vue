@@ -13,11 +13,14 @@ import {
   type ConnectorStatus,
   type InboundMessage,
   type JobStatus,
+  type JobsResponse,
   type KnowledgeDocument,
   type KnowledgeEntry,
   type KnowledgeSection,
   type MemoryDocument,
   type OutboxMessage,
+  type RagIndexHealth,
+  type RagIndexJob,
   type Sender,
   type Task,
   type TaskEvent
@@ -64,6 +67,9 @@ const knowledgeDocument = ref<KnowledgeDocument | null>(null);
 const knowledgeSections = ref<KnowledgeSection[]>([]);
 const aiConfig = ref<AiConfig | null>(null);
 const jobs = ref<JobStatus[]>([]);
+const jobBudgets = ref<Record<string, number>>({});
+const failedRagJobs = ref<RagIndexJob[]>([]);
+const ragIndexHealth = ref<RagIndexHealth[]>([]);
 const dashboardError = ref<string | null>(null);
 const promptError = ref<string | null>(null);
 const promptResult = ref<AgentPromptResponse | null>(null);
@@ -74,6 +80,7 @@ const sendingPrompt = ref(false);
 const loadingKnowledge = ref(false);
 const savingKnowledge = ref(false);
 const testingImap = ref(false);
+const retryingRagJobId = ref<string | null>(null);
 const taskPage = ref(1);
 const inboxPage = ref(1);
 const outboxPage = ref(1);
@@ -164,6 +171,7 @@ const recentAudit = computed(() => audit.value.slice(0, 12));
 const agentRunEvents = computed(() => audit.value.filter((event) => event.action.startsWith("agent_run.")).slice(0, 12));
 const toolCallEvents = computed(() => audit.value.filter((event) => event.action.startsWith("tool_call.") || event.action.startsWith("mcp.tool_call.")).slice(0, 12));
 const ragJobs = computed(() => jobs.value.filter((job) => job.name.toLowerCase().includes("rag") || job.name.toLowerCase().includes("index")));
+const canRetryRagJobs = computed(() => auth.user?.isAdmin === true);
 const outboxById = computed(() => new Map(outbox.value.map((message) => [message.id, message])));
 const totalTaskPages = computed(() => Math.max(1, Math.ceil(tasks.value.length / tasksPerPage)));
 const totalInboxPages = computed(() => Math.max(1, Math.ceil(inbox.value.length / inboxPerPage)));
@@ -267,6 +275,13 @@ function applyAiConfig(config: AiConfig | null): void {
   Object.assign(configForm, config);
 }
 
+function applyJobsResponse(response: JobsResponse): void {
+  jobs.value = Array.isArray(response.jobs) ? response.jobs : [];
+  jobBudgets.value = response.budgets ?? {};
+  failedRagJobs.value = response.recentFailures?.ragJobs ?? [];
+  ragIndexHealth.value = response.ragIndexHealth ?? [];
+}
+
 function configObject(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
 }
@@ -346,19 +361,23 @@ function formatId(value: string | null | undefined): string {
 }
 
 function statusTagClass(status: string): string {
-  if (["completed", "sent", "approved", "configured", "owner", "trusted"].includes(status)) {
+  if (["completed", "sent", "approved", "configured", "owner", "trusted", "ok", "healthy"].includes(status)) {
     return "cds--tag--green";
   }
-  if (["failed", "blocked"].includes(status)) {
+  if (["failed", "blocked", "dead", "degraded"].includes(status)) {
     return "cds--tag--red";
   }
-  if (["running", "claimed", "sending", "newsletter", "trusted", "routed_to_agent", "accepted_newsletter", "accepted_trusted"].includes(status)) {
+  if (["running", "claimed", "sending", "newsletter", "trusted", "routed_to_agent", "accepted_newsletter", "accepted_trusted", "attention"].includes(status)) {
     return "cds--tag--blue";
   }
   if (["cancelled", "untrusted"].includes(status)) {
     return "cds--tag--gray";
   }
   return "cds--tag--warm-gray";
+}
+
+function jobFailedCount(job: JobStatus): number {
+  return (job.failedMessages ?? 0) + (job.failedTasks ?? 0) + (job.failedRuns ?? 0) + (job.failedJobs ?? 0) + (job.deadJobs ?? 0) + (job.failedToolCalls ?? 0) + (job.unhealthyCollections ?? 0);
 }
 
 function linkedOutbox(message: InboundMessage): OutboxMessage | undefined {
@@ -620,7 +639,7 @@ async function loadDashboard(): Promise<void> {
     audit.value = data.audit;
     senders.value = data.senders;
     memoryDocuments.value = data.memory ?? [];
-    jobs.value = data.jobs;
+    applyJobsResponse(data.jobs);
     applyConnectors(data.connectors);
     applyAiConfig(data.aiConfig);
     clampPages();
@@ -685,7 +704,7 @@ async function loadActiveTab(): Promise<void> {
       }
       case "workers": {
         const response = await api.listJobs().catch(() => ({ jobs: [] }));
-        jobs.value = response.jobs;
+        applyJobsResponse(response);
         break;
       }
       case "logs": {
@@ -709,6 +728,24 @@ async function loadActiveTab(): Promise<void> {
     dashboardError.value = "Unable to refresh the selected tab.";
   } finally {
     activeTabRefreshInFlight = false;
+  }
+}
+
+async function retryRagJob(jobId: string): Promise<void> {
+  if (!canRetryRagJobs.value) {
+    dashboardError.value = "Administrator access is required to retry RAG index jobs.";
+    return;
+  }
+  retryingRagJobId.value = jobId;
+  dashboardError.value = null;
+  try {
+    await api.retryRagIndexJob(jobId);
+    const response = await api.listJobs();
+    applyJobsResponse(response);
+  } catch {
+    dashboardError.value = "Unable to retry the RAG index job.";
+  } finally {
+    retryingRagJobId.value = null;
   }
 }
 
@@ -1931,7 +1968,42 @@ onUnmounted(() => {
               <p class="label">Index jobs</p>
               <p class="metric-value">{{ ragJobs.length }}</p>
             </section>
+            <section class="metric-card">
+              <p class="label">MCP calls/run</p>
+              <p class="metric-value">{{ jobBudgets.maxToolCallsPerRun ?? "set in admin" }}</p>
+            </section>
+            <section class="metric-card">
+              <p class="label">Run budget</p>
+              <p class="metric-value">{{ jobBudgets.maxRuntimeSecPerRun !== undefined ? `${jobBudgets.maxRuntimeSecPerRun}s` : "set in admin" }}</p>
+            </section>
+            <section class="metric-card">
+              <p class="label">RAG result cap</p>
+              <p class="metric-value">{{ jobBudgets.maxRagSearchResultsPerCall ?? 25 }}</p>
+            </section>
           </div>
+          <p v-if="ragIndexHealth.length === 0" class="empty">No Qdrant collection health has been recorded yet.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra">
+            <thead>
+              <tr>
+                <th>Collection</th>
+                <th>Status</th>
+                <th>Expected docs</th>
+                <th>Expected chunks</th>
+                <th>Qdrant points</th>
+                <th>Updated</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="health in ragIndexHealth" :key="health.userId">
+                <td>{{ formatId(health.qdrantCollection) }}</td>
+                <td><span class="cds--tag" :class="statusTagClass(health.healthStatus)">{{ health.healthStatus }}</span></td>
+                <td>{{ health.expectedDocumentCount }}</td>
+                <td>{{ health.expectedChunkCount }}</td>
+                <td>{{ health.qdrantPointCount ?? "unknown" }}</td>
+                <td>{{ formatDate(health.updatedAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
           <p v-if="ragJobs.length === 0" class="empty">No index worker status rows are available.</p>
           <table v-else class="cds--data-table cds--data-table--zebra">
             <thead>
@@ -1947,9 +2019,37 @@ onUnmounted(() => {
               <tr v-for="job in ragJobs" :key="job.name">
                 <td>{{ job.name }}</td>
                 <td><span class="cds--tag" :class="statusTagClass(job.status)">{{ job.status }}</span></td>
-                <td>{{ job.pendingTasks ?? job.pendingMessages ?? 0 }}</td>
-                <td>{{ job.failedMessages ?? 0 }}</td>
+                <td>{{ job.pendingJobs ?? job.pendingTasks ?? job.pendingMessages ?? 0 }}</td>
+                <td>{{ jobFailedCount(job) }}</td>
                 <td>{{ formatDate(job.lastAuditAt) }}</td>
+              </tr>
+            </tbody>
+          </table>
+          <p v-if="failedRagJobs.length === 0" class="empty">No failed RAG index jobs need manual retry.</p>
+          <table v-else class="cds--data-table cds--data-table--zebra">
+            <thead>
+              <tr>
+                <th>Job</th>
+                <th>Status</th>
+                <th>Attempts</th>
+                <th>Error</th>
+                <th>Created</th>
+                <th>Retry</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="job in failedRagJobs" :key="job.id">
+                <td>{{ formatId(job.id) }}</td>
+                <td><span class="cds--tag" :class="statusTagClass(job.status)">{{ job.status }}</span></td>
+                <td>{{ job.attempts }}</td>
+                <td>{{ job.lastError ?? "No error recorded" }}</td>
+                <td>{{ formatDate(job.createdAt) }}</td>
+                <td>
+                  <button v-if="canRetryRagJobs" class="cds--btn cds--btn--sm cds--btn--secondary" type="button" :disabled="retryingRagJobId === job.id" @click="retryRagJob(job.id)">
+                    Retry
+                  </button>
+                  <span v-if="!canRetryRagJobs" class="label">Admin only</span>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -1977,9 +2077,9 @@ onUnmounted(() => {
                 <td>
                   <span class="cds--tag" :class="statusTagClass(job.status)">{{ job.status }}</span>
                 </td>
-                <td>{{ job.pendingTasks ?? job.pendingMessages ?? 0 }}</td>
+                <td>{{ job.pendingJobs ?? job.pendingApprovals ?? job.pendingTasks ?? job.pendingMessages ?? 0 }}</td>
                 <td>{{ job.dueTasks ?? 0 }}</td>
-                <td>{{ job.failedMessages ?? 0 }}</td>
+                <td>{{ jobFailedCount(job) }}</td>
                 <td>{{ formatDate(job.lastAuditAt) }}</td>
               </tr>
             </tbody>
