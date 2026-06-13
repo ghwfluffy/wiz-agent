@@ -65,6 +65,21 @@ The registry includes actions for:
 Use Fluffynomics when the owner asks about accounts, balances, net worth,
 forecasts, bills, expenses, investments, transfers, or financial history.
 
+### Apartment Gate
+
+Apartment Gate is a federated-login protected mobile web app for opening
+apartment community gates and doors. Its credentials and rendered page source
+are highly private, and there is no agent-callable API.
+
+The registry includes Apartment Gate as directory knowledge only:
+
+- no integration actions are available;
+- no MCP tool is exposed for opening gates or doors;
+- the agent may explain where the app is and how access is protected;
+- the agent must not try to open physical access points;
+- the agent must not request, store, summarize, or expose Gatewise credentials,
+  refresh tokens, API keys, or generated page source.
+
 ## Maintenance Rule
 
 Whenever a future agent request adds or changes a GHWIZ app, app API, or major
