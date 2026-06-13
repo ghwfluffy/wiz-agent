@@ -922,12 +922,30 @@ describe("home view", () => {
       receivedAt: "",
       createdAt: ""
     };
+    let promptRequestCount = 0;
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes("/auth/me")) {
         return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
       }
       if (url.includes("/agent/prompts") && init?.method === "POST") {
+        promptRequestCount += 1;
+        if (promptRequestCount === 2) {
+          return {
+            ok: true,
+            json: async () => ({
+              runId: "run-456",
+              status: "completed",
+              selectedAction: null,
+              toolStatus: "none",
+              repaired: false,
+              responseText: "It means the task is now tracked and ready for follow-up.",
+              toolResult: null,
+              links: { taskId: null, taskEventId: null, outboundMessageId: null, memoryDocumentId: null, memorySlug: null, clarificationRequestId: null },
+              failureMessage: null
+            })
+          };
+        }
         return {
           ok: true,
           json: async () => ({
@@ -936,6 +954,7 @@ describe("home view", () => {
             selectedAction: "create_task",
             toolStatus: "accepted",
             repaired: false,
+            responseText: null,
             toolResult: { task_id: "task-2" },
             links: { taskId: "task-2", taskEventId: null, outboundMessageId: null, memoryDocumentId: null, memorySlug: null, clarificationRequestId: null },
             failureMessage: null
@@ -1015,6 +1034,20 @@ describe("home view", () => {
     expect(chatPanel.text()).not.toContain("create_task");
     expect(chatPanel.text()).not.toContain("Selected action");
     expect(chatPanel.text()).not.toContain("Tool result");
+
+    await wrapper.get("#chat-agent-prompt").setValue("What does that mean?");
+    await wrapper.get("#chat-agent-prompt").trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    const promptCalls = fetchMock.mock.calls.filter((call) => String(call[0]).includes("/agent/prompts"));
+    expect(promptCalls).toHaveLength(2);
+    const followUpBody = JSON.parse(String((promptCalls[1]?.[1] as RequestInit).body));
+    expect(followUpBody).toMatchObject({ mode: "normal", contextTaskId: null });
+    expect(followUpBody.prompt).toContain("Recent browser chat context:");
+    expect(followUpBody.prompt).toContain("Owner: Create a packing task.");
+    expect(followUpBody.prompt).toContain("Agent: Created task: Created task");
+    expect(followUpBody.prompt).toContain("Owner's new chat message:\nWhat does that mean?");
+    expect(wrapper.get("#panel-chat").text()).toContain("It means the task is now tracked and ready for follow-up.");
 
     await wrapper.get("#panel-chat .chat-heading button").trigger("click");
     await flushPromises();

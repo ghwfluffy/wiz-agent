@@ -348,7 +348,10 @@ but the model still receives only bounded context and can act only through the
 same validated tool/MCP path. If a context task is supplied, the agent run links
 to that task and task events record the prompt/tool outcomes. The endpoint
 returns the run id, selected action, tool status/result, and host-derived links
-to created or updated task, outbox, memory, or clarification records.
+to created or updated task, outbox, memory, or clarification records. When the
+model answers without selecting a tool, the endpoint returns the plain answer as
+`responseText` so conversational UI can show the answer instead of a generic
+completion status.
 
 Owner messages must not be pre-written to long-term memory by regex or other
 host heuristics. Durable owner facts, preferences, and schedule rationale should

@@ -2069,6 +2069,42 @@ describe("agent task execution", () => {
     });
   });
 
+  it("returns plain model text for web prompts that do not select a tool", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({
+      settings,
+      modelClient: new MockModelClient({
+        tools: ["June Workout means you are tracking workout progress during June."]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: "What does June Workout mean?",
+        mode: "normal"
+      })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      selectedAction: null,
+      toolStatus: "none",
+      responseText: "June Workout means you are tracking workout progress during June.",
+      toolResult: null
+    });
+  });
+
   it("requires auth before web prompts can reach decision tools", async () => {
     const app = buildApp({
       settings: loadSettings({

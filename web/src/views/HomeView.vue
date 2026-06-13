@@ -520,6 +520,10 @@ function agentPromptReply(result: AgentPromptResponse): string {
     return `I could not complete that: ${result.failureMessage}`;
   }
 
+  if (result.responseText?.trim()) {
+    return result.responseText.trim();
+  }
+
   const toolResult = detailRecord(result.toolResult);
   if (!toolResult) {
     return result.status === "completed" ? "Done." : `The agent run finished with status ${result.status}.`;
@@ -551,6 +555,25 @@ function agentPromptReply(result: AgentPromptResponse): string {
 function nextChatMessageId(role: ChatMessage["role"]): string {
   chatMessageSequence += 1;
   return `${role}-${chatMessageSequence}`;
+}
+
+function chatPromptWithContext(nextPrompt: string): string {
+  const recentMessages = chatMessages.value.slice(-12);
+  if (recentMessages.length === 0) {
+    return nextPrompt;
+  }
+  const transcript = recentMessages
+    .map((message) => `${message.role === "user" ? "Owner" : "Agent"}: ${message.text}`)
+    .join("\n\n");
+  return [
+    "Recent browser chat context:",
+    transcript,
+    "",
+    "Owner's new chat message:",
+    nextPrompt,
+    "",
+    "Answer the new chat message in context. If the owner refers to prior goals, app data, or an earlier answer, use the recent browser chat context instead of repeating the previous lookup unless fresh data is necessary."
+  ].join("\n");
 }
 
 function promptContextSummary(): string {
@@ -787,6 +810,14 @@ function clearChat(): void {
   promptError.value = null;
 }
 
+function handleChatKeydown(event: KeyboardEvent): void {
+  if (event.key !== "Enter" || event.shiftKey || event.isComposing) {
+    return;
+  }
+  event.preventDefault();
+  void submitAgentPrompt("chat");
+}
+
 async function submitAgentPrompt(source: "overview" | "chat" = "overview"): Promise<void> {
   const prompt = source === "chat" ? chatDraft.value.trim() : promptForm.prompt.trim();
   if (!prompt) {
@@ -795,7 +826,7 @@ async function submitAgentPrompt(source: "overview" | "chat" = "overview"): Prom
   sendingPrompt.value = true;
   promptError.value = null;
   promptResult.value = null;
-  const requestPrompt = source === "chat" ? prompt : promptContextSummary();
+  const requestPrompt = source === "chat" ? chatPromptWithContext(prompt) : promptContextSummary();
   if (source === "chat") {
     chatMessages.value.push({
       id: nextChatMessageId("user"),
@@ -1857,6 +1888,7 @@ onUnmounted(() => {
               required
               rows="3"
               placeholder="Message the agent"
+              @keydown="handleChatKeydown"
             />
             <div class="chat-composer__actions">
               <button class="cds--btn cds--btn--primary" type="submit" :disabled="sendingPrompt || !chatDraft.trim()">

@@ -224,6 +224,7 @@ export type AgentPromptResponse = {
   selectedAction: string | null;
   toolStatus: string;
   repaired: boolean;
+  responseText: string | null;
   toolResult: Record<string, unknown> | null;
   links: {
     taskId: string | null;

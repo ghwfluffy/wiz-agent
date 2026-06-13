@@ -31,6 +31,7 @@ export type AgentTaskResult = {
   toolStatus: "accepted" | "rejected" | "none";
   repaired: boolean;
   toolName?: string;
+  responseText?: string;
   sideEffect?: "none" | "local_persistence" | "cross_app_api";
   executionResult?: Record<string, unknown>;
   failureMessage?: string;
@@ -105,7 +106,8 @@ export async function runAgentTask(options: {
         status: "completed",
         runId: run.id,
         toolStatus: "none",
-        repaired: false
+        repaired: false,
+        responseText: modelText(modelOutput)
       };
     }
 
@@ -256,4 +258,21 @@ export async function runAgentTask(options: {
       failureMessage: message
     };
   }
+}
+
+function modelText(output: unknown): string | undefined {
+  if (typeof output === "string" && output.trim()) {
+    return output.trim();
+  }
+  if (typeof output !== "object" || output === null || Array.isArray(output)) {
+    return undefined;
+  }
+  const record = output as Record<string, unknown>;
+  for (const key of ["response", "message", "summary", "text"]) {
+    const value = record[key];
+    if (typeof value === "string" && value.trim()) {
+      return value.trim();
+    }
+  }
+  return undefined;
 }

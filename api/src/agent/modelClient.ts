@@ -106,7 +106,7 @@ export class OpenAIModelClient implements AgentModelClient {
         arguments: parseJson(functionCall.arguments)
       };
     }
-    return parseJsonOutput(response);
+    return parseJsonOrTextOutput(response);
   }
 
   async repairToolArguments(request: RepairToolArgumentsRequest): Promise<unknown> {
@@ -216,6 +216,35 @@ function parseJsonOutput(response: Record<string, unknown>): unknown {
   return {};
 }
 
+function parseJsonOrTextOutput(response: Record<string, unknown>): unknown {
+  if (typeof response.output_text === "string" && response.output_text.trim() !== "") {
+    return parseJsonOrText(response.output_text);
+  }
+  const output = response.output;
+  if (!Array.isArray(output)) {
+    return {};
+  }
+  for (const item of output) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const content = (item as Record<string, unknown>).content;
+    if (!Array.isArray(content)) {
+      continue;
+    }
+    for (const contentItem of content) {
+      if (!contentItem || typeof contentItem !== "object") {
+        continue;
+      }
+      const text = (contentItem as Record<string, unknown>).text;
+      if (typeof text === "string" && text.trim() !== "") {
+        return parseJsonOrText(text);
+      }
+    }
+  }
+  return {};
+}
+
 function parseJson(value: unknown): unknown {
   if (typeof value !== "string") {
     return value;
@@ -224,5 +253,16 @@ function parseJson(value: unknown): unknown {
     return JSON.parse(value);
   } catch {
     return {};
+  }
+}
+
+function parseJsonOrText(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value.trim();
   }
 }

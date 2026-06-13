@@ -200,13 +200,14 @@ without a linked notification expose a Notify owner action that queues the same
 deterministic review notification after owner contact settings are configured.
 
 The operations UI is the owner console for direct interaction and inspection.
-The Overview and Chat tabs expose a web prompt form that posts only to
-`POST /api/v1/agent/prompts`. The browser can select task, memory-path, and
-recent assistant-mailbox message context, but selected memory/message context is
-included as bounded prompt text; browser-created MCP sessions remain read-only
-memory/search sessions and are not minted for decision tools. Direct task,
-memory, outbox, or integration actions still come only from the authenticated
-owner-command runtime and its server-owned MCP session.
+The Overview tab exposes an operator prompt form that posts only to
+`POST /api/v1/agent/prompts` and can include task, memory-path, and recent
+assistant-mailbox message context as bounded prompt text. The Chat tab uses the
+same endpoint as a conversation surface, but sends only bounded recent browser
+chat turns plus the new owner message. Browser-created MCP sessions remain
+read-only memory/search sessions and are not minted for decision tools. Direct
+task, memory, outbox, or integration actions still come only from the
+authenticated owner-command runtime and its server-owned MCP session.
 
 The operations UI also has a Memory tab. It uses the markdown knowledge
 filesystem routes to show the standard root folders (`/personal`,

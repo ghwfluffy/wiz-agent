@@ -1181,6 +1181,7 @@ export function buildApp(options: AppOptions = {}): Hono {
       selectedAction: result.toolName ?? null,
       toolStatus: result.toolStatus,
       repaired: result.repaired,
+      responseText: result.responseText ?? null,
       toolResult: result.executionResult ?? null,
       links,
       failureMessage: result.failureMessage ?? null

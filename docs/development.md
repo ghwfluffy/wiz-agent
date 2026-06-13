@@ -111,8 +111,12 @@ through `buildApp` instead of relying on live OpenAI credentials.
 
 The web console exposes this endpoint from Overview and Chat. Task context is
 sent as `contextTaskId`; selected memory paths and recent assistant-mailbox
-messages are folded into the prompt text as operator-selected context. Do not
-add browser-side access to write/action MCP tools for this workflow.
+messages are folded into Overview prompt text as operator-selected context. The
+Chat tab remains a conversational surface and folds only bounded recent browser
+chat turns into follow-up prompt text. If the model answers a web prompt without
+selecting a tool, the response includes `responseText` for the UI to display
+directly. Do not add browser-side access to write/action MCP tools for this
+workflow.
 
 Owner corrections should be captured through `record_owner_feedback` when the
 owner corrects behavior, wording, timing, memory categorization, task/tool/app

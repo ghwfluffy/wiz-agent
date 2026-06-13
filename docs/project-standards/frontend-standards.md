@@ -45,10 +45,13 @@ Frontend code must not:
 ## Agent Chat
 
 The Chat tab should behave like a normal conversation surface: one message
-composer, one chronological message thread, and a clear-chat action. Keep run
-ids, selected tool names, raw tool JSON, prompt modes, task selectors, memory
-selectors, and other debugging or operator controls out of this screen. Put
-advanced prompt controls in admin/overview/operator surfaces instead.
+composer, Enter-to-send with Shift+Enter for newlines, one chronological message
+thread, and a clear-chat action. Follow-up messages must include bounded recent
+browser chat context in the submitted prompt so pronouns and references to prior
+answers remain understandable. Keep run ids, selected tool names, raw tool JSON,
+prompt modes, task selectors, memory selectors, and other debugging or operator
+controls out of this screen. Put advanced prompt controls in
+admin/overview/operator surfaces instead.
 
 ## API Error Feedback
 
