@@ -43,10 +43,10 @@ central `is_admin` userinfo claim controls the local admin flag.
 The root omnisite repository owns production hosts, subpaths, redirect URIs, and
 OAuth client registration.
 
-The Vue shell uses the shared `vendor/federated-banner` package in omnisite
-mode. The banner receives app-switcher base paths from root-owned frontend build
-configuration and links shared identity management back to central Account
-Settings.
+The Vue shell uses the shared `vendor/federated-banner` package in both auth
+modes. Standalone mode passes no federated app links; omnisite OAuth mode passes
+app-switcher base paths from root-owned frontend build configuration and links
+shared identity management back to central Account Settings.
 
 For live operational seeding, the target central OAuth user must already have a
 matching local agent user and `central-oauth` identity. A normal OAuth sign-in

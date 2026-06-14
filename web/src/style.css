@@ -15,11 +15,7 @@ body {
 .home-view {
   max-width: 1180px;
   margin: 0 auto;
-  padding: 48px 24px;
-}
-
-.home-header {
-  margin-bottom: 32px;
+  padding: 24px;
 }
 
 .eyebrow,
@@ -68,13 +64,6 @@ h3 {
   display: grid;
   gap: 24px;
   padding: 24px;
-}
-
-.dashboard-header {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 24px;
-  align-items: end;
 }
 
 .header-actions,
@@ -723,7 +712,6 @@ h3 {
 }
 
 @media (max-width: 860px) {
-  .dashboard-header,
   .metric-grid,
   .form-grid,
   .prompt-form,

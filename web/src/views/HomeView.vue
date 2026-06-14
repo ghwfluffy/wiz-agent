@@ -40,6 +40,7 @@ const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 const authMode = import.meta.env.VITE_AUTH_MODE || "standalone";
+const usesCentralAuth = authMode === "oauth";
 const centralAuthBaseUrl = import.meta.env.VITE_AUTH_BASE_URL || "/auth";
 const signInLabel = computed(() => (authMode === "standalone" ? "Sign in" : "Continue with central sign-in"));
 const authPanelMessage = computed(() => {
@@ -73,15 +74,21 @@ type ChatMessage = {
   status?: "error";
 };
 const tabIds = new Set<TabId>(tabs.map((tab) => tab.id));
-const bannerSites = computed(() =>
-  createGhwizFederatedSites({
+const bannerSites = computed(() => {
+  if (!usesCentralAuth) {
+    return [];
+  }
+  return createGhwizFederatedSites({
     authBaseUrl: centralAuthBaseUrl,
     goalsBaseUrl: import.meta.env.VITE_GOALS_BASE_URL,
     moneyPlannerBaseUrl: import.meta.env.VITE_MONEY_PLANNER_BASE_URL,
     agentBaseUrl: import.meta.env.VITE_AGENT_BASE_URL,
     apartmentGateBaseUrl: import.meta.env.VITE_APARTMENT_GATE_BASE_URL,
     fileShareBaseUrl: import.meta.env.VITE_FILE_SHARE_BASE_URL
-  })
+  });
+});
+const bannerAccountSettingsUrl = computed(() =>
+  usesCentralAuth ? accountSettingsUrl(centralAuthBaseUrl) : "#"
 );
 const bannerUser = computed<FederatedBannerUser | null>(() => {
   if (!auth.user) {
@@ -1467,11 +1474,18 @@ onUnmounted(() => {
 </script>
 
 <template>
+  <FederatedBanner
+    v-if="auth.authenticated"
+    app-name="AI Assistant"
+    :app-url="normalizedBasePath() || '/'"
+    current-app-slug="agent"
+    :account-settings-url="bannerAccountSettingsUrl"
+    :sites="bannerSites"
+    :user="bannerUser"
+    @sign-out="auth.signOut"
+  />
+
   <section class="home-view">
-    <header class="home-header">
-      <p class="eyebrow">AI Assistant</p>
-      <h1>Tasks, messages, and agent operations</h1>
-    </header>
 
     <div v-if="auth.error" class="cds--inline-notification cds--inline-notification--error" role="alert">
       <div class="cds--inline-notification__details">
@@ -1496,27 +1510,6 @@ onUnmounted(() => {
     </section>
 
     <section v-else class="dashboard" aria-label="Agent dashboard">
-      <FederatedBanner
-        app-name="AI Assistant"
-        :app-url="normalizedBasePath() || '/'"
-        current-app-slug="agent"
-        :account-settings-url="accountSettingsUrl(centralAuthBaseUrl)"
-        :sites="bannerSites"
-        :user="bannerUser"
-        @sign-out="auth.signOut"
-      />
-      <header class="dashboard-header">
-        <div>
-          <p class="label">Signed in as</p>
-          <p class="value">{{ auth.user?.displayName }}</p>
-        </div>
-        <div class="header-actions">
-          <button class="cds--btn cds--btn--secondary" type="button" :disabled="saving" @click="loadDashboard">
-            Refresh
-          </button>
-        </div>
-      </header>
-
       <div v-if="dashboardError" class="cds--inline-notification cds--inline-notification--error" role="alert">
         <div class="cds--inline-notification__details">
           <div class="cds--inline-notification__text-wrapper">
