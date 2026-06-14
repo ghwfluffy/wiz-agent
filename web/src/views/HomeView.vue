@@ -1,4 +1,10 @@
 <script setup lang="ts">
+import {
+  FederatedBanner,
+  accountSettingsUrl,
+  createGhwizFederatedSites,
+  type FederatedBannerUser
+} from "@ghwiz/federated-banner";
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
@@ -27,13 +33,14 @@ import {
   type Task,
   type TaskEvent
 } from "../lib/api";
-import { apiUrl } from "../lib/basePath";
+import { apiUrl, normalizedBasePath } from "../lib/basePath";
 import { useAuthStore } from "../stores/auth";
 
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 const authMode = import.meta.env.VITE_AUTH_MODE || "standalone";
+const centralAuthBaseUrl = import.meta.env.VITE_AUTH_BASE_URL || "/auth";
 const signInLabel = computed(() => (authMode === "standalone" ? "Sign in" : "Continue with central sign-in"));
 const authPanelMessage = computed(() => {
   if (authMode === "standalone") {
@@ -66,6 +73,26 @@ type ChatMessage = {
   status?: "error";
 };
 const tabIds = new Set<TabId>(tabs.map((tab) => tab.id));
+const bannerSites = computed(() =>
+  createGhwizFederatedSites({
+    authBaseUrl: centralAuthBaseUrl,
+    goalsBaseUrl: import.meta.env.VITE_GOALS_BASE_URL,
+    moneyPlannerBaseUrl: import.meta.env.VITE_MONEY_PLANNER_BASE_URL,
+    agentBaseUrl: import.meta.env.VITE_AGENT_BASE_URL,
+    apartmentGateBaseUrl: import.meta.env.VITE_APARTMENT_GATE_BASE_URL,
+    fileShareBaseUrl: import.meta.env.VITE_FILE_SHARE_BASE_URL
+  })
+);
+const bannerUser = computed<FederatedBannerUser | null>(() => {
+  if (!auth.user) {
+    return null;
+  }
+  return {
+    displayName: auth.user.displayName,
+    username: auth.user.email,
+    isAdmin: auth.user.isAdmin
+  };
+});
 const dashboardPollIntervalMs = 10_000;
 let dashboardPollHandle: number | null = null;
 let activeTabRefreshInFlight = false;
@@ -1469,6 +1496,15 @@ onUnmounted(() => {
     </section>
 
     <section v-else class="dashboard" aria-label="Agent dashboard">
+      <FederatedBanner
+        app-name="AI Assistant"
+        :app-url="normalizedBasePath() || '/'"
+        current-app-slug="agent"
+        :account-settings-url="accountSettingsUrl(centralAuthBaseUrl)"
+        :sites="bannerSites"
+        :user="bannerUser"
+        @sign-out="auth.signOut"
+      />
       <header class="dashboard-header">
         <div>
           <p class="label">Signed in as</p>
@@ -1477,9 +1513,6 @@ onUnmounted(() => {
         <div class="header-actions">
           <button class="cds--btn cds--btn--secondary" type="button" :disabled="saving" @click="loadDashboard">
             Refresh
-          </button>
-          <button class="cds--btn cds--btn--secondary" type="button" :disabled="auth.loading" @click="auth.signOut">
-            Sign out
           </button>
         </div>
       </header>

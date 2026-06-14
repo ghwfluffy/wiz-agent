@@ -27,7 +27,7 @@ export const IntegrationActionIds = [
 ] as const;
 
 export type IntegrationActionId = typeof IntegrationActionIds[number];
-export const IntegrationAppIds = ["goals", "budget", "apartment_gate"] as const;
+export const IntegrationAppIds = ["goals", "budget", "federated_services", "apartment_gate"] as const;
 export type IntegrationAppId = typeof IntegrationAppIds[number];
 export type IntegrationAccess = "read" | "write";
 export type IntegrationRisk = "low" | "medium" | "high";
@@ -512,6 +512,21 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
       "Summarize financial data narrowly and never include raw credentials, tokens, or unrelated user data in model context."
     ],
     actions: budgetActions
+  },
+  {
+    id: "federated_services",
+    displayName: "Federated Services",
+    appPurpose: "Central authenticated launcher, account settings editor, app switcher source, registration-code management, user administration, and OAuth service administration.",
+    userValue: "Lets the owner manage shared identity fields and jump between enabled federated apps after central sign-in.",
+    dataSensitivity: "highly_private",
+    baseUrlSetting: "none",
+    authRequirement: "Human interactive access only through the central auth app; no agent API or delegated token is available.",
+    modelGuidance: [
+      "Use Federated Services as directory knowledge when the owner asks where to manage account settings, avatar, password, email, phone, timezone, users, registration codes, or app launch links.",
+      "The public root path is intentionally not an app directory and should not be described as exposing or advertising sub-apps.",
+      "Do not claim the agent can edit shared account settings unless a dedicated, scoped integration API is added later."
+    ],
+    actions: []
   },
   {
     id: "apartment_gate",

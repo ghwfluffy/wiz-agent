@@ -149,9 +149,11 @@ describe("app capability registry", () => {
     const apps = listAppCapabilities();
     const context = buildCapabilityContext();
 
-    expect(apps.map((app) => app.id)).toEqual(["goals", "budget", "apartment_gate"]);
+    expect(apps.map((app) => app.id)).toEqual(["goals", "budget", "federated_services", "apartment_gate"]);
     expect(context).toContain("Personal goal tracking");
     expect(context).toContain("Personal finance planning");
+    expect(context).toContain("Central authenticated launcher");
+    expect(context).toContain("public root path is intentionally not an app directory");
     expect(context).toContain("Federated-login protected mobile web app");
     expect(context).toContain("goals.record_metric_entry");
     expect(context).toContain("budget.get_net_worth_forecast");
