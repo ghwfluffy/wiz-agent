@@ -183,6 +183,7 @@ export async function runAgentTask(options: {
         context: options.context,
         store: options.store,
         runId: run.id,
+        taskId: options.request.taskId ?? null,
         toolName: validated.toolName,
         args: validated.arguments,
         settings: options.settings,

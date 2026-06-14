@@ -18,6 +18,7 @@ import { GuardrailExceededError, guardrailResult } from "../security/safetyPolic
 export type McpAppOptions = {
   settings?: Settings;
   store?: AgentStore;
+  taskId?: string | null;
   embeddings?: EmbeddingClient;
   qdrant?: QdrantClient;
   integrationTokenProvider?: IntegrationTokenProvider;
@@ -126,6 +127,7 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
       return context.json({ error: { code: "unknown_tool", message: "Unknown MCP tool." } }, 404);
     }
     const runId = context.req.header("x-agent-run-id") ?? null;
+    const taskId = context.req.header("x-agent-task-id") ?? options.taskId ?? null;
     const authContext = await store.resolveAgentMcpSession(bearerToken(context.req.header("authorization")), runId);
     if (!authContext) {
       return context.json({ error: { code: "mcp_unauthorized", message: "Valid agent MCP session required." } }, 401);
@@ -152,6 +154,7 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
           context: authContext,
           store,
           runId,
+          taskId,
           settings,
           integrationTokenProvider: options.integrationTokenProvider,
           fetchImpl: options.fetchImpl,

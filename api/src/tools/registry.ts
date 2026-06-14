@@ -12,6 +12,7 @@ export type ToolExecutionContext = {
   context: RequestContext;
   store: AgentStore;
   runId?: string | null;
+  taskId?: string | null;
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;

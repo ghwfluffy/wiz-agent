@@ -750,8 +750,16 @@ describe("agent task execution", () => {
           expect.objectContaining({
             id: "apartment_gate",
             display_name: "Apartment Gate",
-            action_count: 0,
-            actions: []
+            action_count: 1,
+            base_url_setting: "APARTMENT_GATE_API_BASE_URL",
+            actions: [
+              expect.objectContaining({
+                id: "apartment_gate.open_right_gate",
+                access: "write",
+                risk: "high",
+                method: "POST"
+              })
+            ]
           })
         ]
       }
@@ -1943,23 +1951,23 @@ describe("agent task execution", () => {
 
     expect(result).toMatchObject({
       status: "completed",
-      toolName: "propose_outbound_message"
+      toolName: "propose_outbound_message",
+      executionResult: expect.objectContaining({
+        status: "pending",
+        approval_required: false,
+        destination: "inbound_owner_message"
+      })
     });
     const outbox = await store.listOutboundMessages(context);
     expect(outbox).toEqual([
       expect.objectContaining({
         channel: "sms",
-        status: "requires_approval",
+        status: "pending",
         toAddr: "owner-sms@example.test",
         bodyText: "Yes, I am online."
       })
     ]);
-    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([
-      expect.objectContaining({
-        actionType: "send_outbound_message",
-        riskLevel: "high"
-      })
-    ]);
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
   });
 
   it("rejects model-selected outbound recipients", async () => {

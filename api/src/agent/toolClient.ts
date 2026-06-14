@@ -12,6 +12,7 @@ export type AgentToolClientExecuteInput = {
   context: RequestContext;
   store: AgentStore;
   runId: string;
+  taskId?: string | null;
   toolName: ToolName;
   args: Record<string, unknown>;
   settings?: Settings;
@@ -30,6 +31,7 @@ export class LocalToolClient implements AgentToolClient {
       context: input.context,
       store: input.store,
       runId: input.runId,
+      taskId: input.taskId ?? null,
       toolName: input.toolName,
       args: input.args,
       settings: input.settings,
@@ -84,18 +86,23 @@ export class McpToolClient implements AgentToolClient {
 
   private async request(input: AgentToolClientExecuteInput, token: string): Promise<Response> {
     const path = `/mcp/v1/tools/${input.toolName}/call`;
+    const headers: Record<string, string> = {
+      authorization: `Bearer ${token}`,
+      "x-agent-run-id": input.runId,
+      "content-type": "application/json"
+    };
+    if (input.taskId) {
+      headers["x-agent-task-id"] = input.taskId;
+    }
     const init = {
       method: "POST",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "x-agent-run-id": input.runId,
-        "content-type": "application/json"
-      },
+      headers,
       body: JSON.stringify(input.args)
     };
     const app = this.app ?? buildMcpApp({
       settings: input.settings,
       store: input.store,
+      taskId: input.taskId ?? null,
       integrationTokenProvider: input.integrationTokenProvider,
       fetchImpl: input.fetchImpl,
       replyToMessage: input.replyToMessage

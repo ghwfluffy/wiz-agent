@@ -121,6 +121,7 @@ export async function executeToolCall(options: {
   context: RequestContext;
   store: AgentStore;
   runId?: string | null;
+  taskId?: string | null;
   toolName: ToolName;
   args: Record<string, unknown>;
   settings?: Settings;
@@ -1118,6 +1119,31 @@ export async function executeToolCall(options: {
         settings: options.settings,
         source: "propose_outbound_message"
       });
+      const requiresApproval = await shouldRequireOutboundApproval({
+        context: options.context,
+        store: options.store,
+        taskId: options.taskId ?? null,
+        approvalRequired: options.args.approvalRequired
+      });
+      if (!requiresApproval) {
+        const message = await options.store.queueOutboundMessage(options.context, {
+          channel: destination.channel,
+          status: "pending",
+          toAddr: destination.toAddr,
+          subject: typeof options.args.subject === "string" ? options.args.subject : null,
+          bodyText: String(options.args.body)
+        });
+        return {
+          executed: true,
+          sideEffect: "local_persistence",
+          result: {
+            outbound_message_id: message.id,
+            status: message.status,
+            approval_required: false,
+            destination: destination.source
+          }
+        };
+      }
       const { approval, outbound } = await createOutboundApproval({
         context: options.context,
         store: options.store,
@@ -1274,6 +1300,51 @@ export async function executeToolCall(options: {
           }
         };
       }
+      if (
+        actionId === "apartment_gate.open_right_gate" &&
+        options.args.approvalRequired !== true &&
+        options.replyToMessage
+      ) {
+        if (!options.settings || !options.integrationTokenProvider) {
+          return {
+            executed: false,
+            sideEffect: "none",
+            result: {
+              reason: "integration_not_configured",
+              approval_required: false,
+              action_id: actionId
+            }
+          };
+        }
+        const result = await callIntegrationActionApi({
+          settings: options.settings,
+          context: options.context,
+          actionId,
+          pathParams: typeof options.args.pathParams === "object" && options.args.pathParams !== null
+            ? options.args.pathParams as Record<string, string>
+            : undefined,
+          query: typeof options.args.query === "object" && options.args.query !== null
+            ? options.args.query as Record<string, string | number | boolean>
+            : undefined,
+          body: options.args.body,
+          tokenProvider: options.integrationTokenProvider,
+          fetchImpl: options.fetchImpl
+        });
+        return {
+          executed: result.ok,
+          sideEffect: result.ok ? "cross_app_api" : "none",
+          result: result.ok ? {
+            status: result.status,
+            data: result.data,
+            approval_required: false,
+            action_id: actionId
+          } : {
+            reason: result.reason,
+            approval_required: false,
+            action_id: actionId
+          }
+        };
+      }
       const approval = await createCrossAppApproval({
         context: options.context,
         store: options.store,
@@ -1397,4 +1468,38 @@ async function resolveOwnerReplyDestination(options: {
     return { channel: "email", toAddr: email, source: "owner-contact" };
   }
   return undefined;
+}
+
+const APPROVAL_GATED_OUTBOUND_TASK_MARKERS = [
+  "newsletter interest",
+  "newsletter interest check",
+  "preference-aware daily interest check",
+  "assistant self-review",
+  "memory quality review",
+  "autonomous agent wake review"
+];
+
+async function shouldRequireOutboundApproval(options: {
+  context: RequestContext;
+  store: AgentStore;
+  taskId?: string | null;
+  approvalRequired: unknown;
+}): Promise<boolean> {
+  if (options.approvalRequired === true) {
+    return true;
+  }
+  if (!options.taskId) {
+    return false;
+  }
+  const task = await options.store.getTask(options.context, options.taskId);
+  if (!task) {
+    return false;
+  }
+  const taskText = [
+    task.title,
+    task.prompt,
+    task.scheduleRationale,
+    task.recurrencePolicy
+  ].filter((value): value is string => typeof value === "string").join("\n").toLowerCase();
+  return APPROVAL_GATED_OUTBOUND_TASK_MARKERS.some((marker) => taskText.includes(marker));
 }

@@ -212,17 +212,27 @@ function entryForToolCall(toolCall: ToolCallRecord): DecisionEntry | null {
             : `tool-call:${toolCall.id}`;
 
   switch (toolCall.toolName) {
-    case "propose_outbound_message":
+    case "propose_outbound_message": {
+      const requiresApproval = result.approval_required === true;
       return {
         markerId: markerBasis,
         trigger: "tool:propose_outbound_message",
-        action: "queued owner-visible outbound proposal for approval",
+        action: requiresApproval
+          ? "queued owner-visible outbound proposal for approval"
+          : "queued owner-visible outbound message for delivery",
         alternative: "stay quiet or record an observation",
         contextSummary: compact(args.body, 500) ?? "Outbound proposal body was unavailable.",
-        rationale: stringValue(args, "rationale") ?? stringValue(args, "intent") ?? "Model selected an owner-visible message; host queued approval instead of sending.",
+        rationale: stringValue(args, "rationale") ?? stringValue(args, "intent") ?? (
+          requiresApproval
+            ? "Model selected an owner-visible message; host queued approval instead of sending."
+            : "Model selected an owner-visible reply; host resolved the owner destination and queued delivery."
+        ),
         links,
-        sideEffectStatus: `approval_required:${stringValue(result, "status") ?? "queued"}`
+        sideEffectStatus: requiresApproval
+          ? `approval_required:${stringValue(result, "status") ?? "queued"}`
+          : `delivery:${stringValue(result, "status") ?? "pending"}`
       };
+    }
     case "request_clarification":
     case "ask_owner_clarification":
       return {

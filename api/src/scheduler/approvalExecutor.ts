@@ -65,9 +65,6 @@ function parseCrossAppApprovalPayload(approval: ApprovalRecord): CrossAppApprova
   if (action.access !== "write") {
     return { error: "integration_action_not_write" };
   }
-  if (action.app === "apartment_gate") {
-    return { error: "integration_has_no_agent_api" };
-  }
   const pathParams = stringMap(approval.proposedPayload.path_params);
   if (pathParams === undefined && approval.proposedPayload.path_params !== undefined) {
     return { error: "invalid_path_params" };

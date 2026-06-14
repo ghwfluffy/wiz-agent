@@ -5,7 +5,7 @@ import {
   type IntegrationActionId
 } from "../integrations/capabilityRegistry.js";
 
-export type IntegrationApp = "goals" | "budget";
+export type IntegrationApp = "goals" | "budget" | "apartment_gate";
 
 export type IntegrationTokenProvider = {
   tokenFor(context: RequestContext, app: IntegrationApp, scope: string): Promise<string | undefined>;
@@ -26,11 +26,17 @@ export type IntegrationActionRequest =
   | { ok: false; reason: string };
 
 export function integrationBaseUrl(settings: Settings, app: IntegrationApp): string {
-  return app === "goals" ? settings.goalsApiBaseUrl : settings.budgetApiBaseUrl;
+  if (app === "goals") {
+    return settings.goalsApiBaseUrl;
+  }
+  if (app === "budget") {
+    return settings.budgetApiBaseUrl;
+  }
+  return settings.apartmentGateApiBaseUrl;
 }
 
 function isApiBackedIntegrationApp(app: string): app is IntegrationApp {
-  return app === "goals" || app === "budget";
+  return app === "goals" || app === "budget" || app === "apartment_gate";
 }
 
 export function redactIntegrationData(value: unknown): unknown {

@@ -73,15 +73,17 @@ forecasts, bills, expenses, investments, transfers, or financial history.
 
 Apartment Gate is a federated-login protected mobile web app for opening
 apartment community gates and doors. Its credentials and rendered page source
-are highly private, and there is no agent-callable API.
+are highly private. It exposes one scoped agent API for the configured right
+gate.
 
-The registry includes Apartment Gate as directory knowledge only:
+The registry includes Apartment Gate with a single high-risk write action:
 
-- no integration actions are available;
-- `list_app_capabilities` may describe the app, but no MCP tool is exposed for
-  opening gates or doors;
-- the agent may explain where the app is and how access is protected;
-- the agent must not try to open physical access points;
+- `apartment_gate.open_right_gate` calls the app's internal agent endpoint with
+  a short-lived token scoped to that exact action;
+- direct execution is allowed only for current inbound owner-message context;
+- scheduled, stale, or explicit-approval contexts use the cross-app approval
+  queue;
+- the agent must not open any other physical access points;
 - the agent must not request, store, summarize, or expose Gatewise credentials,
   refresh tokens, API keys, or generated page source.
 

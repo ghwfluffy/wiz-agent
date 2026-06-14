@@ -227,27 +227,34 @@ Current migrated agent tools:
 - `record_schedule_rationale` stores durable schedule rationale and optional
   source/recurrence/review metadata on the task.
 - `propose_outbound_message` queues an outbound message rather than sending it.
+  Direct owner replies and owner-requested outbound messages with
+  `approvalRequired=false` queue a normal pending outbox record after host code
+  resolves the owner destination. Autonomous newsletter/self-review style
+  messages and explicit `approvalRequired=true` requests still create approval
+  records.
 - `ask_owner_clarification` records that the agent needs more owner input. For
   `urgency = now`, it queues an owner message through host-resolved owner
   contact or verified inbound reply context. For lower urgency, it creates a
   local clarification task for later owner-facing handling.
 - `record_observation` records the accepted observation in the tool-call result.
 
-High-risk tools return a host-owned approval state instead of executing the
-side effect. `propose_outbound_message` now creates an approval plus a linked
-`requires_approval` outbox record. `integration_action` creates a
-`cross_app_write_action` approval for write-style proposals and does not call
-registered apps directly from the model tool path. Approval records preserve
-the source run, source reference, proposed payload, risk level, summary,
-expiration, execution status, redacted execution result or failure, and audit
-trail.
+High-risk tools return a host-owned approval state unless a narrower
+host-enforced exception applies. `propose_outbound_message` may queue a pending
+outbox record for direct owner replies, but autonomous owner-visible outreach
+still creates an approval plus a linked `requires_approval` outbox record.
+`integration_action` creates a `cross_app_write_action` approval for write-style
+proposals by default. The configured Apartment Gate open-right-gate action is
+the exception: when it comes from current inbound owner-message context and the
+tool did not request approval, host code may execute the scoped integration API
+directly. Approval records preserve the source run, source reference, proposed
+payload, risk level, summary, expiration, execution status, redacted execution
+result or failure, and audit trail.
 
 Approved cross-app write approvals execute only from deterministic host code.
 The worker revalidates the stored action id against the capability registry at
-execution time, rejects read actions and directory-only apps, mints the scoped
-integration token server-side, calls through the integration gateway, and stores
-only redacted response data. The model never receives bearer tokens and cannot
-execute a high-risk registered app write directly.
+execution time, rejects read actions, mints the scoped integration token
+server-side, calls through the integration gateway, and stores only redacted
+response data. The model never receives bearer tokens.
 
 Reply tools receive any inbound owner-message context from host code, not from
 model arguments, so the model still cannot select recipients. Owner SMS/email

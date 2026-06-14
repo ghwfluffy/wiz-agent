@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MockModelClient } from "../src/agent/modelClient.js";
 import { runAgentTask } from "../src/agent/runAgentTask.js";
 import { LocalToolClient } from "../src/agent/toolClient.js";
@@ -43,7 +43,7 @@ async function testContext(env: Record<string, string> = {}): Promise<{
 }
 
 describe("approval and notification policy", () => {
-  it("creates an approval for high-risk outbound messages", async () => {
+  it("creates an approval when an outbound proposal requests approval", async () => {
     const { context, store } = await testContext();
     await store.upsertConnector(context, {
       kind: "owner-contact",
@@ -57,7 +57,7 @@ describe("approval and notification policy", () => {
       modelClient: new MockModelClient({
         tools: [{
           toolName: "propose_outbound_message",
-          arguments: { intent: "reply", body: "This needs approval." }
+          arguments: { intent: "reply", body: "This needs approval.", approvalRequired: true }
         }]
       }),
       request: { prompt: "Tell the owner this needs approval." },
@@ -118,6 +118,59 @@ describe("approval and notification policy", () => {
         proposedPayload: expect.objectContaining({ action_id: "goals.create_goal" })
       })
     ]);
+  });
+
+  it("executes the apartment gate open action for a current owner reply", async () => {
+    const { context, store, settings } = await testContext({
+      APARTMENT_GATE_API_BASE_URL: "https://gate.example.test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://gate.example.test/api/agent/open-right-gate");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer test-token");
+      return Response.json({ status: "opened", access_token: "redacted-by-gateway" }, { status: 202 });
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      settings,
+      integrationTokenProvider: { tokenFor: async () => "test-token" },
+      fetchImpl: fetchMock,
+      modelClient: new MockModelClient({
+        tools: [{
+          toolName: "integration_action",
+          arguments: {
+            actionId: "apartment_gate.open_right_gate",
+            pathParams: {},
+            query: {},
+            userIntentSummary: "Open the right gate for the owner."
+          }
+        }]
+      }),
+      request: {
+        prompt: "Owner asked to open the right gate.",
+        replyToMessage: {
+          fromAddr: "owner-sms@example.test",
+          source: "sms",
+          subject: null
+        }
+      },
+      toolClient: new LocalToolClient()
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.executionResult).toMatchObject({
+      status: 202,
+      approval_required: false,
+      action_id: "apartment_gate.open_right_gate",
+      data: {
+        status: "opened",
+        access_token: "[redacted]"
+      }
+    });
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
   });
 
   it("rejects read-only integration_action requests without queuing approval", async () => {
@@ -328,7 +381,58 @@ describe("approval and notification policy", () => {
     ]));
   });
 
-  it("fails closed for read, unknown, and directory-only cross-app approvals", async () => {
+  it("executes approved apartment gate writes with a scoped signed token", async () => {
+    const { context, store, settings } = await testContext({
+      DEV_USER_ID: "oauth:central-oauth:owner-subject",
+      APARTMENT_GATE_API_BASE_URL: "https://gate.example.test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const approval = await store.createApproval(context, {
+      actionType: "cross_app_write_action",
+      proposedPayload: {
+        action_id: "apartment_gate.open_right_gate",
+        path_params: {},
+        query: {},
+        body: null
+      },
+      riskLevel: "high",
+      summary: "Open right gate",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, approval.id, "approved", context.userId);
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://gate.example.test/api/agent/open-right-gate");
+      expect(init?.method).toBe("POST");
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      const payload = JSON.parse(Buffer.from(authorization.split(".")[1] ?? "", "base64url").toString("utf8"));
+      expect(payload).toMatchObject({
+        aud: "apartment_gate",
+        scope: "apartment_gate.open_right_gate",
+        sub: "owner-subject"
+      });
+      return Response.json({ status: "opened" }, { status: 202 });
+    });
+
+    const result = await executeApprovedCrossAppApproval({
+      context,
+      store,
+      settings,
+      approvalId: approval.id,
+      tokenProvider: new SignedIntegrationTokenProvider(settings),
+      fetchImpl: fetchMock
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      executionStatus: "succeeded",
+      executionResult: {
+        status: 202,
+        data: { status: "opened" }
+      }
+    });
+  });
+
+  it("fails closed for read and unknown cross-app approvals", async () => {
     const { context, store, settings } = await testContext({ GOALS_API_BASE_URL: "https://goals.example.test" });
     const cases = [
       { action_id: "goals.list_goals", error: "integration_action_not_write" },

@@ -396,9 +396,9 @@ sizes; and time out aggressively before article extraction or summarization.
 The agent understands other apps through the app capability registry in
 `api/src/integrations/capabilityRegistry.ts`. The registry currently covers
 Goals, Fluffynomics, and Apartment Gate. Goals and Fluffynomics expose
-agent-callable API actions; Apartment Gate is directory knowledge only and has
-no MCP tool for opening gates or doors. Cross-app calls go through a
-deterministic integration gateway:
+agent-callable API actions, and Apartment Gate exposes one scoped high-risk
+action for the configured right gate. Cross-app calls go through a deterministic
+integration gateway:
 
 - the model requests an allowed integration action;
 - the host chooses the target app and endpoint;
@@ -412,7 +412,8 @@ Cross-app requests include `x-agent-user-id` only. They do not include a tenant
 context header.
 
 Root production compose exposes other app APIs to the agent over internal
-app-specific aliases such as `goals_api` and `budget_api`.
+app-specific aliases such as `goals_api`, `budget_api`, and
+`apartment_gate_api`.
 
 The `list_app_capabilities` MCP tool is read-only and returns the registry
 contents without credentials. The `integration_action` MCP tool is the only
@@ -427,6 +428,11 @@ registered action ids internally. Read wrappers call app APIs through the
 integration gateway with scoped signed tokens. Write/delete wrappers queue
 `cross_app_write_action` approvals with the exact registered action id, path
 params, query, and body to execute after approval.
+
+The Apartment Gate open-right-gate action is allowed to execute directly only
+from current inbound owner-message context when the model leaves
+`approvalRequired=false`. Other write actions, stale/scheduled contexts, and
+explicit approval requests still use the cross-app approval queue.
 
 The registry is also a maintenance contract. When a future request adds or
 changes an omnisite app, app API, or major user-facing capability, update the
