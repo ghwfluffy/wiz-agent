@@ -2587,8 +2587,10 @@ onUnmounted(() => {
               <p class="metric-value">{{ jobBudgets.maxToolCallsPerRun ?? "set in admin" }}</p>
             </section>
             <section class="metric-card">
-              <p class="label">Runs/hour</p>
-              <p class="metric-value">{{ jobBudgets.maxAgentRunsPerUserPerHour ?? "default" }}</p>
+              <p class="label">Run burst</p>
+              <p class="metric-value">
+                {{ jobBudgets.maxAgentRunsPerUserPerBurstWindow !== undefined ? `${jobBudgets.maxAgentRunsPerUserPerBurstWindow}/${jobBudgets.agentRunBurstWindowSeconds ?? 600}s` : "default" }}
+              </p>
             </section>
             <section class="metric-card">
               <p class="label">Owner messages/day</p>

@@ -176,13 +176,15 @@ GET /api/v1/knowledge/files/%2Fassistant%2Fdecisions%2FYYYY-MM.md
 
 Runaway guardrails are configured through host settings and shown in the
 Workers tab / `GET /api/v1/jobs`. Defaults are intentionally conservative loop
-protection: 20 agent runs per user per hour, 10 scheduled agent runs per worker
-tick, 10 owner-visible outbound proposals per user per day, one outbound send
-per worker tick, five untrusted review notifications per sender per day, and 25
-newsletter documents per interest check. Local overrides use:
+protection: 60 agent runs per user per 600-second burst window, 10 scheduled
+agent runs per worker tick, 10 owner-visible outbound proposals per user per
+day, one outbound send per worker tick, five untrusted review notifications per
+sender per day, and 25 newsletter documents per interest check. Local overrides
+use:
 
 ```text
-AGENT_MAX_RUNS_PER_USER_PER_HOUR
+AGENT_MAX_RUNS_PER_USER_PER_BURST_WINDOW
+AGENT_RUN_BURST_WINDOW_SECONDS
 AGENT_MAX_AUTONOMOUS_RUNS_PER_WORKER_TICK
 AGENT_MAX_OWNER_VISIBLE_OUTBOUND_MESSAGES_PER_USER_PER_DAY
 AGENT_OUTBOUND_MESSAGES_PER_WORKER_TICK
@@ -192,9 +194,12 @@ AGENT_MAX_PROMPT_EXCERPT_CHARS
 AGENT_MAX_CONTEXT_EXCERPT_CHARS
 ```
 
+`AGENT_MAX_RUNS_PER_USER_PER_HOUR` remains a compatibility alias for the burst
+window limit, but new deployments should use the explicit burst-window names.
+
 Guardrail trips record `guardrail.exceeded` audit events with counts, limits,
-and non-secret reasons. They should be treated as operational safety events,
-not prompt-quality feedback.
+window seconds, and non-secret reasons. They should be treated as operational
+safety events, not prompt-quality feedback.
 
 Scheduled task intelligence is worker-owned. The worker maintains a daily
 newsletter interest check, an autonomous wake task that recurs roughly every

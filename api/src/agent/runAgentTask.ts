@@ -50,18 +50,19 @@ export async function runAgentTask(options: {
 }): Promise<AgentTaskResult> {
   const aiConfig = await options.store.getAiConfig();
   const safety = runtimeSafetyPolicy(options.settings, aiConfig);
-  const runWindowStart = new Date(Date.now() - 60 * 60 * 1000);
+  const runWindowStart = new Date(Date.now() - safety.agentRunBurstWindowSeconds * 1000);
   const recentRuns = await options.store.countAgentRunsSince(options.context, runWindowStart);
-  if (recentRuns >= safety.maxAgentRunsPerUserPerHour) {
-    const message = "Agent run hourly guardrail exceeded.";
+  if (recentRuns >= safety.maxAgentRunsPerUserPerBurstWindow) {
+    const message = "Agent run burst guardrail exceeded.";
     await recordGuardrailExceeded({
       store: options.store,
       context: options.context,
-      guardrail: "maxAgentRunsPerUserPerHour",
+      guardrail: "maxAgentRunsPerUserPerBurstWindow",
       entityType: "agent_run",
       details: {
         count: recentRuns,
-        limit: safety.maxAgentRunsPerUserPerHour,
+        limit: safety.maxAgentRunsPerUserPerBurstWindow,
+        window_seconds: safety.agentRunBurstWindowSeconds,
         window_start: runWindowStart.toISOString()
       }
     });

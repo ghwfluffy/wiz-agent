@@ -278,12 +278,13 @@ describe("agent task execution", () => {
     );
   });
 
-  it("blocks agent runs after the per-user hourly guardrail is reached", async () => {
+  it("blocks agent runs after the per-user burst guardrail is reached", async () => {
     const { context, store } = await testContext();
     const settings = loadSettings({
       APP_ENV: "test",
       AUTH_MODE: "standalone",
-      AGENT_MAX_RUNS_PER_USER_PER_HOUR: "1"
+      AGENT_MAX_RUNS_PER_USER_PER_BURST_WINDOW: "1",
+      AGENT_RUN_BURST_WINDOW_SECONDS: "300"
     });
     await store.createAgentRun(context, {
       taskId: null,
@@ -306,15 +307,16 @@ describe("agent task execution", () => {
     expect(result).toMatchObject({
       status: "failed",
       toolStatus: "none",
-      failureMessage: "Agent run hourly guardrail exceeded."
+      failureMessage: "Agent run burst guardrail exceeded."
     });
     await expect(store.listAgentRuns(context)).resolves.toHaveLength(1);
     await expect(store.listAudit(context, true)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
         action: "guardrail.exceeded",
         details: expect.objectContaining({
-          guardrail: "maxAgentRunsPerUserPerHour",
-          limit: 1
+          guardrail: "maxAgentRunsPerUserPerBurstWindow",
+          limit: 1,
+          window_seconds: 300
         })
       })
     ]));
@@ -324,7 +326,7 @@ describe("agent task execution", () => {
     const settings = loadSettings({
       APP_ENV: "test",
       AUTH_MODE: "standalone",
-      AGENT_MAX_RUNS_PER_USER_PER_HOUR: "1"
+      AGENT_MAX_RUNS_PER_USER_PER_BURST_WINDOW: "1"
     });
     const store = createMemoryStore();
     const app = buildApp({
@@ -367,7 +369,7 @@ describe("agent task execution", () => {
       status: "failed",
       selectedAction: null,
       toolStatus: "none",
-      failureMessage: "Agent run hourly guardrail exceeded."
+      failureMessage: "Agent run burst guardrail exceeded."
     });
   });
 

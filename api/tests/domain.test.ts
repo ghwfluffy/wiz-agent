@@ -682,7 +682,8 @@ describe("domain and user ownership APIs", () => {
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       budgets: expect.objectContaining({
-        maxAgentRunsPerUserPerHour: 20,
+        maxAgentRunsPerUserPerBurstWindow: 60,
+        agentRunBurstWindowSeconds: 600,
         maxAutonomousRunsPerWorkerTick: 10,
         maxToolCallsPerRun: 10,
         maxRuntimeSecPerRun: 120,

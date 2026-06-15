@@ -290,13 +290,13 @@ The repair payload must not include secrets or raw credential references.
 
 Runtime safety limits are host-owned loop protection, not model-tuning prompts.
 The named defaults live in `api/src/security/safetyPolicy.ts`, with local-mode
-environment overrides for operational caps such as runs per user per hour,
-autonomous runs per worker tick, owner-visible outbound messages per day,
-outbound sends per worker tick, untrusted sender-review notifications per day,
-newsletter documents considered per interest check, and prompt/context excerpt
-sizes. `admin_ai_config` still owns model ids, max tool calls per run, max
-runtime seconds, and repair attempts; the safety policy reads those values into
-the same budget surface.
+environment overrides for operational caps such as agent runs per user per
+short burst window, autonomous runs per worker tick, owner-visible outbound
+messages per day, outbound sends per worker tick, untrusted sender-review
+notifications per day, newsletter documents considered per interest check, and
+prompt/context excerpt sizes. `admin_ai_config` still owns model ids, max tool
+calls per run, max runtime seconds, and repair attempts; the safety policy reads
+those values into the same budget surface.
 
 When a guardrail trips, host code fails closed before creating the side effect,
 records `guardrail.exceeded` with a non-secret reason, and returns a structured

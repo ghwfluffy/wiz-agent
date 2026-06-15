@@ -117,7 +117,7 @@ Current tests cover:
   sections, memory provenance summaries, and compact empty-state behavior.
 - operational jobs visibility, budget exposure, RAG failure listing, and manual
   RAG retry audit.
-- runaway guardrails for hourly agent runs, per-run MCP/tool calls,
+- runaway guardrails for burst-window agent runs, per-run MCP/tool calls,
   owner-visible outbound proposal caps, bounded scheduled worker claims,
   non-secret guardrail audit details, and Jobs/Workers budget visibility.
 - tabbed Carbon dashboard rendering, URL-backed active tabs, and focused tab

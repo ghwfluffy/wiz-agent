@@ -28,12 +28,12 @@ The response includes:
 - API status and recent audit time.
 - Worker tick, task-runner, inbound mailbox, outbox, approval, MCP/tool, RAG
   index, and Qdrant collection rows.
-- Host-owned run budgets: max agent runs per user per hour, autonomous runs per
-  worker tick, max tool calls per run, max runtime seconds, repair attempts,
-  owner-visible outbound messages per user per day, outbound messages per worker
-  tick, untrusted review notifications per sender per day, newsletter documents
-  per interest check, prompt/context excerpt caps, RAG search result cap, and
-  browser MCP session TTL.
+- Host-owned run budgets: max agent runs per user per short burst window,
+  autonomous runs per worker tick, max tool calls per run, max runtime seconds,
+  repair attempts, owner-visible outbound messages per user per day, outbound
+  messages per worker tick, untrusted review notifications per sender per day,
+  newsletter documents per interest check, prompt/context excerpt caps, RAG
+  search result cap, and browser MCP session TTL.
 - Recent failed agent runs, rejected or failed tool calls, and failed/dead RAG
   index jobs.
 - Recent `guardrail.exceeded` audit events and a `runaway-guardrails` job row.

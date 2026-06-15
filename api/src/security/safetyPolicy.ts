@@ -2,7 +2,8 @@ import type { Settings } from "../config/settings.js";
 import type { AgentStore, RequestContext } from "../domain/types.js";
 
 export type RuntimeSafetyPolicy = {
-  maxAgentRunsPerUserPerHour: number;
+  maxAgentRunsPerUserPerBurstWindow: number;
+  agentRunBurstWindowSeconds: number;
   maxAutonomousRunsPerWorkerTick: number;
   maxToolCallsPerRun: number;
   maxOwnerVisibleOutboundMessagesPerUserPerDay: number;
@@ -15,7 +16,8 @@ export type RuntimeSafetyPolicy = {
 };
 
 export const DEFAULT_RUNTIME_SAFETY_POLICY: RuntimeSafetyPolicy = {
-  maxAgentRunsPerUserPerHour: 20,
+  maxAgentRunsPerUserPerBurstWindow: 60,
+  agentRunBurstWindowSeconds: 600,
   maxAutonomousRunsPerWorkerTick: 10,
   maxToolCallsPerRun: 10,
   maxOwnerVisibleOutboundMessagesPerUserPerDay: 10,
@@ -40,7 +42,8 @@ export function runtimeSafetyPolicy(settings?: Partial<Settings>, aiConfig?: {
   repairAttemptLimit?: number;
 }): RuntimeSafetyPolicy {
   return {
-    maxAgentRunsPerUserPerHour: positive(settings?.agentMaxRunsPerUserPerHour, DEFAULT_RUNTIME_SAFETY_POLICY.maxAgentRunsPerUserPerHour),
+    maxAgentRunsPerUserPerBurstWindow: positive(settings?.agentMaxRunsPerUserPerBurstWindow, DEFAULT_RUNTIME_SAFETY_POLICY.maxAgentRunsPerUserPerBurstWindow),
+    agentRunBurstWindowSeconds: positive(settings?.agentRunBurstWindowSeconds, DEFAULT_RUNTIME_SAFETY_POLICY.agentRunBurstWindowSeconds),
     maxAutonomousRunsPerWorkerTick: positive(settings?.agentMaxAutonomousRunsPerWorkerTick, DEFAULT_RUNTIME_SAFETY_POLICY.maxAutonomousRunsPerWorkerTick),
     maxToolCallsPerRun: aiConfig?.maxToolCalls !== undefined
       ? nonNegative(aiConfig.maxToolCalls, DEFAULT_RUNTIME_SAFETY_POLICY.maxToolCallsPerRun)

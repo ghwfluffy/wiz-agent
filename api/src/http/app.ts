@@ -447,7 +447,8 @@ export function buildApp(options: AppOptions = {}): Hono {
     return {
       generatedAt: new Date().toISOString(),
       budgets: {
-        maxAgentRunsPerUserPerHour: safety.maxAgentRunsPerUserPerHour,
+        maxAgentRunsPerUserPerBurstWindow: safety.maxAgentRunsPerUserPerBurstWindow,
+        agentRunBurstWindowSeconds: safety.agentRunBurstWindowSeconds,
         maxAutonomousRunsPerWorkerTick: safety.maxAutonomousRunsPerWorkerTick,
         maxToolCallsPerRun: safety.maxToolCallsPerRun,
         maxRuntimeSecPerRun: aiConfig.maxRuntimeSec,
