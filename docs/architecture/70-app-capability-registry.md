@@ -87,6 +87,14 @@ The registry includes Apartment Gate with a single high-risk write action:
 - the agent must not request, store, summarize, or expose Gatewise credentials,
   refresh tokens, API keys, or generated page source.
 
+### Android Assistant
+
+Android Assistant is a native mobile wrapper and home-screen widget entrypoint.
+It does not expose cross-app actions to the agent. Voice widget recordings are
+transcribed by the agent backend and then handled like authenticated web chat,
+using the same owner-command tools, approval policies, and integration
+boundaries.
+
 ## Maintenance Rule
 
 Whenever a future agent request adds or changes an app, app API, or major

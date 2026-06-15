@@ -22,6 +22,14 @@ export type TextModelRequest = {
   prompt: string;
 };
 
+export type TranscribeAudioRequest = {
+  model: string;
+  file: Blob;
+  filename: string;
+  mimeType: string;
+  prompt?: string;
+};
+
 export type RepairToolArgumentsRequest = {
   model: string;
   tier: "repair";
@@ -35,6 +43,7 @@ export type AgentModelClient = {
   runStructured(request: StructuredModelRequest): Promise<unknown>;
   runWithTools(request: ToolModelRequest): Promise<unknown>;
   runText(request: TextModelRequest): Promise<string>;
+  transcribeAudio(request: TranscribeAudioRequest): Promise<string>;
   repairToolArguments(request: RepairToolArgumentsRequest): Promise<unknown>;
 };
 
@@ -44,6 +53,7 @@ export class MockModelClient implements AgentModelClient {
       structured?: unknown[];
       tools?: unknown[];
       text?: unknown[];
+      transcriptions?: unknown[];
       repairs?: unknown[];
     } = {}
   ) {}
@@ -58,6 +68,11 @@ export class MockModelClient implements AgentModelClient {
 
   async runText(): Promise<string> {
     const response = this.responses.text?.shift();
+    return typeof response === "string" ? response : "";
+  }
+
+  async transcribeAudio(): Promise<string> {
+    const response = this.responses.transcriptions?.shift();
     return typeof response === "string" ? response : "";
   }
 
@@ -128,6 +143,35 @@ export class OpenAIModelClient implements AgentModelClient {
       input: request.prompt
     });
     return parseTextOutput(response);
+  }
+
+  async transcribeAudio(request: TranscribeAudioRequest): Promise<string> {
+    if (!this.apiKey) {
+      throw new Error("OpenAI API key is not configured. Set AGENT_OPENAI_API_KEY in secrets.");
+    }
+    const form = new FormData();
+    form.set("model", request.model);
+    form.set("response_format", "json");
+    if (request.prompt?.trim()) {
+      form.set("prompt", request.prompt.trim());
+    }
+    form.set("file", request.file, request.filename);
+    const response = await this.fetchImpl(`${this.baseUrl}/audio/transcriptions`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${this.apiKey}`
+      },
+      body: form
+    });
+    const payload = await response.json().catch(() => null) as unknown;
+    if (!response.ok) {
+      const detail = payload && typeof payload === "object" ? JSON.stringify(payload) : response.statusText;
+      throw new Error(`OpenAI transcription request failed: ${response.status} ${detail}`);
+    }
+    if (!payload || typeof payload !== "object" || typeof (payload as Record<string, unknown>).text !== "string") {
+      throw new Error("OpenAI transcription response did not include text.");
+    }
+    return ((payload as Record<string, unknown>).text as string).trim();
   }
 
   async repairToolArguments(request: RepairToolArgumentsRequest): Promise<unknown> {

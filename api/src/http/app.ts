@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { getCookie } from "hono/cookie";
+import { File as NodeFile } from "node:buffer";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { OpenAIModelClient, type AgentModelClient } from "../agent/modelClient.js";
 import { runOwnerWebPromptAgent } from "../agent/inboundMessageAgent.js";
@@ -58,6 +59,18 @@ function createDefaultStore(settings: Settings): AgentStore {
 
 const allowedConnectorKinds = new Set<ConnectorKind>(["owner-contact", "imap", "smtp", "openai"]);
 const allowedConnectorStatuses = new Set<ConnectorStatus>(["enabled", "disabled"]);
+const allowedVoiceAudioTypes = new Set([
+  "audio/mp4",
+  "audio/m4a",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/wav",
+  "audio/x-wav",
+  "audio/webm",
+  "video/mp4",
+  "application/octet-stream"
+]);
+const allowedVoiceAudioExtensions = new Set(["m4a", "mp4", "mp3", "mpeg", "mpga", "wav", "webm"]);
 const webMcpSessionTools = [
   "list_dir",
   "tree",
@@ -225,6 +238,53 @@ function compactMarkdownSnippet(markdown: string, maxLines = 3, preferLatestSect
     .slice(0, maxLines)
     .join(" ")
     .slice(0, 400);
+}
+
+function stringFormValue(value: FormDataEntryValue | FormDataEntryValue[] | undefined): string {
+  if (Array.isArray(value)) {
+    return stringFormValue(value[0]);
+  }
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function formFileValue(value: FormDataEntryValue | FormDataEntryValue[] | undefined): NodeFile | null {
+  if (Array.isArray(value)) {
+    return formFileValue(value[0]);
+  }
+  if (value instanceof NodeFile) {
+    return value;
+  }
+  return null;
+}
+
+function voiceAudioLooksSupported(file: NodeFile): boolean {
+  const mime = file.type.trim().toLowerCase();
+  if (mime && !allowedVoiceAudioTypes.has(mime)) {
+    return false;
+  }
+  const extension = file.name.includes(".") ? file.name.split(".").pop()?.toLowerCase() : "";
+  return Boolean(extension && allowedVoiceAudioExtensions.has(extension)) || allowedVoiceAudioTypes.has(mime);
+}
+
+function voiceTranscriptPrompt(): string {
+  return [
+    "This is a short mobile voice command to a personal AI assistant.",
+    "Preserve product names, dates, times, dollar amounts, card names, and app names as accurately as possible.",
+    "Return only the spoken words."
+  ].join(" ");
+}
+
+function ownerVoicePrompt(transcript: string, recentContext: string): string {
+  const boundedContext = recentContext.slice(0, 4000).trim() || "No recent mobile voice context.";
+  return [
+    "Recent mobile voice chat context:",
+    boundedContext,
+    "",
+    "Owner's new voice transcript:",
+    transcript,
+    "",
+    "Answer the owner's new request in context. If action is needed, use the same safe owner-command tools available to authenticated web chat."
+  ].join("\n");
 }
 
 function markdownExcerpt(document: MarkdownDocumentRecord | undefined): string | null {
@@ -1133,6 +1193,71 @@ export function buildApp(options: AppOptions = {}): Hono {
       expiresAt: session.expiresAt,
       allowedTools: session.allowedTools
     }, 201);
+  });
+
+  app.post("/api/v1/agent/voice-prompts", async (context) => {
+    const authContext = await requireContext(context);
+    if (authContext instanceof Response) {
+      return authContext;
+    }
+    const form = await context.req.parseBody().catch(() => null);
+    if (!form) {
+      return context.json(errorPayload("validation_error", "Multipart form data is required.", authContext.requestId), 400);
+    }
+    const audio = formFileValue(form.audio);
+    if (!audio) {
+      return context.json(errorPayload("validation_error", "Audio file is required.", authContext.requestId), 400);
+    }
+    if (audio.size <= 0) {
+      return context.json(errorPayload("validation_error", "Audio file is empty.", authContext.requestId), 400);
+    }
+    if (audio.size > settings.agentVoiceMaxAudioBytes) {
+      return context.json(errorPayload("validation_error", "Audio file is too large.", authContext.requestId), 413);
+    }
+    if (!voiceAudioLooksSupported(audio)) {
+      return context.json(errorPayload("validation_error", "Unsupported audio file type.", authContext.requestId), 400);
+    }
+    const recentContext = stringFormValue(form.recent_context);
+    const transcript = await modelClient.transcribeAudio({
+      model: settings.agentOpenaiTranscriptionModel,
+      file: audio as unknown as Blob,
+      filename: audio.name || "voice.m4a",
+      mimeType: audio.type || "audio/mp4",
+      prompt: voiceTranscriptPrompt()
+    });
+    if (!transcript) {
+      return context.json(errorPayload("validation_error", "No speech was transcribed from the audio.", authContext.requestId), 400);
+    }
+    const result = await runOwnerWebPromptAgent({
+      context: authContext,
+      store,
+      prompt: ownerVoicePrompt(transcript, recentContext),
+      mode: "normal",
+      modelClient,
+      settings,
+      integrationTokenProvider,
+      fetchImpl: fetcher
+    });
+    const links = {
+      taskId: linkValue(result.executionResult, "task_id"),
+      taskEventId: linkValue(result.executionResult, "task_event_id"),
+      outboundMessageId: linkValue(result.executionResult, "outbound_message_id"),
+      memoryDocumentId: linkValue(result.executionResult, "memory_document_id"),
+      memorySlug: linkValue(result.executionResult, "slug"),
+      clarificationRequestId: linkValue(result.executionResult, "clarification_request_id")
+    };
+    return context.json({
+      transcript,
+      runId: result.runId,
+      status: result.status,
+      selectedAction: result.toolName ?? null,
+      toolStatus: result.toolStatus,
+      repaired: result.repaired,
+      responseText: result.responseText ?? null,
+      toolResult: result.executionResult ?? null,
+      links,
+      failureMessage: result.failureMessage ?? null
+    }, 200);
   });
 
   app.post("/api/v1/agent/prompts", async (context) => {

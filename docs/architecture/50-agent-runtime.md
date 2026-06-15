@@ -37,7 +37,8 @@ Implemented clients:
 
 - `MockModelClient`: deterministic tests and local runtime development.
 - `OpenAIModelClient`: OpenAI Responses API adapter for structured output,
-  function/tool-call proposals, and repair calls.
+  function/tool-call proposals, repair calls, and bounded audio transcription
+  through the Audio transcriptions endpoint.
 
 This keeps real network calls out of tests and keeps OpenAI API details behind a
 small adapter.
@@ -46,6 +47,15 @@ OpenAI API credentials are secret config. Use `AGENT_OPENAI_API_KEY` in ignored
 secret env files or `AGENT_OPENAI_API_KEY_FILE` to read a mounted ignored secret
 file. `AGENT_OPENAI_BASE_URL` is non-secret configuration and defaults to
 `https://api.openai.com/v1`.
+
+Mobile voice commands arrive through `POST /api/v1/agent/voice-prompts`. The
+endpoint requires the normal assistant session cookie, accepts a bounded audio
+upload, transcribes it with `AGENT_OPENAI_TRANSCRIPTION_MODEL` (default
+`gpt-4o-transcribe`), and then routes the transcript through the authenticated
+owner web prompt loop. The Android client may warm the auth/session connection
+while recording, but the server still performs all authentication, file
+validation, transcription, tool selection, side-effect policy, and audit work.
+Raw uploaded audio is discarded after request processing.
 
 ## Tool Contracts And MCP Runtime
 

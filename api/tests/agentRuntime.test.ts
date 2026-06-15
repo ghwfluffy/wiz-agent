@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { File } from "node:buffer";
 import { MockModelClient, OpenAIModelClient } from "../src/agent/modelClient.js";
 import { buildOwnerInboundPrompt, runOwnerInboundAgent } from "../src/agent/inboundMessageAgent.js";
 import { chooseModelTier, modelTierConfigFromSettings, resolveModelId } from "../src/agent/modelTiers.js";
@@ -149,10 +150,11 @@ describe("app capability registry", () => {
     const apps = listAppCapabilities();
     const context = buildCapabilityContext();
 
-    expect(apps.map((app) => app.id)).toEqual(["goals", "budget", "federated_services", "apartment_gate"]);
+    expect(apps.map((app) => app.id)).toEqual(["goals", "budget", "federated_services", "android_client", "apartment_gate"]);
     expect(context).toContain("Personal goal tracking");
     expect(context).toContain("Personal finance planning");
     expect(context).toContain("Central authenticated launcher");
+    expect(context).toContain("Native Android wrapper");
     expect(context).toContain("public root path is intentionally not an app directory");
     expect(context).toContain("Federated-login protected mobile web app");
     expect(context).toContain("goals.record_metric_entry");
@@ -2166,6 +2168,83 @@ describe("agent task execution", () => {
     });
   });
 
+  it("transcribes authenticated mobile voice prompts before running the owner loop", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OPENAI_TRANSCRIPTION_MODEL: "voice-test-model"
+    });
+    const app = buildApp({
+      settings,
+      modelClient: new MockModelClient({
+        transcriptions: ["Tell me what I need to do today."],
+        tools: ["You need to review your active tasks and handle the highest priority item first."]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+    const form = new FormData();
+    form.set("audio", new File(["fake-audio"], "voice.m4a", { type: "audio/mp4" }));
+    form.set("recent_context", "Agent: Yesterday you had two active goals.");
+
+    const response = await app.request("/api/v1/agent/voice-prompts", {
+      method: "POST",
+      headers: { cookie },
+      body: form
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      transcript: "Tell me what I need to do today.",
+      status: "completed",
+      selectedAction: null,
+      toolStatus: "none",
+      responseText: "You need to review your active tasks and handle the highest priority item first."
+    });
+  });
+
+  it("requires auth and validates mobile voice prompt uploads", async () => {
+    const form = new FormData();
+    form.set("audio", new File(["fake-audio"], "voice.m4a", { type: "audio/mp4" }));
+    const app = buildApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "standalone"
+      }),
+      modelClient: new MockModelClient({
+        transcriptions: ["Should not run."]
+      })
+    });
+
+    const unauthenticated = await app.request("/api/v1/agent/voice-prompts", {
+      method: "POST",
+      body: form
+    });
+
+    expect(unauthenticated.status).toBe(401);
+
+    const limitedApp = buildApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "standalone",
+        AGENT_VOICE_MAX_AUDIO_BYTES: "4"
+      }),
+      modelClient: new MockModelClient()
+    });
+    const login = await limitedApp.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+    const oversized = new FormData();
+    oversized.set("audio", new File(["fake-audio"], "voice.m4a", { type: "audio/mp4" }));
+
+    const response = await limitedApp.request("/api/v1/agent/voice-prompts", {
+      method: "POST",
+      headers: { cookie },
+      body: oversized
+    });
+
+    expect(response.status).toBe(413);
+  });
+
   it("requires auth before web prompts can reach decision tools", async () => {
     const app = buildApp({
       settings: loadSettings({
@@ -2360,6 +2439,38 @@ describe("agent task execution", () => {
         headers: expect.objectContaining({
           authorization: "Bearer test-key"
         })
+      })
+    );
+  });
+
+  it("calls OpenAI audio transcriptions with the configured audio model", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        text: "transcribed text"
+      })
+    });
+    const client = new OpenAIModelClient({
+      apiKey: "test-key",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    await expect(client.transcribeAudio({
+      model: "gpt-4o-transcribe",
+      file: new Blob(["audio"], { type: "audio/mp4" }),
+      filename: "voice.m4a",
+      mimeType: "audio/mp4",
+      prompt: "voice prompt"
+    })).resolves.toBe("transcribed text");
+
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "https://api.openai.com/v1/audio/transcriptions",
+      expect.objectContaining({
+        method: "POST",
+        headers: {
+          authorization: "Bearer test-key"
+        },
+        body: expect.any(FormData)
       })
     );
   });

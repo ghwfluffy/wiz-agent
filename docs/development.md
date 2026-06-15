@@ -120,6 +120,20 @@ seconds so slow owner-command prompt runs can return within the configured
 runtime budget. Do not add browser-side access to write/action MCP tools for
 this workflow.
 
+Mobile voice prompts use the same owner decision loop after server-side
+transcription:
+
+```text
+POST /api/v1/agent/voice-prompts
+```
+
+The endpoint requires the normal web session cookie and accepts
+`multipart/form-data` with an `audio` file plus optional `recent_context`. The
+host transcribes bounded uploaded audio with `AGENT_OPENAI_TRANSCRIPTION_MODEL`
+defaulting to `gpt-4o-transcribe`, rejects files over
+`AGENT_VOICE_MAX_AUDIO_BYTES`, and then sends the transcript into the same
+authenticated web prompt flow. Raw audio is not persisted by the app.
+
 Owner corrections should be captured through `record_owner_feedback` when the
 owner corrects behavior, wording, timing, memory categorization, task/tool/app
 choice, or schedule. The tool writes structured markdown under

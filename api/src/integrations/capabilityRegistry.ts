@@ -28,7 +28,7 @@ export const IntegrationActionIds = [
 ] as const;
 
 export type IntegrationActionId = typeof IntegrationActionIds[number];
-export const IntegrationAppIds = ["goals", "budget", "federated_services", "apartment_gate"] as const;
+export const IntegrationAppIds = ["goals", "budget", "federated_services", "android_client", "apartment_gate"] as const;
 export type IntegrationAppId = typeof IntegrationAppIds[number];
 export type IntegrationAccess = "read" | "write";
 export type IntegrationRisk = "low" | "medium" | "high";
@@ -549,6 +549,21 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
       "Use Federated Services as directory knowledge when the owner asks where to manage account settings, avatar, password, email, phone, timezone, users, registration codes, or app launch links.",
       "The public root path is intentionally not an app directory and should not be described as exposing or advertising sub-apps.",
       "Do not claim the agent can edit shared account settings unless a dedicated, scoped integration API is added later."
+    ],
+    actions: []
+  },
+  {
+    id: "android_client",
+    displayName: "Android Assistant",
+    appPurpose: "Native Android wrapper for the authenticated web apps with home-screen app shortcuts and a push-to-talk voice entrypoint.",
+    userValue: "Lets the owner open app pages from home-screen widgets and send voice commands to the same authenticated assistant loop used by web chat.",
+    dataSensitivity: "highly_private",
+    baseUrlSetting: "none",
+    authRequirement: "Human interactive access only. The mobile app reuses web session cookies and the voice endpoint requires the normal assistant session.",
+    modelGuidance: [
+      "Use Android Assistant as entrypoint knowledge when the owner asks how mobile widgets, manual APK installation, or voice commands work.",
+      "Voice commands are transcribed server-side and then handled like authenticated web chat.",
+      "Do not claim this grants new cross-app permissions; it is another owner-authenticated input surface."
     ],
     actions: []
   },
