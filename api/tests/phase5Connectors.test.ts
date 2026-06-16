@@ -362,6 +362,8 @@ describe("inbound sender policy", () => {
 
   it("lets owner SMS replies trust a reviewed sender as a newsletter and ingest knowledge", async () => {
     const { context, store } = await testContext();
+    const receivedAt = new Date().toISOString();
+    const receivedDate = receivedAt.slice(0, 10);
     await store.upsertConnector(context, {
       kind: "owner-contact",
       status: "enabled",
@@ -380,7 +382,7 @@ describe("inbound sender policy", () => {
         toAddr: "agent@example.test",
         subject: "Robots Weekly",
         bodyText: "A cool story about tiny robots.",
-        receivedAt: "2026-06-13T09:15:00.000Z"
+        receivedAt
       }
     });
 
@@ -412,8 +414,8 @@ describe("inbound sender policy", () => {
     await expect(store.getSenderStatus(context, "news@example.test")).resolves.toBe("newsletter");
     await expect(store.listTasks(context)).resolves.toEqual([]);
     await expect(store.listOutboundMessages(context)).resolves.toHaveLength(1);
-    await expect(store.getMarkdownDocument(context, "/newsletters/2026-06-13/robots-weekly.md")).resolves.toMatchObject({
-      path: "/newsletters/2026-06-13/robots-weekly.md",
+    await expect(store.getMarkdownDocument(context, `/newsletters/${receivedDate}/robots-weekly.md`)).resolves.toMatchObject({
+      path: `/newsletters/${receivedDate}/robots-weekly.md`,
       markdown: expect.stringContaining("A cool story about tiny robots."),
       indexStatus: "pending"
     });
@@ -430,6 +432,8 @@ describe("inbound sender policy", () => {
 
   it("lets owner SMS replies ingest one reviewed newsletter without trusting future sender mail", async () => {
     const { context, store } = await testContext();
+    const receivedAt = new Date().toISOString();
+    const receivedDate = receivedAt.slice(0, 10);
     await store.upsertConnector(context, {
       kind: "owner-contact",
       status: "enabled",
@@ -448,7 +452,7 @@ describe("inbound sender policy", () => {
         toAddr: "agent@example.test",
         subject: "One Shot Brief",
         bodyText: "A useful one-off link.",
-        receivedAt: "2026-06-13T11:30:00.000Z"
+        receivedAt
       }
     });
 
@@ -474,7 +478,7 @@ describe("inbound sender policy", () => {
       action: "sender_reviewed"
     });
     await expect(store.getSenderStatus(context, "brief@example.test")).resolves.toBeUndefined();
-    await expect(store.getMarkdownDocument(context, "/newsletters/2026-06-13/one-shot-brief.md")).resolves.toMatchObject({
+    await expect(store.getMarkdownDocument(context, `/newsletters/${receivedDate}/one-shot-brief.md`)).resolves.toMatchObject({
       markdown: expect.stringContaining("Ingestion reason: owner_approved_once")
     });
     await expect(store.listInboundMessages(context)).resolves.toEqual(

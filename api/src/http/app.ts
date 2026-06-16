@@ -199,6 +199,71 @@ function linkValue(result: Record<string, unknown> | undefined, key: string): st
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+type PromptAgentResult = Awaited<ReturnType<typeof runOwnerWebPromptAgent>>;
+
+function cleanResponseText(value: string | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || trimmed.toLowerCase() === "null") {
+    return null;
+  }
+  return trimmed;
+}
+
+function directToolMessage(result: Record<string, unknown> | undefined): string | null {
+  if (!result) {
+    return null;
+  }
+  for (const key of ["response", "message", "summary", "result"]) {
+    const value = result[key];
+    if (typeof value === "string" && value.trim() && value.trim().toLowerCase() !== "null") {
+      return value.trim();
+    }
+    if (typeof value === "number" || typeof value === "boolean") {
+      return String(value);
+    }
+  }
+  return null;
+}
+
+function humanizeIdentifier(value: string): string {
+  return value.replace(/[._-]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function fallbackPromptResponseText(result: PromptAgentResult): string | null {
+  const responseText = cleanResponseText(result.responseText);
+  if (responseText) {
+    return responseText;
+  }
+  const directMessage = directToolMessage(result.executionResult);
+  if (directMessage) {
+    return directMessage;
+  }
+  if (result.status !== "completed") {
+    return null;
+  }
+  if (!result.toolName) {
+    return "Done.";
+  }
+  if (result.toolName === "create_task") {
+    return "Created the task.";
+  }
+  if (result.toolName === "integration_action") {
+    const actionId = linkValue(result.executionResult, "action_id");
+    const approvalRequired = result.executionResult?.approval_required === true;
+    const status = result.executionResult?.status;
+    if (approvalRequired) {
+      return "Queued the app action for approval.";
+    }
+    if (actionId === "apartment_gate.open_right_gate" && (typeof status !== "number" || status < 400)) {
+      return "Done. I sent the apartment gate open command.";
+    }
+    if (actionId) {
+      return `Done. I ran ${humanizeIdentifier(actionId)}.`;
+    }
+  }
+  return `Done. I completed ${humanizeIdentifier(result.toolName)}.`;
+}
+
 function countByStatus<T extends { status: string }>(records: T[], status: string): number {
   return records.filter((record) => record.status === status).length;
 }
@@ -1254,7 +1319,7 @@ export function buildApp(options: AppOptions = {}): Hono {
       selectedAction: result.toolName ?? null,
       toolStatus: result.toolStatus,
       repaired: result.repaired,
-      responseText: result.responseText ?? null,
+      responseText: fallbackPromptResponseText(result),
       toolResult: result.executionResult ?? null,
       links,
       failureMessage: result.failureMessage ?? null
@@ -1307,7 +1372,7 @@ export function buildApp(options: AppOptions = {}): Hono {
       selectedAction: result.toolName ?? null,
       toolStatus: result.toolStatus,
       repaired: result.repaired,
-      responseText: result.responseText ?? null,
+      responseText: fallbackPromptResponseText(result),
       toolResult: result.executionResult ?? null,
       links,
       failureMessage: result.failureMessage ?? null

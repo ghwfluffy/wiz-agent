@@ -2205,6 +2205,51 @@ describe("agent task execution", () => {
     });
   });
 
+  it("returns a useful mobile voice response when a tool action has no model text", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OPENAI_TRANSCRIPTION_MODEL: "voice-test-model"
+    });
+    const app = buildApp({
+      settings,
+      modelClient: new MockModelClient({
+        transcriptions: ["Create a task to check the mail."],
+        tools: [
+          {
+            toolName: "create_task",
+            arguments: {
+              title: "Check the mail",
+              prompt: "Check the mail."
+            }
+          }
+        ]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+    const form = new FormData();
+    form.set("audio", new File(["fake-audio"], "voice.m4a", { type: "audio/mp4" }));
+
+    const response = await app.request("/api/v1/agent/voice-prompts", {
+      method: "POST",
+      headers: { cookie },
+      body: form
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      transcript: "Create a task to check the mail.",
+      status: "completed",
+      selectedAction: "create_task",
+      toolStatus: "accepted",
+      responseText: "Created the task.",
+      toolResult: expect.objectContaining({
+        task_id: expect.any(String)
+      })
+    });
+  });
+
   it("requires auth and validates mobile voice prompt uploads", async () => {
     const form = new FormData();
     form.set("audio", new File(["fake-audio"], "voice.m4a", { type: "audio/mp4" }));
