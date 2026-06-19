@@ -86,9 +86,26 @@ function ownerConfigValue(config: Record<string, unknown>, key: string): string 
 }
 
 const SMS_GATEWAY_SAFE_TEXT_LENGTH = 140;
+const MAX_SMTP_FAILURE_MESSAGE_LENGTH = 240;
 
 function shouldPreferMmsGateway(message: OutboundMessageRecord): boolean {
   return message.channel === "sms" && message.bodyText.length > SMS_GATEWAY_SAFE_TEXT_LENGTH;
+}
+
+function compactFailureMessage(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, MAX_SMTP_FAILURE_MESSAGE_LENGTH);
+}
+
+function redactProviderFailureMessage(value: unknown, fallback: string): string {
+  const raw = value instanceof Error ? value.message : typeof value === "string" ? value : fallback;
+  const redacted = raw
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s)]+/gi, "[url]")
+    .replace(
+      /\b(password|secret|token|credential|authorization|cookie|session)\b(\s*[=:]\s*)([^\s,;]+)/gi,
+      "$1$2[redacted]"
+    );
+  return compactFailureMessage(redacted) || fallback;
 }
 
 export type SmtpDeliveryConfig = {
@@ -220,13 +237,16 @@ export async function sendOutboundMessage(options: {
       "Outbound recipient is not a configured owner address."
     );
   }
-  await options.store.updateOutboundMessageStatus(options.context, options.message.id, "sending");
+  const claimed = await options.store.claimOutboundMessageForSending(options.context, options.message.id);
+  if (!claimed) {
+    return undefined;
+  }
   try {
     await transport.sendMail({
       from,
       to,
-      subject: options.message.subject ?? undefined,
-      text: options.message.bodyText
+      subject: claimed.subject ?? undefined,
+      text: claimed.bodyText
     });
     return options.store.updateOutboundMessageStatus(options.context, options.message.id, "sent");
   } catch (error) {
@@ -234,7 +254,7 @@ export async function sendOutboundMessage(options: {
       options.context,
       options.message.id,
       "failed",
-      error instanceof Error ? error.message : "SMTP send failed."
+      redactProviderFailureMessage(error, "SMTP send failed.")
     );
   }
 }

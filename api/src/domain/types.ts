@@ -749,6 +749,7 @@ export type AgentStore = {
     status: OutboundMessageInput["status"],
     failureMessage?: string | null
   ): Promise<OutboundMessageRecord | undefined>;
+  claimOutboundMessageForSending(context: RequestContext, messageId: string): Promise<OutboundMessageRecord | undefined>;
   createApproval(context: RequestContext, input: ApprovalInput): Promise<ApprovalRecord>;
   listApprovals(context: RequestContext, statuses?: ApprovalStatus[]): Promise<ApprovalRecord[]>;
   getApproval(context: RequestContext, approvalId: string): Promise<ApprovalRecord | undefined>;

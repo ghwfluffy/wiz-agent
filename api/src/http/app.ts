@@ -67,6 +67,7 @@ const allowedConnectorKinds = new Set<ConnectorKind>(["owner-contact", "imap", "
 const allowedConnectorStatuses = new Set<ConnectorStatus>(["enabled", "disabled"]);
 const allowedTaskStatuses = new Set(["pending", "claimed", "running", "completed", "cancelled", "failed"]);
 const allowedApprovalStatuses = new Set<ApprovalStatus>(["pending", "approved", "rejected", "expired"]);
+const lockedOutboxStatuses = new Set(["sending", "sent", "failed", "cancelled"]);
 const maxWebMcpSessionTtlSeconds = 900;
 const allowedVoiceAudioTypes = new Set([
   "audio/mp4",
@@ -1707,13 +1708,23 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (!["pending", "approved", "cancelled"].includes(String(statusValue))) {
       return context.json(errorPayload("validation_error", "A valid outbox status is required.", authContext.requestId), 400);
     }
+    const requestedStatus = statusValue as "pending" | "approved" | "cancelled";
     const existing = (await store.listOutboundMessages(authContext)).find((candidate) => candidate.id === context.req.param("id"));
-    if (existing?.approvalId && (statusValue === "approved" || statusValue === "cancelled")) {
+    if (!existing) {
+      return context.json(errorPayload("http_404", "Outbox message not found.", authContext.requestId), 404);
+    }
+    if (lockedOutboxStatuses.has(existing.status)) {
+      return context.json(
+        errorPayload("validation_error", "Outbox messages that are sending, sent, failed, or cancelled cannot be manually changed.", authContext.requestId),
+        409
+      );
+    }
+    if (existing.approvalId && (requestedStatus === "approved" || requestedStatus === "cancelled")) {
       const result = await decideApproval({
         context: authContext,
         store,
         approvalId: existing.approvalId,
-        decision: statusValue === "approved" ? "approve" : "reject"
+        decision: requestedStatus === "approved" ? "approve" : "reject"
       });
       if (!result?.outbound) {
         return context.json(errorPayload("validation_error", "Approval could not be applied.", authContext.requestId), 400);
@@ -1723,11 +1734,8 @@ export function buildApp(options: AppOptions = {}): Hono {
     const message = await store.updateOutboundMessageStatus(
       authContext,
       context.req.param("id"),
-      statusValue as "pending" | "approved" | "cancelled"
+      requestedStatus
     );
-    if (!message) {
-      return context.json(errorPayload("http_404", "Outbox message not found.", authContext.requestId), 404);
-    }
     return context.json(message);
   });
 

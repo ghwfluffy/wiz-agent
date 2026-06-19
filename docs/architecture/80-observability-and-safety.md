@@ -48,7 +48,9 @@ Cross-app write execution records `approval.execution.running`,
 `approval.execution.succeeded`, or `approval.execution.failed`; success details
 include only redacted integration response data, and failures include a bounded
 host error reason such as an unknown action, read action, missing token, expired
-approval, or non-2xx integration response.
+approval, or non-2xx integration response. Raw provider/client exception text
+is scrubbed for bearer tokens, credential-like values, cookies, session values,
+and URLs before it is stored as an approval execution error.
 
 Scheduled assistant self-review runs are visible through the same task, run,
 tool-call, and audit surfaces as other scheduled tasks. Successful reviews
@@ -81,6 +83,9 @@ failed delivery records with `worker.recovered_outbound_send`. Stale running
 cross-app approvals become failed approval executions with
 `worker.recovered_approval_execution`. Expired pending approvals become
 `expired` records with linked approval outbox entries cancelled.
+SMTP transport failure messages follow the same operator boundary: they are
+visible on failed outbox records, but persisted text is bounded and scrubbed for
+credential-like values and URLs.
 
 Recent memory mutations are visible through the Memory tab and
 `GET /api/v1/memory/changes/recent`. The surface is derived from user-scoped

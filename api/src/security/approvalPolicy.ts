@@ -23,7 +23,54 @@ function compact(value: string, length: number): string {
 
 function payloadString(payload: Record<string, unknown>, key: string): string | undefined {
   const value = payload[key];
-  return typeof value === "string" && value.trim() ? value : undefined;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function isExpired(approval: ApprovalRecord, now = Date.now()): boolean {
+  const expiresAt = Date.parse(approval.expiresAt);
+  return Number.isFinite(expiresAt) && expiresAt <= now;
+}
+
+async function expirePendingApproval(options: {
+  context: RequestContext;
+  store: AgentStore;
+  approval: ApprovalRecord;
+}): Promise<ApprovalDecisionResult> {
+  const expired = await options.store.updateApprovalStatus(
+    options.context,
+    options.approval.id,
+    "expired",
+    options.context.userId
+  );
+  const current = expired ?? options.approval;
+  if (options.approval.actionType !== "send_outbound_message") {
+    return { approval: current };
+  }
+  const outboundId = payloadString(options.approval.proposedPayload, "outbound_message_id");
+  if (!outboundId) {
+    return { approval: current };
+  }
+  const outbound = await options.store.updateOutboundMessageStatus(options.context, outboundId, "cancelled");
+  return { approval: current, outbound };
+}
+
+async function findCurrentPendingApproval(options: {
+  context: RequestContext;
+  store: AgentStore;
+}): Promise<{ approval?: ApprovalRecord; expired?: ApprovalRecord }> {
+  const [approval] = await options.store.listApprovals(options.context, ["pending"]);
+  if (!approval) {
+    return {};
+  }
+  if (!isExpired(approval)) {
+    return { approval };
+  }
+  const result = await expirePendingApproval({
+    context: options.context,
+    store: options.store,
+    approval
+  });
+  return { expired: result.approval };
 }
 
 export async function createOutboundApproval(options: {
@@ -100,15 +147,12 @@ export async function decideApproval(options: {
   if (approval.status !== "pending") {
     return { approval };
   }
-  if (Date.parse(approval.expiresAt) <= Date.now()) {
-    const expired = await options.store.updateApprovalStatus(options.context, approval.id, "expired", options.context.userId);
-    if (approval.actionType === "send_outbound_message") {
-      const outboundId = payloadString(approval.proposedPayload, "outbound_message_id");
-      if (outboundId) {
-        await options.store.updateOutboundMessageStatus(options.context, outboundId, "cancelled");
-      }
-    }
-    return { approval: expired ?? approval };
+  if (isExpired(approval)) {
+    return expirePendingApproval({
+      context: options.context,
+      store: options.store,
+      approval
+    });
   }
 
   const status: ApprovalStatus = options.decision === "approve" ? "approved" : "rejected";
@@ -138,6 +182,13 @@ export async function editApproval(options: {
   const approval = await options.store.getApproval(options.context, options.approvalId);
   if (!approval || approval.status !== "pending") {
     return approval ? { approval } : undefined;
+  }
+  if (isExpired(approval)) {
+    return expirePendingApproval({
+      context: options.context,
+      store: options.store,
+      approval
+    });
   }
   if (approval.actionType !== "send_outbound_message") {
     return { approval };
@@ -214,9 +265,12 @@ export async function handleOwnerApprovalCommand(options: {
   if (!command) {
     return { handled: false };
   }
-  const [approval] = await options.store.listApprovals(options.context, ["pending"]);
+  const { approval, expired } = await findCurrentPendingApproval({
+    context: options.context,
+    store: options.store
+  });
   if (!approval) {
-    return { handled: false };
+    return expired ? { handled: true, approval: expired } : { handled: false };
   }
   if (command.command === "approve") {
     const result = await decideApproval({

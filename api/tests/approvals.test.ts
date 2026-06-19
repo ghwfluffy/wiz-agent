@@ -279,6 +279,57 @@ describe("approval and notification policy", () => {
     });
   });
 
+  it("expires stale owner SMS approval replies without routing them to the model", async () => {
+    const { context, store, settings } = await testContext();
+    const approval = await store.createApproval(context, {
+      actionType: "send_outbound_message",
+      proposedPayload: {
+        channel: "sms",
+        to_addr: "owner-sms@example.test",
+        body_text: "Too late."
+      },
+      riskLevel: "high",
+      summary: "Expired SMS",
+      expiresAt: new Date(Date.now() - 60_000).toISOString()
+    });
+    const outbound = await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "requires_approval",
+      toAddr: "owner-sms@example.test",
+      bodyText: "Too late.",
+      approvalId: approval.id
+    });
+    await store.updateApprovalPayload(context, approval.id, {
+      ...approval.proposedPayload,
+      outbound_message_id: outbound.id
+    });
+    await store.setSenderStatus(context, "owner-sms@example.test", "owner");
+
+    const result = await processInboundMessage({
+      context,
+      settings,
+      store,
+      message: {
+        providerMessageId: "approval-expired-yes-1",
+        fromAddr: "owner-sms@example.test",
+        toAddr: "agent@example.test",
+        bodyText: "YES",
+        source: "sms"
+      },
+      rateLimiter: new SlidingWindowRateLimiter(10, 60_000),
+      modelClient: new MockModelClient()
+    });
+
+    expect(result.action).toBe("approval_decided");
+    await expect(store.getApproval(context, approval.id)).resolves.toMatchObject({ status: "expired" });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({ id: outbound.id, status: "cancelled" })
+    ]);
+    await expect(store.listAudit(context, false)).resolves.not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "message.owner_intent.classified" })
+    ]));
+  });
+
   it("records audit when approvals are rejected", async () => {
     const { context, store, settings } = await testContext();
     const app = buildApp({ settings, store });
@@ -595,6 +646,39 @@ describe("approval and notification policy", () => {
     });
   });
 
+  it("redacts and bounds thrown cross-app execution errors", async () => {
+    const { context, store, settings } = await testContext({
+      DEV_USER_ID: "oauth:central-oauth:owner-subject",
+      GOALS_API_BASE_URL: "https://goals.example.test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const approval = await store.createApproval(context, {
+      actionType: "cross_app_write_action",
+      proposedPayload: { action_id: "goals.create_goal", body: { title: "Network failure" } },
+      riskLevel: "high",
+      summary: "Create goal",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, approval.id, "approved", context.userId);
+
+    const result = await executeApprovedCrossAppApproval({
+      context,
+      store,
+      settings,
+      approvalId: approval.id,
+      tokenProvider: new SignedIntegrationTokenProvider(settings),
+      fetchImpl: async () => {
+        throw new Error(`Request failed at https://goals.example.test/api token=abc.def password=super-secret Authorization: Bearer abc.def ${"x".repeat(400)}`);
+      }
+    });
+
+    expect(result).toMatchObject({ executionStatus: "failed" });
+    expect(result?.executionError).not.toContain("goals.example.test");
+    expect(result?.executionError).not.toContain("abc.def");
+    expect(result?.executionError).not.toContain("super-secret");
+    expect((result?.executionError ?? "").length).toBeLessThanOrEqual(240);
+  });
+
   it("edits outbound approval payload and audits the edit", async () => {
     const { context, store, settings } = await testContext();
     const app = buildApp({ settings, store });
@@ -697,5 +781,60 @@ describe("approval and notification policy", () => {
         expect.objectContaining({ id: editPayload.outbound.id, status: "approved", bodyText: "Edited." })
       ])
     );
+  });
+
+  it("does not edit an expired outbound approval or create a replacement outbox record", async () => {
+    const { context, store, settings } = await testContext();
+    const app = buildApp({ settings, store });
+    const approval = await store.createApproval(context, {
+      actionType: "send_outbound_message",
+      proposedPayload: {
+        channel: "sms",
+        to_addr: "owner-sms@example.test",
+        body_text: "Original."
+      },
+      riskLevel: "high",
+      summary: "Send SMS",
+      expiresAt: new Date(Date.now() - 60_000).toISOString()
+    });
+    const originalOutbound = await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "requires_approval",
+      toAddr: "owner-sms@example.test",
+      bodyText: "Original.",
+      approvalId: approval.id
+    });
+    await store.updateApprovalPayload(context, approval.id, {
+      ...approval.proposedPayload,
+      outbound_message_id: originalOutbound.id
+    });
+
+    const editResponse = await app.request(`/api/v1/approvals/${approval.id}`, {
+      method: "PATCH",
+      headers: {
+        cookie: cookieHeader(context.session.id),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ decision: "edit", text: "Edited after expiration." })
+    });
+
+    expect(editResponse.status).toBe(200);
+    await expect(editResponse.json()).resolves.toMatchObject({
+      approval: {
+        status: "expired",
+        proposedPayload: expect.objectContaining({ body_text: "Original." })
+      },
+      outbound: {
+        id: originalOutbound.id,
+        status: "cancelled"
+      }
+    });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        id: originalOutbound.id,
+        status: "cancelled",
+        bodyText: "Original."
+      })
+    ]);
   });
 });

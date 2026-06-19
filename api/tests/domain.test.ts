@@ -439,6 +439,54 @@ describe("domain and user ownership APIs", () => {
     await expect(update.json()).resolves.toMatchObject({ status: "approved" });
   });
 
+  it("does not manually revive failed outbox records", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "outbox-terminal-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "outbox-terminal-seed",
+      session
+    };
+    const message = await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "pending",
+      toAddr: "owner-sms@example.test",
+      bodyText: "failed delivery"
+    });
+    await store.updateOutboundMessageStatus(context, message.id, "failed", "SMTP refused the message.");
+
+    const update = await app.request(`/api/v1/outbox/${message.id}`, {
+      method: "PATCH",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ status: "approved" })
+    });
+
+    expect(update.status).toBe(409);
+    await expect(update.json()).resolves.toMatchObject({
+      error: {
+        code: "validation_error",
+        request_id: expect.any(String)
+      }
+    });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        id: message.id,
+        status: "failed",
+        failureMessage: "SMTP refused the message."
+      })
+    ]);
+  });
+
   it("lets users manage trusted sender classifications", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

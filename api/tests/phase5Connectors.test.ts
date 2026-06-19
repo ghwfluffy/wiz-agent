@@ -8,7 +8,7 @@ import { MockModelClient } from "../src/agent/modelClient.js";
 import { buildOwnerInboundPrompt } from "../src/agent/inboundMessageAgent.js";
 import { buildImapSearchCriteria, isNewerThanLastReceived, metadataForParsedAttachments } from "../src/connectors/imapPoller.js";
 import { processInboundMessage } from "../src/connectors/inboundProcessor.js";
-import { processOutboundQueue, resolveSmtpSecure } from "../src/connectors/smtpSender.js";
+import { processOutboundQueue, resolveSmtpSecure, sendOutboundMessage } from "../src/connectors/smtpSender.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
 import { FileIntegrationTokenProvider, SignedIntegrationTokenProvider } from "../src/integrations/tokenProvider.js";
@@ -1596,5 +1596,102 @@ describe("outbound queue delivery", () => {
     expect(result).toEqual({ attempted: 1, sent: 0, failed: 1 });
     const messages = await store.listOutboundMessages(context);
     expect(messages[0]).toMatchObject({ status: "failed" });
+  });
+
+  it("does not send a stale outbound snapshot after another worker claims it", async () => {
+    const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
+    await store.setSenderStatus(context, "owner-sms@example.test", "owner");
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
+      }
+    });
+    const message = await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "pending",
+      toAddr: "owner-sms@example.test",
+      bodyText: "send once"
+    });
+    await store.claimOutboundMessageForSending(context, message.id);
+    const sendMail = vi.fn();
+
+    const result = await sendOutboundMessage({
+      store,
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OUTBOUND_ENABLED: "true"
+      }),
+      message,
+      transport: { sendMail }
+    });
+
+    expect(result).toBeUndefined();
+    expect(sendMail).not.toHaveBeenCalled();
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({ id: message.id, status: "sending" })
+    ]);
+  });
+
+  it("redacts SMTP transport failure details before storing them on the outbox row", async () => {
+    const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
+    await store.setSenderStatus(context, "owner-sms@example.test", "owner");
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
+      }
+    });
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "pending",
+      toAddr: "owner-sms@example.test",
+      bodyText: "hello"
+    });
+
+    const result = await processOutboundQueue({
+      store,
+      context,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AGENT_OUTBOUND_ENABLED: "true"
+      }),
+      transport: {
+        sendMail: vi.fn(async () => {
+          throw new Error("SMTP failed at https://smtp.example.test/send password=super-secret token=abc.def Authorization: Bearer abc.def");
+        })
+      }
+    });
+
+    expect(result).toEqual({ attempted: 1, sent: 0, failed: 1 });
+    const [message] = await store.listOutboundMessages(context);
+    expect(message).toMatchObject({ status: "failed" });
+    expect(message?.failureMessage).not.toContain("super-secret");
+    expect(message?.failureMessage).not.toContain("abc.def");
+    expect(message?.failureMessage).not.toContain("smtp.example.test");
+    expect((message?.failureMessage ?? "").length).toBeLessThanOrEqual(240);
   });
 });

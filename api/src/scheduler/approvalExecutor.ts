@@ -18,8 +18,26 @@ type CrossAppApprovalPayload = {
   body?: unknown;
 };
 
+const MAX_EXECUTION_ERROR_LENGTH = 240;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function compactFailureReason(value: string): string {
+  return value.replace(/\s+/g, " ").trim().slice(0, MAX_EXECUTION_ERROR_LENGTH);
+}
+
+function safeExecutionFailureReason(value: unknown, fallback: string): string {
+  const raw = value instanceof Error ? value.message : typeof value === "string" ? value : fallback;
+  const redacted = raw
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s)]+/gi, "[url]")
+    .replace(
+      /\b(password|secret|token|credential|authorization|cookie|session)\b(\s*[=:]\s*)([^\s,;]+)/gi,
+      "$1$2[redacted]"
+    );
+  return compactFailureReason(redacted) || fallback;
 }
 
 function stringMap(value: unknown): Record<string, string> | undefined {
@@ -116,10 +134,14 @@ export async function executeApprovedCrossAppApproval(options: {
     fetchImpl: options.fetchImpl
   }).catch((error) => ({
     ok: false as const,
-    reason: error instanceof Error ? error.message : "integration_request_failed"
+    reason: safeExecutionFailureReason(error, "integration_request_failed")
   }));
   if (!result.ok) {
-    return options.store.failApprovalExecution(options.context, claimed.id, result.reason);
+    return options.store.failApprovalExecution(
+      options.context,
+      claimed.id,
+      safeExecutionFailureReason(result.reason, "integration_request_failed")
+    );
   }
 
   const executionResult = {

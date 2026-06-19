@@ -290,6 +290,10 @@ The current implementation delivers `pending` and `approved` outbox records
 through SMTP from the worker. SMS and MMS use carrier gateway email addresses
 while still remaining outbox-mediated. Port `465` implies implicit TLS unless
 the user explicitly configures another TLS mode.
+Before contacting SMTP, the worker atomically claims a `pending` or `approved`
+outbox row by moving it to `sending`. A stale worker snapshot that can no longer
+claim the row must not deliver it, which keeps concurrent or repeated worker
+ticks from sending the same owner message twice.
 
 Deployment-owned secrets are limited to platform-level configuration:
 
@@ -368,8 +372,11 @@ worker after approval. The worker claims each approved pending
 actions without calling a target app, and calls registered app APIs only through
 the integration gateway with a server-minted scoped token. Integration responses
 are redacted before they are written to approval execution results or audit
-details. Automatic retries are not performed; a failed execution stays visible
-on the approval record until a future explicit retry workflow is added.
+details. Provider/client failure strings are bounded and scrubbed for bearer
+tokens, credentials, cookies, session values, and URLs before they are persisted
+as execution errors. Automatic retries are not performed; a failed execution
+stays visible on the approval record until a future explicit retry workflow is
+added.
 If a worker dies while an approval execution is `running`, a later worker tick
 marks the stale execution `failed` with `approval_execution_expired` after a
 grace window. It does not retry because the target app may already have applied
@@ -379,8 +386,10 @@ The operations UI Overview lists only active outbound records that need
 attention or delivery tracking: `requires_approval`, `pending`, `approved`, and
 `sending`. The Outbox tab is history-oriented and lists sent and failed
 messages in a paged table, including delivery failure messages. Failed records
-are not shown as actionable approvals; a future retry workflow should make retry
-state explicit rather than reusing the approval button.
+are not shown as actionable approvals, and the API does not let manual outbox
+updates revive `sending`, `sent`, `failed`, or `cancelled` records. A future
+retry workflow should make retry state explicit rather than reusing the
+approval button.
 
 The worker enforces outbound pacing. It reconciles signed-in users, then runs
 scheduler work with a global outbound batch limit defaulting to one message per

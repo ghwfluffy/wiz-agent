@@ -2739,6 +2739,27 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return record;
     },
 
+    async claimOutboundMessageForSending(context, messageId) {
+      const result = await pool.query(
+        `UPDATE outbound_messages
+         SET status = 'sending',
+             failure_message = NULL,
+             updated_at = now()
+         WHERE id = $1
+           AND user_id = $2
+           AND status = ANY($3::text[])
+         RETURNING *`,
+        [messageId, context.userId, ["pending", "approved"]]
+      );
+      const record = result.rows[0] ? outboundFromRow(result.rows[0]) : undefined;
+      if (record) {
+        await recordAudit(pool, context, "outbound.sending", "outbound_message", messageId, {
+          failure_message: null
+        });
+      }
+      return record;
+    },
+
     async createApproval(context, input) {
       const result = await pool.query(
         `INSERT INTO approvals
@@ -4200,6 +4221,27 @@ export function createMemoryStore(): AgentStore {
       outboundMessages.set(messageId, updated);
       pushAudit(context, `outbound.${status}`, "outbound_message", messageId, {
         failure_message: failureMessage
+      });
+      return updated;
+    },
+    async claimOutboundMessageForSending(context, messageId) {
+      const message = outboundMessages.get(messageId);
+      if (
+        !message ||
+        message.userId !== context.userId ||
+        !["pending", "approved"].includes(message.status)
+      ) {
+        return undefined;
+      }
+      const updated = {
+        ...message,
+        status: "sending" as const,
+        updatedAt: nowIso(),
+        failureMessage: null
+      };
+      outboundMessages.set(messageId, updated);
+      pushAudit(context, "outbound.sending", "outbound_message", messageId, {
+        failure_message: null
       });
       return updated;
     },
