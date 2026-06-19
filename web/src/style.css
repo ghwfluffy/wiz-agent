@@ -126,6 +126,33 @@ h3 {
   padding: 16px;
 }
 
+.section-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1px;
+  align-items: center;
+  border: 1px solid #c6c6c6;
+  background: #c6c6c6;
+}
+
+.section-nav-link {
+  min-height: 36px;
+  display: inline-flex;
+  align-items: center;
+  background: #ffffff;
+  color: #0f62fe;
+  font-size: 0.875rem;
+  line-height: 1;
+  padding: 0 12px;
+  text-decoration: none;
+}
+
+.section-nav-link:hover,
+.section-nav-link:focus {
+  background: #edf5ff;
+  color: #0043ce;
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(5, minmax(0, 1fr));

@@ -53,18 +53,13 @@ const authPanelMessage = computed(() => {
   return "Redirecting to central sign-in.";
 });
 const tabs = [
-  { id: "overview", label: "Overview" },
   { id: "chat", label: "Chat" },
-  { id: "inbox", label: "Agent Inbox" },
-  { id: "approvals", label: "Approvals" },
-  { id: "outbox", label: "Outbox" },
-  { id: "tasks", label: "Tasks" },
-  { id: "memory", label: "Memory" },
-  { id: "senders", label: "Senders" },
-  { id: "workers", label: "Workers" },
-  { id: "logs", label: "Logs" },
-  { id: "settings", label: "Settings" },
-  { id: "admin", label: "Admin" }
+  { id: "attention", label: "Attention" },
+  { id: "work", label: "Work" },
+  { id: "knowledge", label: "Knowledge" },
+  { id: "integrations", label: "Integrations" },
+  { id: "operations", label: "Operations" },
+  { id: "settings", label: "Settings" }
 ] as const;
 type TabId = typeof tabs[number]["id"];
 type ChatMessage = {
@@ -74,6 +69,19 @@ type ChatMessage = {
   status?: "error";
 };
 const tabIds = new Set<TabId>(tabs.map((tab) => tab.id));
+const legacyTabAliases: Record<string, TabId> = {
+  overview: "chat",
+  inbox: "attention",
+  approvals: "attention",
+  outbox: "attention",
+  tasks: "work",
+  memory: "knowledge",
+  senders: "integrations",
+  workers: "operations",
+  logs: "operations",
+  admin: "settings"
+};
+const personalDashboardTabs = new Set<TabId>(["attention"]);
 const bannerSites = computed(() => {
   if (!usesCentralAuth) {
     return [];
@@ -340,7 +348,10 @@ const knowledgeHeadingFallback = computed(() => {
 
 function tabFromRoute(value: unknown): TabId {
   const tab = Array.isArray(value) ? value[0] : value;
-  return typeof tab === "string" && tabIds.has(tab as TabId) ? tab as TabId : "overview";
+  if (typeof tab !== "string") {
+    return "chat";
+  }
+  return legacyTabAliases[tab] ?? (tabIds.has(tab as TabId) ? tab as TabId : "chat");
 }
 
 function applyAiConfig(config: AiConfig | null): void {
@@ -952,7 +963,7 @@ async function loadDashboard(): Promise<void> {
     applyJobsResponse(data.jobs);
     applyConnectors(data.connectors);
     applyAiConfig(data.aiConfig);
-    if (activeTab.value === "overview") {
+    if (personalDashboardTabs.has(activeTab.value)) {
       const insight = await api.getPersonalDashboard().catch(() => null);
       if (isPersonalDashboard(insight)) {
         personalDashboard.value = insight;
@@ -972,68 +983,50 @@ async function loadActiveTab(): Promise<void> {
   activeTabRefreshInFlight = true;
   try {
     switch (activeTab.value) {
-      case "overview": {
+      case "chat": {
         await loadDashboard();
         return;
       }
-      case "chat": {
+      case "attention": {
         await Promise.all([
           loadDashboard(),
-          knowledgeTree.value.length > 0 ? Promise.resolve() : loadKnowledgeTree()
+          refreshApprovals()
         ]);
         return;
       }
-      case "inbox": {
-        const response = await api.listInbox();
-        inbox.value = response.messages;
-        break;
+      case "work": {
+        await loadDashboard();
+        return;
       }
-      case "approvals": {
-        await refreshApprovals();
-        break;
-      }
-      case "outbox": {
-        const response = await api.listOutbox();
-        outbox.value = response.messages;
-        break;
-      }
-      case "tasks": {
-        const response = await api.listTasks();
-        tasks.value = response.tasks;
-        break;
-      }
-      case "memory": {
-        const [memoryResponse, senderResponse] = await Promise.all([
+      case "knowledge": {
+        const [memoryResponse] = await Promise.all([
           api.listMemory(),
-          api.listSenders(),
           loadKnowledgeTree(),
           loadMemoryChanges()
         ]);
         memoryDocuments.value = memoryResponse.documents;
+        break;
+      }
+      case "integrations": {
+        const [senderResponse, connectorResponse] = await Promise.all([
+          api.listSenders(),
+          api.listConnectors()
+        ]);
         senders.value = senderResponse.senders;
+        applyConnectors(connectorResponse.connectors);
         break;
       }
-      case "senders": {
-        const response = await api.listSenders();
-        senders.value = response.senders;
-        break;
-      }
-      case "workers": {
-        const response = await api.listJobs().catch(() => ({ jobs: [] }));
-        applyJobsResponse(response);
-        break;
-      }
-      case "logs": {
-        const response = await api.listAudit();
-        audit.value = response.events;
+      case "operations": {
+        const [jobsResponse, auditResponse] = await Promise.all([
+          api.listJobs().catch(() => ({ jobs: [] })),
+          api.listAudit(),
+          knowledgeTree.value.length > 0 ? Promise.resolve() : loadKnowledgeTree()
+        ]);
+        applyJobsResponse(jobsResponse);
+        audit.value = auditResponse.events;
         break;
       }
       case "settings": {
-        const response = await api.listConnectors();
-        applyConnectors(response.connectors);
-        break;
-      }
-      case "admin": {
         applyAiConfig(await api.getAiConfig().catch(() => null));
         break;
       }
@@ -1420,10 +1413,7 @@ function maybeStartFederatedLogin(): void {
 }
 
 async function loadAuthenticatedHome(): Promise<void> {
-  await loadDashboard();
-  if (activeTab.value !== "overview") {
-    await loadActiveTab();
-  }
+  await loadActiveTab();
 }
 
 onMounted(() => {
@@ -1463,7 +1453,7 @@ watch(activeTab, () => {
 });
 
 watch([memoryChangePathFilter, memoryChangeActionFilter], () => {
-  if (activeTab.value === "memory" && auth.authenticated) {
+  if (activeTab.value === "knowledge" && auth.authenticated) {
     void loadMemoryChanges();
   }
 });
@@ -1538,7 +1528,13 @@ onUnmounted(() => {
         </div>
       </nav>
 
-      <section v-show="activeTab === 'overview'" id="panel-overview" class="tab-panel" role="tabpanel" aria-labelledby="tab-overview">
+      <section v-show="activeTab === 'attention'" id="panel-attention" class="tab-panel" role="tabpanel" aria-labelledby="tab-attention">
+        <nav class="section-nav" aria-label="Attention views">
+          <a class="section-nav-link" href="#attention-summary">Summary</a>
+          <a class="section-nav-link" href="#attention-approvals">Approvals</a>
+          <a class="section-nav-link" href="#attention-inbox">Inbox</a>
+          <a class="section-nav-link" href="#attention-outbound">Outbound</a>
+        </nav>
         <div class="metric-grid" aria-label="Operational summary">
           <section class="metric-card">
             <p class="label">Active tasks</p>
@@ -1562,85 +1558,7 @@ onUnmounted(() => {
           </section>
         </div>
 
-        <section class="activity-section prompt-panel" aria-label="Talk to the agent">
-          <div class="section-heading">
-            <h2>Talk to the agent</h2>
-            <p class="label">Authenticated web prompt</p>
-          </div>
-          <form class="prompt-form" @submit.prevent="submitAgentPrompt('overview')">
-            <div class="cds--form-item form-wide">
-              <label class="cds--label" for="overview-agent-prompt">Prompt</label>
-              <textarea id="overview-agent-prompt" v-model="promptForm.prompt" class="cds--text-area" required rows="4" />
-            </div>
-            <div class="cds--form-item">
-              <label class="cds--label" for="overview-prompt-mode">Mode</label>
-              <select id="overview-prompt-mode" v-model="promptForm.mode" class="cds--select-input">
-                <option v-for="mode in promptModes" :key="mode.value" :value="mode.value">{{ mode.label }}</option>
-              </select>
-            </div>
-            <div class="cds--form-item">
-              <label class="cds--label" for="overview-prompt-task">Task context</label>
-              <select id="overview-prompt-task" v-model="promptForm.contextTaskId" class="cds--select-input">
-                <option value="">No task</option>
-                <option v-for="task in tasks" :key="task.id" :value="task.id">{{ task.title }}</option>
-              </select>
-            </div>
-            <div class="cds--form-item">
-              <label class="cds--label" for="overview-prompt-memory">Memory path</label>
-              <select id="overview-prompt-memory" v-model="promptForm.contextMemoryPath" class="cds--select-input">
-                <option value="">No memory path</option>
-                <option v-for="entry in knowledgeFileEntries" :key="entry.path" :value="entry.path">{{ entry.path }}</option>
-              </select>
-            </div>
-            <div class="cds--form-item">
-              <label class="cds--label" for="overview-prompt-message">Recent message</label>
-              <select id="overview-prompt-message" v-model="promptForm.contextMessageId" class="cds--select-input">
-                <option value="">No message</option>
-                <option v-for="message in inbox.slice(0, 20)" :key="message.id" :value="message.id">
-                  {{ message.fromAddr }} - {{ message.subject || message.bodyText.slice(0, 48) }}
-                </option>
-              </select>
-            </div>
-            <div class="form-actions form-wide">
-              <button class="cds--btn cds--btn--primary" type="submit" :disabled="sendingPrompt || !promptForm.prompt.trim()">
-                Send prompt
-              </button>
-            </div>
-          </form>
-          <div v-if="promptError" class="cds--inline-notification cds--inline-notification--error" role="alert">
-            <div class="cds--inline-notification__details">
-              <div class="cds--inline-notification__text-wrapper">
-                <p class="cds--inline-notification__title">Prompt error</p>
-                <p class="cds--inline-notification__subtitle">{{ promptError }}</p>
-              </div>
-            </div>
-          </div>
-          <div v-if="promptResult" class="prompt-result" role="status">
-            <div>
-              <p class="label">Run</p>
-              <p>{{ promptResult.runId }}</p>
-            </div>
-            <div>
-              <p class="label">Status</p>
-              <p><span class="cds--tag" :class="statusTagClass(promptResult.status)">{{ promptResult.status }}</span></p>
-            </div>
-            <div>
-              <p class="label">Action</p>
-              <p>{{ promptResult.selectedAction || "none" }} / {{ promptResult.toolStatus }}</p>
-            </div>
-            <div>
-              <p class="label">Links</p>
-              <p>
-                <span v-if="promptResult.links.taskId">task {{ promptResult.links.taskId }}</span>
-                <span v-if="promptResult.links.outboundMessageId"> outbox {{ promptResult.links.outboundMessageId }}</span>
-                <span v-if="promptResult.links.memorySlug"> memory {{ promptResult.links.memorySlug }}</span>
-                <span v-if="!promptResult.links.taskId && !promptResult.links.outboundMessageId && !promptResult.links.memorySlug">none</span>
-              </p>
-            </div>
-          </div>
-        </section>
-
-        <section class="insight-grid" aria-label="Personal assistant insights">
+        <section id="attention-summary" class="insight-grid" aria-label="Personal assistant insights">
           <article class="activity-section insight-panel">
             <div class="section-heading">
               <h2>Attention queue</h2>
@@ -1845,7 +1763,7 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <section class="activity-section" aria-label="Active outbound queue">
+        <section id="attention-outbound" class="activity-section" aria-label="Active outbound queue">
           <div class="section-heading">
             <h2>Needs attention</h2>
           </div>
@@ -1932,8 +1850,8 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'inbox'" id="panel-inbox" class="tab-panel" role="tabpanel" aria-labelledby="tab-inbox">
-        <section class="activity-section" aria-label="Agent inbox">
+      <section v-show="activeTab === 'attention'" id="panel-attention-inbox" class="tab-panel" aria-labelledby="tab-attention">
+        <section id="attention-inbox" class="activity-section" aria-label="Agent inbox">
           <div class="section-heading">
             <h2>Agent Inbox</h2>
             <p class="label">{{ inbox.length }} messages</p>
@@ -2010,8 +1928,8 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'approvals'" id="panel-approvals" class="tab-panel" role="tabpanel" aria-labelledby="tab-approvals">
-        <section class="activity-section" aria-label="Approval inbox">
+      <section v-show="activeTab === 'attention'" id="panel-attention-approvals" class="tab-panel" aria-labelledby="tab-attention">
+        <section id="attention-approvals" class="activity-section" aria-label="Approval inbox">
           <div class="section-heading">
             <div>
               <h2>Approval inbox</h2>
@@ -2081,59 +1999,13 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'outbox'" id="panel-outbox" class="tab-panel" role="tabpanel" aria-labelledby="tab-outbox">
-        <section class="activity-section" aria-label="Outbox history">
-          <div class="section-heading">
-            <h2>Outbox</h2>
-            <p class="label">{{ outboxHistory.length }} sent or failed</p>
-          </div>
-          <p v-if="outboxHistory.length === 0" class="empty">No sent or failed outbound messages.</p>
-          <template v-else>
-            <table class="cds--data-table cds--data-table--zebra">
-              <thead>
-                <tr>
-                  <th>Created</th>
-                  <th>Sent</th>
-                  <th>Channel</th>
-                  <th>Recipient</th>
-                  <th>Status</th>
-                  <th>Message</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="message in paginatedOutbox" :key="message.id">
-                  <td>{{ formatDate(message.createdAt) }}</td>
-                  <td>{{ formatDate(message.sentAt) }}</td>
-                  <td>{{ message.channel }}</td>
-                  <td>{{ message.toAddr }}</td>
-                  <td>
-                    <span class="cds--tag" :class="statusTagClass(message.status)">{{ message.status }}</span>
-                  </td>
-                  <td>
-                    <span class="table-copy">{{ message.failureMessage ? `Failure: ${message.failureMessage}` : message.bodyText }}</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <div class="cds--pagination pagination-bar">
-              <div class="cds--pagination__left">
-                Page {{ outboxPage }} of {{ totalOutboxPages }}
-              </div>
-              <div class="cds--pagination__right">
-                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="outboxPage === 1" @click="previousOutboxPage">
-                  Previous
-                </button>
-                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="outboxPage === totalOutboxPages" @click="nextOutboxPage">
-                  Next
-                </button>
-              </div>
-            </div>
-          </template>
-        </section>
-      </section>
-
-      <section v-show="activeTab === 'tasks'" id="panel-tasks" class="tab-panel" role="tabpanel" aria-labelledby="tab-tasks">
-        <section class="activity-section" aria-label="Create task">
+      <section v-show="activeTab === 'work'" id="panel-work" class="tab-panel" role="tabpanel" aria-labelledby="tab-work">
+        <nav class="section-nav" aria-label="Work views">
+          <a class="section-nav-link" href="#work-create">Add task</a>
+          <a class="section-nav-link" href="#work-tasks">Tasks</a>
+          <a class="section-nav-link" href="#work-outbox">Outbox history</a>
+        </nav>
+        <section id="work-create" class="activity-section" aria-label="Create task">
           <div class="section-heading">
             <h2>Add task</h2>
           </div>
@@ -2162,7 +2034,7 @@ onUnmounted(() => {
           </form>
         </section>
 
-        <section class="activity-section" aria-label="Tasks">
+        <section id="work-tasks" class="activity-section" aria-label="Tasks">
           <div class="section-heading">
             <h2>Tasks</h2>
             <p class="label">{{ tasks.length }} total</p>
@@ -2216,66 +2088,64 @@ onUnmounted(() => {
             </div>
           </template>
         </section>
+
+        <section id="work-outbox" class="activity-section" aria-label="Outbox history">
+          <div class="section-heading">
+            <h2>Outbox</h2>
+            <p class="label">{{ outboxHistory.length }} sent or failed</p>
+          </div>
+          <p v-if="outboxHistory.length === 0" class="empty">No sent or failed outbound messages.</p>
+          <template v-else>
+            <table class="cds--data-table cds--data-table--zebra">
+              <thead>
+                <tr>
+                  <th>Created</th>
+                  <th>Sent</th>
+                  <th>Channel</th>
+                  <th>Recipient</th>
+                  <th>Status</th>
+                  <th>Message</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="message in paginatedOutbox" :key="message.id">
+                  <td>{{ formatDate(message.createdAt) }}</td>
+                  <td>{{ formatDate(message.sentAt) }}</td>
+                  <td>{{ message.channel }}</td>
+                  <td>{{ message.toAddr }}</td>
+                  <td>
+                    <span class="cds--tag" :class="statusTagClass(message.status)">{{ message.status }}</span>
+                  </td>
+                  <td>
+                    <span class="table-copy">{{ message.failureMessage ? `Failure: ${message.failureMessage}` : message.bodyText }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div class="cds--pagination pagination-bar">
+              <div class="cds--pagination__left">
+                Page {{ outboxPage }} of {{ totalOutboxPages }}
+              </div>
+              <div class="cds--pagination__right">
+                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="outboxPage === 1" @click="previousOutboxPage">
+                  Previous
+                </button>
+                <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" :disabled="outboxPage === totalOutboxPages" @click="nextOutboxPage">
+                  Next
+                </button>
+              </div>
+            </div>
+          </template>
+        </section>
       </section>
 
-      <section v-show="activeTab === 'memory'" id="panel-memory" class="tab-panel" role="tabpanel" aria-labelledby="tab-memory">
-        <section class="activity-section" aria-label="Trusted contacts">
-          <div class="section-heading">
-            <h2>Trusted contacts</h2>
-            <p class="label">{{ senders.length }} entries</p>
-          </div>
-          <form class="form-grid sender-form contact-form" @submit.prevent="saveSender">
-            <div class="cds--form-item">
-              <label class="cds--label" for="memory-sender-address">Address</label>
-              <input id="memory-sender-address" v-model="senderForm.address" class="cds--text-input" required type="email">
-            </div>
-            <div class="cds--form-item">
-              <label class="cds--label" for="memory-sender-status">Status</label>
-              <select id="memory-sender-status" v-model="senderForm.status" class="cds--select-input">
-                <option v-for="status in senderStatuses" :key="status" :value="status">{{ status }}</option>
-              </select>
-            </div>
-            <div class="form-actions">
-              <button class="cds--btn cds--btn--primary" type="submit" :disabled="saving">
-                Save contact
-              </button>
-              <button class="cds--btn cds--btn--ghost" type="button" :disabled="saving" @click="resetSenderForm">
-                Clear
-              </button>
-            </div>
-          </form>
-          <p v-if="senders.length === 0" class="empty">No trusted contacts configured.</p>
-          <table v-else class="cds--data-table cds--data-table--zebra contact-table">
-            <thead>
-              <tr>
-                <th>Address</th>
-                <th>Status</th>
-                <th>Updated</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="sender in senders" :key="sender.id">
-                <td>{{ sender.address }}</td>
-                <td>
-                  <span class="cds--tag" :class="statusTagClass(sender.status)">{{ sender.status }}</span>
-                </td>
-                <td>{{ formatDate(sender.updatedAt) }}</td>
-                <td>
-                  <div class="table-actions">
-                    <button class="cds--btn cds--btn--sm cds--btn--ghost" type="button" @click="editSender(sender)">
-                      Edit
-                    </button>
-                    <button class="cds--btn cds--btn--sm cds--btn--danger--ghost" type="button" @click="deleteSender(sender)">
-                      Remove
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </section>
-        <section class="activity-section" aria-label="Recent memory changes">
+      <section v-show="activeTab === 'knowledge'" id="panel-knowledge" class="tab-panel" role="tabpanel" aria-labelledby="tab-knowledge">
+        <nav class="section-nav" aria-label="Knowledge views">
+          <a class="section-nav-link" href="#knowledge-changes">Changes</a>
+          <a class="section-nav-link" href="#knowledge-browser">Browser</a>
+          <a class="section-nav-link" href="#knowledge-legacy">Legacy</a>
+        </nav>
+        <section id="knowledge-changes" class="activity-section" aria-label="Recent memory changes">
           <div class="section-heading">
             <h2>Recent memory changes</h2>
             <p class="label">{{ memoryChanges.length }} changes</p>
@@ -2359,7 +2229,7 @@ onUnmounted(() => {
             </article>
           </div>
         </section>
-        <section class="activity-section" aria-label="Agent memory">
+        <section id="knowledge-browser" class="activity-section" aria-label="Agent memory">
           <div class="section-heading">
             <h2>Memory and knowledge</h2>
             <p class="label">{{ knowledgeFileEntries.length }} markdown files</p>
@@ -2463,7 +2333,7 @@ onUnmounted(() => {
           </section>
         </section>
 
-        <section v-if="memoryDocuments.length > 0" class="activity-section" aria-label="Legacy memory records">
+        <section v-if="memoryDocuments.length > 0" id="knowledge-legacy" class="activity-section" aria-label="Legacy memory records">
           <div class="section-heading">
             <h2>Legacy memory records</h2>
             <p class="label">{{ memoryDocuments.length }} documents</p>
@@ -2505,8 +2375,12 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'senders'" id="panel-senders" class="tab-panel" role="tabpanel" aria-labelledby="tab-senders">
-        <section class="activity-section" aria-label="Sender trust">
+      <section v-show="activeTab === 'integrations'" id="panel-integrations" class="tab-panel" role="tabpanel" aria-labelledby="tab-integrations">
+        <nav class="section-nav" aria-label="Integration views">
+          <a class="section-nav-link" href="#integrations-senders">Sender trust</a>
+          <a class="section-nav-link" href="#integrations-connectors">Connectors</a>
+        </nav>
+        <section id="integrations-senders" class="activity-section" aria-label="Sender trust">
           <div class="section-heading">
             <h2>Sender trust</h2>
           </div>
@@ -2563,8 +2437,13 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'workers'" id="panel-workers" class="tab-panel" role="tabpanel" aria-labelledby="tab-workers">
-        <section class="activity-section" aria-label="RAG index status">
+      <section v-show="activeTab === 'operations'" id="panel-operations" class="tab-panel" role="tabpanel" aria-labelledby="tab-operations">
+        <nav class="section-nav" aria-label="Operations views">
+          <a class="section-nav-link" href="#operations-status">Status</a>
+          <a class="section-nav-link" href="#operations-jobs">Jobs</a>
+          <a class="section-nav-link" href="#operations-logs">Logs</a>
+        </nav>
+        <section id="operations-status" class="activity-section" aria-label="RAG index status">
           <div class="section-heading">
             <h2>RAG and index status</h2>
             <p class="label">{{ knowledgeDocument ? knowledgeDocument.path : "No file selected" }}</p>
@@ -2683,7 +2562,7 @@ onUnmounted(() => {
           </table>
         </section>
 
-        <section class="activity-section" aria-label="Worker jobs">
+        <section id="operations-jobs" class="activity-section" aria-label="Worker jobs">
           <div class="section-heading">
             <h2>Worker jobs</h2>
           </div>
@@ -2715,8 +2594,8 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'logs'" id="panel-logs" class="tab-panel" role="tabpanel" aria-labelledby="tab-logs">
-        <section class="activity-section" aria-label="Agent runs">
+      <section v-show="activeTab === 'operations'" id="panel-operations-logs" class="tab-panel" aria-labelledby="tab-operations">
+        <section id="operations-logs" class="activity-section" aria-label="Agent runs">
           <div class="section-heading">
             <h2>Agent runs</h2>
             <p class="label">{{ agentRunEvents.length }} recent events</p>
@@ -2804,10 +2683,10 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'settings'" id="panel-settings" class="tab-panel" role="tabpanel" aria-labelledby="tab-settings">
-        <section class="activity-section" aria-label="Connector configuration">
+      <section v-show="activeTab === 'integrations'" id="panel-integrations-connectors" class="tab-panel" aria-labelledby="tab-integrations">
+        <section id="integrations-connectors" class="activity-section" aria-label="Connector configuration">
           <div class="section-heading">
-            <h2>Account settings</h2>
+            <h2>Connector configuration</h2>
           </div>
           <div class="connector-grid">
             <form class="form-grid connector-form" @submit.prevent="saveOwnerContactConfig">
@@ -2954,7 +2833,7 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'admin'" id="panel-admin" class="tab-panel" role="tabpanel" aria-labelledby="tab-admin">
+      <section v-show="activeTab === 'settings'" id="panel-settings" class="tab-panel" role="tabpanel" aria-labelledby="tab-settings">
         <section v-if="aiConfig" class="activity-section" aria-label="AI configuration">
           <div class="section-heading">
             <h2>AI configuration</h2>

@@ -135,19 +135,21 @@ describe("home view", () => {
     const { wrapper } = await mountHome();
     await flushPromises();
 
+    expect(wrapper.get("#tab-chat").attributes("aria-selected")).toBe("true");
     expect(wrapper.text()).toContain("Check in");
     expect(wrapper.text()).toContain("sms");
     expect(wrapper.text()).toContain("sms@example.test");
-    expect(wrapper.text()).toContain("Overview");
-    expect(wrapper.text()).toContain("Inbox");
-    expect(wrapper.text()).toContain("Outbox");
-    expect(wrapper.text()).toContain("Tasks");
-    expect(wrapper.text()).toContain("Memory");
+    expect(wrapper.text()).toContain("Chat");
+    expect(wrapper.text()).toContain("Attention");
+    expect(wrapper.text()).toContain("Work");
+    expect(wrapper.text()).toContain("Knowledge");
+    expect(wrapper.text()).toContain("Integrations");
+    expect(wrapper.text()).toContain("Operations");
     expect(wrapper.text()).toContain("Settings");
     expect(wrapper.text()).toContain("Memory changes");
     expect(wrapper.text()).toContain("owner@example.test");
     expect(wrapper.text()).toContain("AI configuration");
-    expect(wrapper.text()).toContain("Account settings");
+    expect(wrapper.text()).toContain("Connector configuration");
     expect(wrapper.text()).toContain("please approve");
     expect(wrapper.text()).toContain("Owner review not sent");
     expect(wrapper.text()).toContain("Notify owner");
@@ -210,6 +212,7 @@ describe("home view", () => {
     await flushPromises();
     await flushPromises();
 
+    expect(wrapper.get("#tab-settings").attributes("aria-selected")).toBe("true");
     await wrapper.get("#max-tool-calls").setValue("50");
     await wrapper.get("#max-runtime-sec").setValue("500");
     await vi.advanceTimersByTimeAsync(10_000);
@@ -218,7 +221,7 @@ describe("home view", () => {
     expect((wrapper.get("#max-tool-calls").element as HTMLInputElement).value).toBe("50");
     expect((wrapper.get("#max-runtime-sec").element as HTMLInputElement).value).toBe("500");
 
-    await wrapper.get("#panel-admin form").trigger("submit");
+    await wrapper.get("#panel-settings form").trigger("submit");
     await flushPromises();
 
     expect(savedBodies.at(-1)).toMatchObject({
@@ -228,7 +231,7 @@ describe("home view", () => {
     wrapper.unmount();
   });
 
-  it("renders personal assistant insight sections on the overview", async () => {
+  it("renders personal assistant insight sections on attention", async () => {
     const insightPayload = {
       generatedAt: "2026-06-13T12:00:00.000Z",
       metrics: {
@@ -288,6 +291,9 @@ describe("home view", () => {
       if (url.includes("/dashboard")) {
         return { ok: true, json: async () => insightPayload };
       }
+      if (url.includes("/approvals")) {
+        return { ok: true, json: async () => ({ approvals: [] }) };
+      }
       if (url.includes("/admin/ai-config")) {
         return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
       }
@@ -316,7 +322,7 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome();
+    const { wrapper } = await mountHome("/?tab=attention");
     await flushPromises();
 
     expect(wrapper.text()).toContain("Attention queue");
@@ -338,110 +344,95 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("avoid early texts");
     expect(wrapper.text()).toContain("Guardrails and failed runs");
     expect(wrapper.text()).toContain("Model returned no usable action.");
-    expect(wrapper.text()).toContain("Talk to the agent");
+    expect(wrapper.find("#overview-agent-prompt").exists()).toBe(false);
   });
 
   it("keeps the active dashboard tab in the route query", async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          authenticated: true,
-          user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ events: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ senders: [{ id: "sender-1", address: "news@example.test", status: "newsletter", createdAt: "", updatedAt: "" }] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [] }) })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          fastModel: "gpt-5-mini",
-          smartModel: "gpt-5",
-          orchestratorModel: "gpt-5",
-          repairModel: "gpt-5-mini",
-          maxToolCalls: 10,
-          maxRuntimeSec: 120,
-          repairAttemptLimit: 1
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/dashboard")) {
+        return { ok: true, json: async () => ({}) };
+      }
+      if (url.includes("/approvals")) {
+        return { ok: true, json: async () => ({ approvals: [] }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => ({ fastModel: "gpt-5-mini", smartModel: "gpt-5", orchestratorModel: "gpt-5", repairModel: "gpt-5-mini", maxToolCalls: 10, maxRuntimeSec: 120, repairAttemptLimit: 1 }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     const { router, wrapper } = await mountHome("/?tab=outbox");
     await flushPromises();
 
-    expect(wrapper.get("#tab-outbox").attributes("aria-selected")).toBe("true");
+    expect(wrapper.get("#tab-attention").attributes("aria-selected")).toBe("true");
 
-    await wrapper.get("#tab-inbox").trigger("click");
+    await wrapper.get("#tab-work").trigger("click");
     await flushPromises();
 
-    expect(router.currentRoute.value.query.tab).toBe("inbox");
-    expect(wrapper.get("#tab-inbox").attributes("aria-selected")).toBe("true");
+    expect(router.currentRoute.value.query.tab).toBe("work");
+    expect(wrapper.get("#tab-work").attributes("aria-selected")).toBe("true");
   });
 
-  it("keeps account connector settings on a user settings tab", async () => {
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          authenticated: true,
-          user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ events: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ senders: [] }) })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          connectors: [
-            { id: "connector-1", kind: "owner-contact", status: "enabled", config: { name: "User", email: "u@example.test" }, createdAt: "", updatedAt: "" }
-          ]
-        })
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          fastModel: "gpt-5-mini",
-          smartModel: "gpt-5",
-          orchestratorModel: "gpt-5",
-          repairModel: "gpt-5-mini",
-          maxToolCalls: 10,
-          maxRuntimeSec: 120,
-          repairAttemptLimit: 1
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [] }) })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          connectors: [
-            { id: "connector-1", kind: "owner-contact", status: "enabled", config: { name: "User", email: "u@example.test" }, createdAt: "", updatedAt: "" }
-          ]
-        })
-      });
+  it("keeps account connector settings on the integrations tab", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return {
+          ok: true,
+          json: async () => ({
+            connectors: [
+              { id: "connector-1", kind: "owner-contact", status: "enabled", config: { name: "User", email: "u@example.test" }, createdAt: "", updatedAt: "" }
+            ]
+          })
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=settings");
+    const { wrapper } = await mountHome("/?tab=integrations");
     await flushPromises();
 
-    expect(wrapper.get("#tab-settings").attributes("aria-selected")).toBe("true");
-    expect(wrapper.text()).toContain("Account settings");
+    expect(wrapper.get("#tab-integrations").attributes("aria-selected")).toBe("true");
+    expect(wrapper.text()).toContain("Connector configuration");
     expect(wrapper.text()).toContain("Owner contact");
     expect(wrapper.text()).toContain("IMAP inbox");
     expect(wrapper.text()).toContain("SMTP outbox");
   });
 
-  it("shows a searchable memory browser tab", async () => {
+  it("shows a searchable knowledge browser tab", async () => {
     const document = {
       id: "mem-1",
       slug: "newsletter-preferences",
@@ -483,12 +474,10 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=memory");
+    const { wrapper } = await mountHome("/?tab=knowledge");
     await flushPromises();
 
-    expect(wrapper.get("#tab-memory").attributes("aria-selected")).toBe("true");
-    expect(wrapper.text()).toContain("Trusted contacts");
-    expect(wrapper.text()).toContain("news@example.test");
+    expect(wrapper.get("#tab-knowledge").attributes("aria-selected")).toBe("true");
     expect(wrapper.text()).toContain("Newsletter Preferences");
     expect(wrapper.text()).toContain("newsletter-preferences");
     expect(wrapper.text()).toContain("Useful security writeups");
@@ -576,7 +565,7 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=memory");
+    const { wrapper } = await mountHome("/?tab=knowledge");
     await flushPromises();
 
     expect(wrapper.text()).toContain("Recent memory changes");
@@ -594,7 +583,7 @@ describe("home view", () => {
     expect(fetchMock.mock.calls.some((call) => String(call[0]).includes("/knowledge/files/%2Fpersonal%2Flists%2Fmovies.md"))).toBe(true);
   });
 
-  it("manages trusted contacts from the memory tab", async () => {
+  it("manages trusted contacts from the integrations tab", async () => {
     let senderState = [{ id: "sender-1", address: "owner@example.test", status: "owner", createdAt: "", updatedAt: "" }];
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
@@ -638,11 +627,11 @@ describe("home view", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    const { wrapper } = await mountHome("/?tab=memory");
+    const { wrapper } = await mountHome("/?tab=integrations");
     await flushPromises();
 
-    await wrapper.get("#memory-sender-address").setValue("friend@example.test");
-    await wrapper.get("#memory-sender-status").setValue("trusted");
+    await wrapper.get("#sender-address").setValue("friend@example.test");
+    await wrapper.get("#sender-status").setValue("trusted");
     await wrapper.get("form.contact-form").trigger("submit");
     await flushPromises();
 
@@ -658,7 +647,7 @@ describe("home view", () => {
     expect(deleteCall).toBeTruthy();
   });
 
-  it("shows IMAP test failures from the settings tab", async () => {
+  it("shows IMAP test failures from the integrations tab", async () => {
     const connector = {
       id: "connector-1",
       kind: "imap",
@@ -727,7 +716,7 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=settings");
+    const { wrapper } = await mountHome("/?tab=integrations");
     await flushPromises();
 
     const testButton = wrapper.findAll("button").find((button) => button.text() === "Test IMAP");
@@ -828,6 +817,7 @@ describe("home view", () => {
     const { wrapper } = await mountHome("/?tab=approvals");
     await flushPromises();
 
+    expect(wrapper.get("#tab-attention").attributes("aria-selected")).toBe("true");
     expect(wrapper.text()).toContain("Approval inbox");
     expect(wrapper.text()).toContain("Send SMS owner message");
     expect(wrapper.text()).toContain("Original message");
@@ -920,7 +910,7 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=workers");
+    const { wrapper } = await mountHome("/?tab=operations");
     await flushPromises();
 
     expect(wrapper.text()).toContain("embedding provider unavailable");
@@ -931,46 +921,38 @@ describe("home view", () => {
   it("polls only the active tab data every ten seconds", async () => {
     vi.useFakeTimers();
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          authenticated: true,
-          user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true }
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ tasks: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ events: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ senders: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ connectors: [] }) })
-      .mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          fastModel: "gpt-5-mini",
-          smartModel: "gpt-5",
-          orchestratorModel: "gpt-5",
-          repairModel: "gpt-5-mini",
-          maxToolCalls: 10,
-          maxRuntimeSec: 120,
-          repairAttemptLimit: 1
-        })
-      })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ jobs: [] }) })
-      .mockResolvedValueOnce({ ok: true, json: async () => ({ documents: [] }) });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return {
+          ok: true,
+          json: async () => ({
+            fastModel: "gpt-5-mini",
+            smartModel: "gpt-5",
+            orchestratorModel: "gpt-5",
+            repairModel: "gpt-5-mini",
+            maxToolCalls: 10,
+            maxRuntimeSec: 120,
+            repairAttemptLimit: 1
+          })
+        };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=outbox");
+    const { wrapper } = await mountHome("/?tab=settings");
     await flushPromises();
     fetchMock.mockClear();
-    fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ messages: [] }) });
 
     await vi.advanceTimersByTimeAsync(10_000);
     await flushPromises();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toContain("/outbox");
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain("/admin/ai-config");
 
     wrapper.unmount();
   });
@@ -1082,10 +1064,10 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome();
+    const { wrapper } = await mountHome("/?tab=overview");
     await flushPromises();
 
-    await wrapper.get("#tab-chat").trigger("click");
+    expect(wrapper.get("#tab-chat").attributes("aria-selected")).toBe("true");
     await flushPromises();
     await wrapper.get("#chat-agent-prompt").setValue("Create a packing task.");
     await wrapper.get("#panel-chat form").trigger("submit");
@@ -1181,7 +1163,7 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=tasks");
+    const { wrapper } = await mountHome("/?tab=work");
     await flushPromises();
     await wrapper.findAll("button").find((button) => button.text() === "View")!.trigger("click");
     await flushPromises();
@@ -1210,6 +1192,9 @@ describe("home view", () => {
       if (url.includes("/messages") || url.includes("/outbox")) {
         return { ok: true, json: async () => ({ messages: [] }) };
       }
+      if (url.includes("/approvals")) {
+        return { ok: true, json: async () => ({ approvals: [] }) };
+      }
       if (url.includes("/tasks")) {
         return { ok: true, json: async () => ({ tasks: [] }) };
       }
@@ -1232,7 +1217,7 @@ describe("home view", () => {
     const { wrapper } = await mountHome("/?tab=inbox");
     await flushPromises();
 
-    expect(wrapper.get("#tab-inbox").text()).toBe("Agent Inbox");
+    expect(wrapper.get("#tab-attention").text()).toBe("Attention");
     expect(wrapper.text()).toContain("No messages received by the assistant mailbox.");
   });
 
@@ -1308,7 +1293,7 @@ describe("home view", () => {
     const { wrapper } = await mountHome();
     await flushPromises();
 
-    await wrapper.get("#tab-memory").trigger("click");
+    await wrapper.get("#tab-knowledge").trigger("click");
     await flushPromises();
 
     expect(wrapper.text()).toContain("/assistant/instructions.md");

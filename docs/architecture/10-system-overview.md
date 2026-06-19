@@ -35,7 +35,7 @@ agent network. Production connector files are mounted read-only from the root
 checkout's ignored `apps/agent/secrets/` directory.
 
 User-owned connector settings are stored in the database and managed from the
-web Settings tab. That includes the user's contact details, SMS/MMS gateway
+web Integrations tab. That includes the user's contact details, SMS/MMS gateway
 addresses, assistant mailbox identity, IMAP settings, and SMTP settings. The
 webmaster-provisioned OpenAI API key remains deployment-owned secret
 configuration and is never displayed in the UI.

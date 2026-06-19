@@ -24,7 +24,7 @@ summaries rather than connector secrets, recipient addresses, raw tool
 arguments/results, or integration URLs.
 
 Authenticated users can also call `GET /api/v1/dashboard` for the owner
-command-center summary used by the Overview tab. The endpoint is read-only,
+command-center summary used by the Attention tab. The endpoint is read-only,
 user-scoped, and derived from source records rather than cached state. It
 returns compact sections for active tasks and schedule rationale, pending
 approvals, recent assistant decision ledger files, recent memory changes,
@@ -64,7 +64,7 @@ The jobs response includes:
 - RAG user index health rows with expected document/chunk counts and Qdrant
   point count when the RAG worker has reconciled it.
 
-The Workers tab consumes this endpoint and shows the same budget, queue,
+The Operations tab consumes this endpoint and shows the same budget, queue,
 failure, and Qdrant/RAG health information.
 
 Approval execution status is visible on approval records and in audit logs.
@@ -111,7 +111,7 @@ SMTP transport failure messages follow the same operator boundary: they are
 visible on failed outbox records, but persisted text is bounded and scrubbed for
 credential-like values and URLs.
 
-Recent memory mutations are visible through the Memory tab and
+Recent memory mutations are visible through the Knowledge tab and
 `GET /api/v1/memory/changes/recent`. The surface is derived from user-scoped
 markdown audit events and shows path, source action, actor type, version
 movement, linked ids, provenance/confidence, and a bounded unified diff. Diff

@@ -21,21 +21,23 @@ the API is available at `http://localhost:18080`. In standalone mode, the
 sign-in button calls `POST /api/v1/auth/dev-login` and creates a session for the
 configured development user.
 
-The home screen is the operational dashboard. It supports creating and updating
-tasks, talking directly to the agent through `POST /api/v1/agent/prompts`,
-approving or cancelling outbound messages, browsing markdown memory/knowledge,
-managing sender trust, inspecting worker and index status, viewing agent
-run/tool-call/audit history, and editing admin AI model configuration when the
-signed-in user is an administrator. OAuth callback failures redirect back to the
-UI with an `oauth_error` token; the web store converts that token into a
-friendly message and removes it from the URL.
+The home screen is the operational dashboard. Its top-level IA is Chat,
+Attention, Work, Knowledge, Integrations, Operations, and Settings. It supports
+creating and updating tasks, talking directly to the agent through
+`POST /api/v1/agent/prompts`, approving or cancelling outbound messages,
+browsing markdown memory/knowledge, managing sender trust and connectors,
+inspecting worker and index status, viewing agent run/tool-call/audit history,
+and editing admin AI model configuration when the signed-in user is an
+administrator. OAuth callback failures redirect back to the UI with an
+`oauth_error` token; the web store converts that token into a friendly message
+and removes it from the URL.
 
-The Overview tab is backed by `GET /api/v1/dashboard`, a read-only owner-scoped
-insight aggregate. It summarizes active tasks, pending approvals, recent
-decision and feedback notes, recent memory changes, active threads, contact
-cadence, personal list counts, guardrail trips, failed runs/tool calls, failed
-outbound delivery, worker problems/recoveries, RAG indexing failures, and
-failed cross-app approval executions. The endpoint derives those panels from
+The Attention surface is backed in part by `GET /api/v1/dashboard`, a read-only
+owner-scoped insight aggregate. It summarizes active tasks, pending approvals,
+recent decision and feedback notes, recent memory changes, active threads,
+contact cadence, personal list counts, guardrail trips, failed runs/tool calls,
+failed outbound delivery, worker problems/recoveries, RAG indexing failures,
+and failed cross-app approval executions. The endpoint derives those panels from
 existing source records and does not return connector credentials, MCP tokens,
 raw tool-call payloads, integration URLs, or outbound recipient addresses.
 
@@ -46,17 +48,17 @@ personal lists, owner feedback, task outcomes, assistant decisions, and manual
 edits. Memory-change API and dashboard surfaces expose this compact provenance
 so stale inferences and direct owner statements can be distinguished later.
 
-Phase 08 approvals are visible in the Approval inbox. Autonomous cross-app write
-proposals, self-review contact, and memory-review contact create approval
-records instead of executing immediately. Direct owner commands from web chat,
-mobile voice, or owner-classified inbound messages execute through scoped app
-tokens without an extra approval hop. Newsletter interest checks may send short,
-budgeted owner messages when the material is genuinely useful; otherwise they
-record rationale and stay quiet. The owner can approve, reject, edit outbound
-text, or bulk reject stale approvals from the UI. Owner-classified SMS/email
-replies of `YES`, `NO`, `EDIT <text>`, `LATER`, or `DETAILS` are parsed by host
-code against the most recent pending approval; the model does not choose
-approval ids or recipients.
+Phase 08 approvals are visible in the Attention tab approval inbox. Autonomous
+cross-app write proposals, self-review contact, and memory-review contact
+create approval records instead of executing immediately. Direct owner commands
+from web chat, mobile voice, or owner-classified inbound messages execute
+through scoped app tokens without an extra approval hop. Newsletter interest
+checks may send short, budgeted owner messages when the material is genuinely
+useful; otherwise they record rationale and stay quiet. The owner can approve,
+reject, edit outbound text, or bulk reject stale approvals from the UI.
+Owner-classified SMS/email replies of `YES`, `NO`, `EDIT <text>`, `LATER`, or
+`DETAILS` are parsed by host code against the most recent pending approval; the
+model does not choose approval ids or recipients.
 
 API and worker startup run the TypeScript migration runner before serving:
 
@@ -114,16 +116,15 @@ session cookie, creates an agent run, and executes at most one selected
 host-validated tool call through MCP. Tests should inject `MockModelClient`
 through `buildApp` instead of relying on live OpenAI credentials.
 
-The web console exposes this endpoint from Overview and Chat. Task context is
-sent as `contextTaskId`; selected memory paths and recent assistant-mailbox
-messages are folded into Overview prompt text as operator-selected context. The
-Chat tab remains a conversational surface and folds only bounded recent browser
-chat turns into follow-up prompt text. If the model answers a web prompt without
-selecting a tool, the response includes `responseText` for the UI to display
-directly. The production-style Nginx service keeps API proxy reads open for 600
-seconds so slow owner-command prompt runs can return within the configured
-runtime budget. Do not add browser-side access to write/action MCP tools for
-this workflow.
+The web console exposes this endpoint from Chat. The Chat tab remains a
+conversational surface and folds only bounded recent browser chat turns into
+follow-up prompt text; it does not expose prompt modes, task selectors, memory
+selectors, run ids, selected tools, or other operator/debug controls. If the
+model answers a web prompt without selecting a tool, the response includes
+`responseText` for the UI to display directly. The production-style Nginx
+service keeps API proxy reads open for 600 seconds so slow owner-command prompt
+runs can return within the configured runtime budget. Do not add browser-side
+access to write/action MCP tools for this workflow.
 
 Mobile voice prompts use the same owner decision loop after server-side
 transcription:
@@ -173,14 +174,14 @@ run/task/tool/message/approval records after accepted tool calls and scheduled
 worker outcomes, so it should explain why the assistant messaged, stayed quiet,
 requested clarification, queued approval, changed a task schedule/status, or
 recorded self-review/memory-review findings without an extra model call. Inspect
-it through the Memory tab or:
+it through the Knowledge tab or:
 
 ```text
 GET /api/v1/knowledge/files/%2Fassistant%2Fdecisions%2FYYYY-MM.md
 ```
 
 Runaway guardrails and operational recovery state are configured through host
-settings and shown in the Workers tab / `GET /api/v1/jobs`. The jobs response
+settings and shown in the Operations tab / `GET /api/v1/jobs`. The jobs response
 also reports safe optional integration status, connector completeness,
 failed/dead RAG jobs, failed cross-app approval executions, worker connector
 failures, recovery events, and stale claimed/running/sending state. Defaults are
@@ -254,10 +255,10 @@ The seed command reads legacy/bootstrap files:
 - `openai.txt` when `AGENT_OPENAI_API_KEY_FILE` points at the mounted secret
   file.
 
-Normal user setup happens through the web Settings tab. Each user owns their
-contact details, SMS/MMS gateway addresses, assistant mailbox identity, IMAP
-settings, and SMTP settings. The webmaster-owned OpenAI API key remains
-deployment configuration.
+Normal user connector setup happens through the web Integrations tab. Each user
+owns their contact details, SMS/MMS gateway addresses, assistant mailbox
+identity, IMAP settings, and SMTP settings. The webmaster-owned OpenAI API key
+remains deployment configuration and AI model settings remain under Settings.
 
 Connector and integration tests also avoid live networks. They use deterministic
 sender classification, mock fetch implementations, and outbox records instead of
@@ -321,13 +322,13 @@ GET /api/v1/knowledge/files/:encodedPath/sections
 Encode full markdown paths for `:encodedPath`, for example
 `%2Fpersonal%2Fprofile.md`.
 
-The Memory tab uses these routes for the markdown knowledge browser. It shows
+The Knowledge tab uses these routes for the markdown knowledge browser. It shows
 the standard knowledge roots, selected file index status, heading outline, exact
 path/body search for loaded data, and raw markdown preview. Editing is limited
 to assistant-authored markdown under `/assistant/`; other durable writes should
 continue through host-owned ingestion or the validated agent runtime.
 
-Recent memory writes are available from the Memory tab and:
+Recent memory writes are available from the Knowledge tab and:
 
 ```text
 GET /api/v1/memory/changes/recent?pathPrefix=/personal&action=markdown.write&limit=50

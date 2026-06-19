@@ -165,10 +165,10 @@ separate task or owner instruction and pass the normal outbox/budget path.
 
 The worker polls enabled per-user IMAP connector records and processes unread
 mail in bounded batches. IMAP connector settings live in the database and are
-managed from the Settings tab, including the assistant mailbox password. API reads
-redact saved passwords and expose only a `password_set` flag. A user will not
-see new mail in the Inbox unless their IMAP connector is enabled, complete, and
-the worker is running.
+managed from the Integrations tab, including the assistant mailbox password. API
+reads redact saved passwords and expose only a `password_set` flag. A user will
+not see new mail in the Attention inbox unless their IMAP connector is enabled,
+complete, and the worker is running.
 
 The IMAP parser records attachment metadata only. It caps metadata entries,
 sanitizes filenames and content types, records byte size and SHA-256 for
@@ -202,32 +202,32 @@ failure. A mailbox outage that fails an attempted poll must still be visible as
 a worker IMAP error. A mailbox outage must not prevent owner-review notifications
 or other queued outbound messages from being delivered.
 
-The Settings tab includes an IMAP test action. The test saves the current IMAP
-form values, connects to the configured mailbox, opens the mailbox, and reports
-the unread count or the provider error text. Test results are audited as
+The Integrations tab includes an IMAP test action. The test saves the current
+IMAP form values, connects to the configured mailbox, opens the mailbox, and
+reports the unread count or the provider error text. Test results are audited as
 `connector.imap_test.ok` or `connector.imap_test.failed` without storing or
 returning the mailbox password.
 
-The operations UI has an Inbox tab. It lists inbound messages in reverse
-chronological order with sender, source, classification, handling action, and a
-task link when the message was assigned to a task. Following the task link opens
-the task modal and timeline, including `message.inbound.assigned` and related
-agent/tool events. For untrusted messages, the Inbox tab shows whether the
-owner-review notification is pending, sent, failed, or missing. Older messages
-without a linked notification expose a Notify owner action that queues the same
-deterministic review notification after owner contact settings are configured.
+The operations UI has an Attention tab with an inbox section. It lists inbound
+messages in reverse chronological order with sender, source, classification,
+handling action, and a task link when the message was assigned to a task.
+Following the task link opens the task modal and timeline, including
+`message.inbound.assigned` and related agent/tool events. For untrusted
+messages, the Attention inbox shows whether the owner-review notification is
+pending, sent, failed, or missing. Older messages without a linked notification
+expose a Notify owner action that queues the same deterministic review
+notification after owner contact settings are configured.
 
 The operations UI is the owner console for direct interaction and inspection.
-The Overview tab exposes an operator prompt form that posts only to
-`POST /api/v1/agent/prompts` and can include task, memory-path, and recent
-assistant-mailbox message context as bounded prompt text. The Chat tab uses the
-same endpoint as a conversation surface, but sends only bounded recent browser
-chat turns plus the new owner message. Browser-created MCP sessions remain
+The Chat tab posts to `POST /api/v1/agent/prompts` as a conversation surface and
+sends only bounded recent browser chat turns plus the new owner message. It
+does not expose prompt modes, task selectors, memory selectors, run ids,
+selected tool names, or raw tool payloads. Browser-created MCP sessions remain
 read-only memory/search sessions and are not minted for decision tools. Direct
 task, memory, outbox, or integration actions still come only from the
 authenticated owner-command runtime and its server-owned MCP session.
 
-The operations UI also has a Memory tab. It uses the markdown knowledge
+The operations UI also has a Knowledge tab. It uses the markdown knowledge
 filesystem routes to show the standard root folders (`/personal`,
 `/preferences`, `/assistant`, `/tasks`, `/projects`, `/newsletters`, and
 `/legacy`), a file list, selected file preview, index status, and heading
@@ -238,16 +238,14 @@ list tools (`list_memory_items` and `search_memory_lists`) for list inspection;
 write/archive/delete list operations remain run-bound agent tools. The owner may
 edit assistant-authored files under
 `/assistant/`; other knowledge writes remain host-owned workflows or
-agent-runtime writes with validation and audit. The tab keeps trusted-contact
-management visible because sender trust is operational memory the owner needs
-to inspect and correct while reviewing agent behavior. The Memory tab and the
-Sender tab both edit the same `senders` records; deleting a contact removes the
-explicit classification so the address falls back to normal unknown/untrusted
-handling.
+agent-runtime writes with validation and audit. Sender trust lives in the
+Integrations tab alongside connector configuration; deleting a sender-trust
+record removes the explicit classification so the address falls back to normal
+unknown/untrusted handling.
 
-The Logs tab separates recent agent-run audit events and tool-call audit events
-from the general audit stream so an operator can trace source -> run -> tool ->
-result when the underlying audit details are present. The Workers tab shows
+The Operations tab separates recent agent-run audit events and tool-call audit
+events from the general audit stream so an operator can trace source -> run ->
+tool -> result when the underlying audit details are present. The same tab shows
 queue health and selected knowledge-file index status from existing job and
 markdown metadata.
 
@@ -275,8 +273,8 @@ per day, configurable by `INBOUND_MAX_UNTRUSTED_REVIEW_NOTIFICATIONS_PER_SENDER_
 IMAP polling also uses a bounded per-tick batch size so a large unread mailbox
 cannot process unbounded mail in one worker pass.
 Worker-level IMAP failures are recorded as `worker.imap_error` audit events so
-operators can see connector failures in the Logs tab instead of needing Docker
-logs.
+operators can see connector failures in the Operations tab instead of needing
+Docker logs.
 
 ## Outbound
 
@@ -299,7 +297,8 @@ Deployment-owned secrets are limited to platform-level configuration:
 
 - `openai.txt`: OpenAI API key when selected by `AGENT_OPENAI_API_KEY_FILE`.
 
-Per-user connector settings are database records editable from the Settings tab:
+Per-user connector settings are database records editable from the Integrations
+tab:
 
 - owner contact name, email, mobile provider, and SMS/MMS gateway addresses;
 - IMAP username, password, host, port, TLS flag, and mailbox name;
@@ -364,7 +363,7 @@ record, and `LATER`/`DETAILS` are recorded without running model tools. Arbitrar
 inbound messages cannot select approval ids unless a future signed short-code
 mechanism is added by host code.
 
-The operations UI has a dedicated Approval inbox backed by
+The Attention tab has a dedicated approval inbox backed by
 `GET /api/v1/approvals` and `PATCH /api/v1/approvals/:id`. Legacy outbox
 approve/cancel controls delegate to approval decisions when the outbox record
 has an approval id.
@@ -385,13 +384,13 @@ marks the stale execution `failed` with `approval_execution_expired` after a
 grace window. It does not retry because the target app may already have applied
 the write before the local status update was lost.
 
-The operations UI Overview lists only active outbound records that need
+The Attention tab lists only active outbound records that need
 attention or delivery tracking: `requires_approval`, `pending`, `approved`, and
-`sending`. The Outbox tab is history-oriented and lists sent and failed
-messages in a paged table, including delivery failure messages. Failed records
-are not shown as actionable approvals, and the API does not let manual outbox
-updates revive `sending`, `sent`, `failed`, or `cancelled` records. A future
-retry workflow should make retry state explicit rather than reusing the
+`sending`. The Work tab's outbox history is history-oriented and lists sent and
+failed messages in a paged table, including delivery failure messages. Failed
+records are not shown as actionable approvals, and the API does not let manual
+outbox updates revive `sending`, `sent`, `failed`, or `cancelled` records. A
+future retry workflow should make retry state explicit rather than reusing the
 approval button.
 
 The worker enforces outbound pacing. It reconciles signed-in users, then runs

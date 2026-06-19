@@ -119,8 +119,9 @@ Current tests cover:
   corrections, app action requests, casual conversation, clarification
   responses, unknown messages, prompt injection, user-scoped audit, and
   approval/trust reply precedence.
-- memory document API, Memory tab rendering, and trusted-contact management.
-- memory change API and Memory tab diff rendering, including user scoping,
+- memory document API, Knowledge tab rendering, and Integrations sender-trust
+  management.
+- memory change API and Knowledge tab diff rendering, including user scoping,
   path filtering, read-file links, and redaction of credential-like markdown
   lines in audit-backed diffs and provenance evidence.
 - owner reply tool contract without model-selected recipients.
@@ -136,7 +137,7 @@ Current tests cover:
   personal lists, guardrail/failed-run visibility, worker/RAG/approval
   execution failure visibility, and omission of connector secrets, integration
   URLs, or outbound recipients.
-- personal dashboard Overview rendering with representative dense insight
+- personal dashboard Attention rendering with representative dense insight
   sections, memory provenance summaries, and compact empty-state behavior.
 - operational jobs visibility, admin all-user aggregation, budget exposure,
   connector completeness summaries, stale worker-state counts, redacted
