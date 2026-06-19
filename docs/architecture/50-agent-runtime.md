@@ -243,8 +243,9 @@ Current migrated agent tools:
 - `record_schedule_rationale` stores durable schedule rationale and optional
   source/recurrence/review metadata on the task.
 - `schedule_owner_message` creates a typed one-off scheduled owner-message task
-  with a concrete due time. When that task becomes due, worker host code queues
-  the outbound message directly without another model decision or approval hop.
+  with a concrete due time only from a current owner command surface. When that
+  task becomes due, worker host code queues the outbound message directly
+  without another model decision or approval hop.
 - `propose_outbound_message` queues an outbound message rather than sending it.
   Direct owner replies and owner-requested outbound messages with
   `approvalRequired=false` queue a normal pending outbox record after host code
@@ -305,16 +306,24 @@ Runtime safety limits are host-owned loop protection, not model-tuning prompts.
 The named defaults live in `api/src/security/safetyPolicy.ts`, with local-mode
 environment overrides for operational caps such as agent runs per user per
 short burst window, autonomous runs per worker tick, owner-visible outbound
-messages per day, outbound sends per worker tick, untrusted sender-review
-notifications per day, newsletter documents considered per interest check, and
-prompt/context excerpt sizes. `admin_ai_config` still owns model ids, max tool
-calls per run, max runtime seconds, and repair attempts; the safety policy reads
-those values into the same budget surface.
+messages from autonomous/proactive runs per rolling day, outbound sends per
+worker tick, untrusted sender-review notifications per day, newsletter
+documents considered per interest check, and prompt/context excerpt sizes.
+`admin_ai_config` still owns model ids, max tool calls per run, max runtime
+seconds, and repair attempts; the safety policy reads those values into the
+same budget surface.
 
 When a guardrail trips, host code fails closed before creating the side effect,
 records `guardrail.exceeded` with a non-secret reason, and returns a structured
 `guardrail_exceeded` result where the caller has a run/tool context. The model
 does not get to raise, lower, or bypass these caps.
+
+The owner-visible outbound rolling-day cap is an autonomous/proactive abuse
+guard, not a hard daily lockout for the owner. Authenticated owner web prompts,
+owner-classified inbound replies, and due owner-requested scheduled messages
+still rely on run burst limits, tool-call limits, destination validation,
+outbox pacing, and SMTP fail-closed delivery checks rather than being blocked
+solely because earlier autonomous proposals filled the rolling-day count.
 
 `maxRuntimeSec` is enforced as a single wall-clock deadline for the run phases:
 initial model response, tool-argument repair, validated tool execution, and

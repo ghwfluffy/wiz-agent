@@ -1,3 +1,5 @@
+import { sanitizeSafetyAuditDetails } from "../security/safetyPolicy.js";
+
 const SNAPSHOT_CHAR_LIMIT = 12_000;
 const DIFF_LINE_LIMIT = 220;
 const MAX_LCS_CELLS = 250_000;
@@ -122,6 +124,6 @@ export function markdownAuditDetails(input: {
     diff_truncated: diff.truncated,
     added_lines: diff.addedLines,
     removed_lines: diff.removedLines,
-    memory_provenance: input.provenance ?? null
+    memory_provenance: input.provenance ? sanitizeSafetyAuditDetails(input.provenance) : null
   };
 }

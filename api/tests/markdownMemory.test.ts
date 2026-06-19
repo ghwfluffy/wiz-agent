@@ -3,7 +3,7 @@ import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { MarkdownConflict, RequestContext } from "../src/domain/types.js";
 import { buildApp } from "../src/http/app.js";
-import { buildUnifiedMarkdownDiff } from "../src/memory/markdownDiff.js";
+import { buildUnifiedMarkdownDiff, markdownAuditDetails } from "../src/memory/markdownDiff.js";
 import { normalizeMarkdownPath } from "../src/memory/markdownFilesystem.js";
 import { parseMemoryListMarkdown } from "../src/memory/memoryLists.js";
 import { buildMcpApp } from "../src/mcp/server.js";
@@ -217,6 +217,37 @@ describe("markdown memory filesystem", () => {
     expect(diff.addedLines).toBe(700);
     expect(diff.removedLines).toBe(700);
     expect(diff.unified.split("\n").length).toBeLessThanOrEqual(220);
+  });
+
+  it("redacts memory audit provenance details before returning audit payloads", () => {
+    const details = markdownAuditDetails({
+      path: "/assistant/preferences/communication.md",
+      version: 1,
+      previousVersion: null,
+      beforeMarkdown: "",
+      afterMarkdown: "# Communication\n\nauthorization: Bearer fake-token-value",
+      provenance: {
+        sourceKind: "owner_message",
+        confidence: "high",
+        evidence: [
+          "Owner stated a durable preference.",
+          "api key fake-token-value"
+        ],
+        credential: "fake-token-value"
+      }
+    });
+
+    expect(details.after_markdown).toContain("[redacted sensitive line]");
+    expect(JSON.stringify(details)).not.toContain("fake-token-value");
+    expect(details.memory_provenance).toEqual({
+      sourceKind: "owner_message",
+      confidence: "high",
+      evidence: [
+        "Owner stated a durable preference.",
+        "[redacted]"
+      ],
+      credential: "[redacted]"
+    });
   });
 
   it("exposes recent memory changes through the authenticated API", async () => {

@@ -350,9 +350,12 @@ untrusted-sender review notifications, direct owner-command replies, and due
 
 Delayed owner-message requests use the `schedule_owner_message` tool rather
 than a generic task. The tool stores a typed one-off scheduled task with a
-concrete due time and bounded message body. When the task becomes due, worker
-host code queues the outbox record directly without another model decision or
-approval hop, then normal SMTP delivery sends it.
+concrete due time and bounded message body only from a current owner command
+surface. Autonomous, scheduled, or self-review runs that try to use this tool
+fail closed with no task and no approval queue entry. When an owner-requested
+scheduled message task becomes due, worker host code queues the outbox record
+directly without another model decision or approval hop, then normal SMTP
+delivery sends it.
 
 Owner approval replies are parsed by host code after sender-review replies get
 first chance. `YES` approves the most recent pending approval for the owner,
@@ -397,9 +400,12 @@ scheduler work with a global outbound batch limit defaulting to one message per
 per call so tests, manual scripts, and future workers do not accidentally send
 a large batch.
 `AGENT_OUTBOUND_MESSAGES_PER_WORKER_TICK` controls the host-owned tick cap.
-Owner-visible model proposals are capped per user per rolling day before
-approvals or outbox records are created, so a bad loop cannot fill the approval
-queue or abuse SMTP/SMS/MMS gateways.
+Autonomous/proactive owner-visible model proposals are capped per user per
+rolling day before approvals or outbox records are created, so a bad loop
+cannot fill the approval queue or abuse SMTP/SMS/MMS gateways. Direct
+owner-command replies and owner-requested scheduled messages are not blocked by
+that rolling-day count; they still require verified owner destinations and are
+paced by the run, tool, worker, and delivery guardrails.
 If an outbox record stays `sending` past the worker grace window, the next tick
 marks it `failed` with a delivery-attempt-expired reason instead of sending it
 again. This avoids duplicate owner messages when SMTP accepted the message but

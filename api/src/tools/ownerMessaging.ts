@@ -47,7 +47,11 @@ export async function assertOwnerVisibleOutboundBudget(options: {
   store: AgentStore;
   settings?: Settings;
   source: string;
+  enforceBudget?: boolean;
 }): Promise<void> {
+  if (options.enforceBudget === false) {
+    return;
+  }
   const safety = runtimeSafetyPolicy(options.settings);
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
   const count = await options.store.countOwnerVisibleOutboundMessagesSince(options.context, since);
@@ -58,7 +62,9 @@ export async function assertOwnerVisibleOutboundBudget(options: {
     count,
     limit: safety.maxOwnerVisibleOutboundMessagesPerUserPerDay,
     window_start: since.toISOString(),
-    source: options.source
+    window_seconds: 24 * 60 * 60,
+    source: options.source,
+    scope: "autonomous_owner_visible_outbound"
   };
   await recordGuardrailExceeded({
     store: options.store,
@@ -69,7 +75,7 @@ export async function assertOwnerVisibleOutboundBudget(options: {
   });
   throw new GuardrailExceededError(
     "maxOwnerVisibleOutboundMessagesPerUserPerDay",
-    "Owner-visible outbound message daily guardrail exceeded.",
+    "Autonomous owner-visible outbound message guardrail exceeded.",
     details
   );
 }
@@ -113,6 +119,7 @@ export async function queueOwnerVisibleMessage(options: {
   settings?: Settings;
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
   source: string;
+  ownerInitiated?: boolean;
   subject?: string | null;
   body: string;
 }): Promise<{
@@ -128,7 +135,8 @@ export async function queueOwnerVisibleMessage(options: {
     context: options.context,
     store: options.store,
     settings: options.settings,
-    source: options.source
+    source: options.source,
+    enforceBudget: options.ownerInitiated !== true && options.source !== "scheduled_owner_message"
   });
   const message = await options.store.queueOutboundMessage(options.context, {
     channel: destination.channel,

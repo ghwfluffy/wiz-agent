@@ -30,10 +30,11 @@ The response includes:
   index, and Qdrant collection rows.
 - Host-owned run budgets: max agent runs per user per short burst window,
   autonomous runs per worker tick, max tool calls per run, max runtime seconds,
-  repair attempts, owner-visible outbound messages per user per day, outbound
-  messages per worker tick, untrusted review notifications per sender per day,
-  newsletter documents per interest check, prompt/context excerpt caps, RAG
-  search result cap, and browser MCP session TTL.
+  repair attempts, autonomous/proactive owner-visible outbound messages per
+  user per rolling day, outbound messages per worker tick, untrusted review
+  notifications per sender per day, newsletter documents per interest check,
+  prompt/context excerpt caps, RAG search result cap, and browser MCP session
+  TTL.
 - Recent failed agent runs, rejected or failed tool calls, and failed/dead RAG
   index jobs.
 - Recent `guardrail.exceeded` audit events and a `runaway-guardrails` job row.
@@ -120,7 +121,10 @@ passwords.
 Memory change diffs follow the same boundary. They may show owner-visible
 markdown content, but credential-like assignments on lines containing password,
 secret, token, API key, credential, authorization, or bearer terms are replaced
-with `[redacted]` before the diff is persisted in audit details.
+with `[redacted]` before the diff is persisted in audit details. Memory
+provenance carried on those audit records is scrubbed by the same safety
+boundary so evidence, source labels, or future provenance fields cannot carry
+token-like or credential-like text into the memory-change API.
 
 The model never supplies Qdrant collection names. Collection names are derived
 by host code from the authenticated user with a readable prefix plus a hash of
@@ -159,7 +163,9 @@ recent bot activity and write assistant memory, but they explicitly prohibit
 owner contact solely because the review ran. Any owner-visible message still
 uses the normal `propose_outbound_message` approval/outbox controls.
 Owner-requested delayed messages are represented separately with
-`schedule_owner_message`, and due scheduled-message tasks are queued for
+`schedule_owner_message`. Host code accepts that tool only from a current owner
+command surface; autonomous and scheduled runs fail closed without creating a
+future message task. Due owner-requested scheduled-message tasks are queued for
 delivery by worker host code without another model decision.
 
 Memory-review prompts are also internal operational work. They receive bounded
@@ -170,4 +176,9 @@ silently delete memory or contact the owner solely because the review ran.
 Runaway guardrails are safety limits for accidental loops and provider abuse.
 They fail closed before side effects, record non-secret counts and limits in
 audit details, and show up in the Jobs/Workers status surface. They are not
-intended to tune assistant personality or newsletter quality.
+intended to tune assistant personality or newsletter quality. Guardrail audit
+helpers scrub secret-like keys and strings before persistence and preserve the
+host-selected guardrail name even if caller details contain conflicting fields.
+The owner-visible outbound rolling-day cap applies to autonomous/proactive
+owner contact, not to direct owner-command replies or due owner-requested
+scheduled messages.

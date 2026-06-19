@@ -1147,6 +1147,17 @@ export async function executeToolCall(options: {
       };
     }
     case "schedule_owner_message": {
+      if (!ownerInitiated) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: {
+            rejected: true,
+            reason: "owner_command_required",
+            approval_required: false
+          }
+        };
+      }
       const task = await options.store.createTask(options.context, {
         title: "Send owner message",
         prompt: scheduledOwnerMessagePrompt({
@@ -1192,6 +1203,7 @@ export async function executeToolCall(options: {
           settings: options.settings,
           replyToMessage: options.replyToMessage,
           source: "propose_outbound_message",
+          ownerInitiated,
           subject: typeof options.args.subject === "string" ? options.args.subject : null,
           body: String(options.args.body)
         });
@@ -1217,7 +1229,8 @@ export async function executeToolCall(options: {
         context: options.context,
         store: options.store,
         settings: options.settings,
-        source: "propose_outbound_message"
+        source: "propose_outbound_message",
+        enforceBudget: !ownerInitiated
       });
       const { approval, outbound } = await createOutboundApproval({
         context: options.context,
@@ -1251,6 +1264,7 @@ export async function executeToolCall(options: {
           settings: options.settings,
           replyToMessage: options.replyToMessage,
           source: options.toolName,
+          ownerInitiated,
           body: String(options.args.question)
         });
         if (!queued.message || !queued.destination) {

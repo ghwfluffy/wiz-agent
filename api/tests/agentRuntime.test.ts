@@ -707,7 +707,7 @@ describe("agent task execution", () => {
     }
   });
 
-  it("blocks owner-visible outbound proposals after the daily guardrail is reached", async () => {
+  it("blocks autonomous owner-visible outbound proposals after the rolling guardrail is reached", async () => {
     const { context, store } = await testContext();
     const settings = loadSettings({
       APP_ENV: "test",
@@ -753,7 +753,7 @@ describe("agent task execution", () => {
       status: "failed",
       toolStatus: "rejected",
       toolName: "propose_outbound_message",
-      failureMessage: "Owner-visible outbound message daily guardrail exceeded."
+      failureMessage: "Autonomous owner-visible outbound message guardrail exceeded."
     });
     await expect(store.listOutboundMessages(context)).resolves.toHaveLength(1);
     await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
@@ -765,10 +765,76 @@ describe("agent task execution", () => {
         result: expect.objectContaining({
           status: "guardrail_exceeded",
           reason: "maxOwnerVisibleOutboundMessagesPerUserPerDay",
-          limit: 1
+          limit: 1,
+          scope: "autonomous_owner_visible_outbound"
         })
       })
     ]);
+  });
+
+  it("does not turn the outbound guardrail into a hard daily lockout for direct owner replies", async () => {
+    const { context, store } = await testContext();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_MAX_OWNER_VISIBLE_OUTBOUND_MESSAGES_PER_USER_PER_DAY: "1"
+    });
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        sms_gateway: "owner-sms@example.test"
+      }
+    });
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "requires_approval",
+      toAddr: "owner-sms@example.test",
+      bodyText: "Existing autonomous owner-visible proposal."
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      settings,
+      toolClient: new LocalToolClient(),
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "propose_outbound_message",
+            arguments: {
+              intent: "reply",
+              body: "Direct owner reply should still queue."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Reply to me.",
+        ownerInitiated: true
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "accepted",
+      toolName: "propose_outbound_message",
+      executionResult: expect.objectContaining({
+        status: "pending",
+        approval_required: false
+      })
+    });
+    const outbox = await store.listOutboundMessages(context);
+    expect(outbox).toHaveLength(2);
+    expect(outbox).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        status: "pending",
+        bodyText: "Direct owner reply should still queue."
+      })
+    ]));
+    await expect(store.listAudit(context, true)).resolves.not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "guardrail.exceeded" })
+    ]));
   });
 
   it("records cross-app approval decisions in the monthly decision ledger", async () => {
@@ -2860,6 +2926,41 @@ describe("agent task execution", () => {
       scheduleRationale: "Owner asked to receive this message in a couple hours."
     });
     expect(task.prompt).toContain("OWNER_SCHEDULED_MESSAGE_V1");
+  });
+
+  it("rejects autonomous delayed owner-message scheduling without creating a task", async () => {
+    const { context, store } = await testContext();
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "schedule_owner_message",
+            arguments: {
+              body: "Autonomous reminders must not bypass approval.",
+              dueAt: "2026-06-18T22:00:00.000Z",
+              rationale: "The agent decided to contact the owner later."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Autonomous review wants to contact the owner later."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "schedule_owner_message",
+      executionResult: {
+        rejected: true,
+        reason: "owner_command_required",
+        approval_required: false
+      }
+    });
+    await expect(store.listTasks(context)).resolves.toEqual([]);
   });
 
   it("executes direct owner simplified app writes without queuing approval", async () => {
