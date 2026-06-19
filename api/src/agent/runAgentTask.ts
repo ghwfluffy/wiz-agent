@@ -23,6 +23,7 @@ export type AgentTaskRequest = {
   prompt: string;
   taskId?: string | null;
   complexity?: AgentTaskComplexity;
+  ownerInitiated?: boolean;
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
 };
 
@@ -190,6 +191,7 @@ export async function runAgentTask(options: {
         settings: options.settings,
         integrationTokenProvider: options.integrationTokenProvider,
         fetchImpl: options.fetchImpl,
+        ownerInitiated: options.request.ownerInitiated === true,
         replyToMessage: options.request.replyToMessage
       });
     } catch (error) {

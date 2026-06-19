@@ -18,6 +18,7 @@ export type AgentToolClientExecuteInput = {
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
+  ownerInitiated?: boolean;
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
 };
 
@@ -37,6 +38,7 @@ export class LocalToolClient implements AgentToolClient {
       settings: input.settings,
       integrationTokenProvider: input.integrationTokenProvider,
       fetchImpl: input.fetchImpl,
+      ownerInitiated: input.ownerInitiated,
       replyToMessage: input.replyToMessage
     });
   }
@@ -94,6 +96,9 @@ export class McpToolClient implements AgentToolClient {
     if (input.taskId) {
       headers["x-agent-task-id"] = input.taskId;
     }
+    if (input.ownerInitiated === true) {
+      headers["x-agent-owner-initiated"] = "true";
+    }
     const init = {
       method: "POST",
       headers,
@@ -105,6 +110,7 @@ export class McpToolClient implements AgentToolClient {
       taskId: input.taskId ?? null,
       integrationTokenProvider: input.integrationTokenProvider,
       fetchImpl: input.fetchImpl,
+      ownerInitiated: input.ownerInitiated,
       replyToMessage: input.replyToMessage
     });
     return app.request(path, init);

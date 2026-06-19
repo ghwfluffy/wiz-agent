@@ -45,13 +45,17 @@ personal lists, owner feedback, task outcomes, assistant decisions, and manual
 edits. Memory-change API and dashboard surfaces expose this compact provenance
 so stale inferences and direct owner statements can be distinguished later.
 
-Phase 08 approvals are visible in the Approval inbox. High-risk outbound owner
-messages and cross-app write proposals create approval records instead of
-executing immediately. The owner can approve, reject, edit outbound text, or
-bulk reject stale approvals from the UI. Owner-classified SMS/email replies of
-`YES`, `NO`, `EDIT <text>`, `LATER`, or `DETAILS` are parsed by host code
-against the most recent pending approval; the model does not choose approval ids
-or recipients.
+Phase 08 approvals are visible in the Approval inbox. Autonomous cross-app write
+proposals, self-review contact, and memory-review contact create approval
+records instead of executing immediately. Direct owner commands from web chat,
+mobile voice, or owner-classified inbound messages execute through scoped app
+tokens without an extra approval hop. Newsletter interest checks may send short,
+budgeted owner messages when the material is genuinely useful; otherwise they
+record rationale and stay quiet. The owner can approve, reject, edit outbound
+text, or bulk reject stale approvals from the UI. Owner-classified SMS/email
+replies of `YES`, `NO`, `EDIT <text>`, `LATER`, or `DETAILS` are parsed by host
+code against the most recent pending approval; the model does not choose
+approval ids or recipients.
 
 API and worker startup run the TypeScript migration runner before serving:
 
@@ -209,7 +213,9 @@ prompt with active tasks, `/assistant/schedule.md`,
 `/tasks/schedule-rationale.md`, `/assistant/notification-policy.md`, recent
 owner messages, and recent newsletter knowledge. Schedule-changing tools require
 rationale and write task events; failed recurring wake runs still create the
-next wake.
+next wake. Newsletter interest messages are sent directly through the outbound
+queue when they fit the notification policy and daily owner-visible budget; the
+daily check should not create approval backlog for routine useful updates.
 
 The memory quality review runs around Sunday 10:00 local/server time. Its
 prompt includes bounded recent markdown writes under `/personal/`,
@@ -384,6 +390,7 @@ create_followup_task({ sourceTaskId?, title, prompt, dueAt?, rationale })
 mark_waiting_on({ taskId, waitingOn, rationale, nextReviewAt? })
 request_clarification({ question, relatedTaskId?, urgency, rationale })
 record_schedule_rationale({ taskId, rationale, sourceMemoryPath?, recurrencePolicy? })
+schedule_owner_message({ body, subject?, dueAt, rationale })
 ```
 
 These tools resolve user scope from the MCP session. Do not pass user ids,

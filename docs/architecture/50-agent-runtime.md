@@ -120,6 +120,7 @@ Current tool contracts:
 - `mark_waiting_on`
 - `request_clarification`
 - `record_schedule_rationale`
+- `schedule_owner_message`
 - `propose_outbound_message`
 - `ask_owner_clarification`
 - `record_observation`
@@ -186,7 +187,7 @@ Current migrated agent tools:
   outbound excerpts, and a host-computed contact-cadence assessment. The
   assessment helps the agent reason about whether it has been contacting the
   owner too much or too little, but it is context only; outbound contact still
-  requires the normal owner-message approval path and task urgency judgment.
+  requires task urgency judgment and the owner-visible outbound budget.
 - `list_app_capabilities` returns the app capability registry through MCP so the
   agent can query available apps, safe action ids, and directory-only app
   boundaries at runtime.
@@ -195,8 +196,9 @@ Current migrated agent tools:
 - Fluffynomics wrappers expose account lookup, forecasts, transfers, contracts,
   projected expenses, investments, audit logs, and account-value updates.
   Contract and expense write wrappers are intended for owner statements such as
-  recurring bills or observed spending patterns, but they still queue approval
-  before changing projection data.
+  recurring bills or observed spending patterns. Direct owner commands execute
+  through scoped app tokens; autonomous or scheduled proposals still queue
+  approval before changing projection data.
 - `write_memory` appends model-selected durable markdown memory under host-owned
   user scope.
 - `write_file` writes a complete markdown file under host-owned user scope. It
@@ -236,6 +238,9 @@ Current migrated agent tools:
   lower urgency.
 - `record_schedule_rationale` stores durable schedule rationale and optional
   source/recurrence/review metadata on the task.
+- `schedule_owner_message` creates a typed one-off scheduled owner-message task
+  with a concrete due time. When that task becomes due, worker host code queues
+  the outbound message directly without another model decision or approval hop.
 - `propose_outbound_message` queues an outbound message rather than sending it.
   Direct owner replies and owner-requested outbound messages with
   `approvalRequired=false` queue a normal pending outbox record after host code
@@ -249,16 +254,16 @@ Current migrated agent tools:
 - `record_observation` records the accepted observation in the tool-call result.
 
 High-risk tools return a host-owned approval state unless a narrower
-host-enforced exception applies. `propose_outbound_message` may queue a pending
-outbox record for direct owner replies, but autonomous owner-visible outreach
-still creates an approval plus a linked `requires_approval` outbox record.
-`integration_action` creates a `cross_app_write_action` approval for write-style
-proposals by default. The configured Apartment Gate open-right-gate action is
-the exception: when it comes from current inbound owner-message context and the
-tool did not request approval, host code may execute the scoped integration API
-directly. Approval records preserve the source run, source reference, proposed
-payload, risk level, summary, expiration, execution status, redacted execution
-result or failure, and audit trail.
+host-enforced exception applies. `propose_outbound_message` queues a pending
+outbox record for direct owner replies and owner-requested messages, while
+self-review, memory-review, autonomous wake, and explicit
+`approvalRequired=true` outreach create approval records. Cross-app write tools
+execute immediately for authenticated owner-command surfaces such as web chat,
+mobile voice, and owner-classified inbound messages. Autonomous or scheduled
+cross-app write proposals still create `cross_app_write_action` approvals.
+Approval records preserve the source run, source reference, proposed payload,
+risk level, summary, expiration, execution status, redacted execution result or
+failure, and audit trail.
 
 Approved cross-app write approvals execute only from deterministic host code.
 The worker revalidates the stored action id against the capability registry at

@@ -23,6 +23,7 @@ export type McpAppOptions = {
   qdrant?: QdrantClient;
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
+  ownerInitiated?: boolean;
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
 };
 
@@ -128,6 +129,8 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
     }
     const runId = context.req.header("x-agent-run-id") ?? null;
     const taskId = context.req.header("x-agent-task-id") ?? options.taskId ?? null;
+    const ownerInitiated = options.ownerInitiated === true ||
+      context.req.header("x-agent-owner-initiated") === "true";
     const authContext = await store.resolveAgentMcpSession(bearerToken(context.req.header("authorization")), runId);
     if (!authContext) {
       return context.json({ error: { code: "mcp_unauthorized", message: "Valid agent MCP session required." } }, 401);
@@ -158,6 +161,7 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
           settings,
           integrationTokenProvider: options.integrationTokenProvider,
           fetchImpl: options.fetchImpl,
+          ownerInitiated,
           replyToMessage: options.replyToMessage
         }, parsed.data);
         result = execution.result;

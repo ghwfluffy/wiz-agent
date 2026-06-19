@@ -223,10 +223,11 @@ export async function buildOwnerInboundPrompt(options: {
 
   return [
     "An owner-classified SMS/MMS/email message arrived. Treat this as an owner instruction because sender policy already classified it as owner.",
+    `Current server time: ${new Date().toISOString()}.`,
     "Decide whether the message should update memory, continue an existing task, create/schedule a new task, queue an outbound reply, call a registered app integration, or only record an observation.",
     "Host-detected owner intent envelope:",
     formatOwnerIntentEnvelope(ownerIntent),
-    "If it belongs to an active or completed task, use append_task_prompt with that task id and set the status back to pending/running as appropriate. If it is new work, use create_task. Use propose_outbound_message for owner replies instead of sending directly.",
+    "If it belongs to an active or completed task, use append_task_prompt with that task id and set the status back to pending/running as appropriate. If it is new work, use create_task. Use schedule_owner_message for simple delayed owner-message reminders. Use propose_outbound_message for immediate owner replies instead of sending directly.",
     "If the owner gives durable preferences, facts, schedule rationale, project context, or instructions that should persist, use the memory tools. For write_file, include provenance fields: sourceKind, confidence, evidence, durability, and sourceId/sourcePath when available. Label direct owner statements as high-confidence owner_message; label inferences as medium/low-confidence agent_observation. Host code will enforce user scope.",
     memoryListGuidance,
     ownerFeedbackGuidance,
@@ -271,8 +272,10 @@ export async function buildOwnerWebPrompt(options: {
   const threads = await recentThreadSummary(options);
   return [
     "An authenticated owner web prompt arrived from the operator console. Treat this as owner-command input because API auth already verified the session.",
+    `Current server time: ${new Date().toISOString()}.`,
     "Decide whether the prompt should update memory, continue an existing task, create/schedule a new task, queue an outbound owner reply, ask for clarification, call a registered app integration, or only record an observation.",
     "Use update_task_schedule when changing an existing task's due time and include rationale plus confidence. Prefer ask_owner_clarification over risky assumptions.",
+    "Use schedule_owner_message when the owner asks to receive a message later. Convert relative times such as 'in a couple hours' into a concrete ISO dueAt using the current server time above.",
     "Use propose_outbound_message only when a proactive owner message is useful. Do not choose a recipient, phone number, email address, or carrier gateway; host code resolves the owner destination.",
     "Use memory tools for durable preferences, facts, schedule rationale, project context, or instructions that should persist. For write_file, include provenance fields: sourceKind, confidence, evidence, durability, and sourceId/sourcePath when available. Label direct owner statements as high-confidence owner_web_prompt; label inferences as medium/low-confidence agent_observation.",
     memoryListGuidance,
@@ -331,6 +334,7 @@ export async function runOwnerInboundAgent(options: {
     request: {
       prompt,
       complexity: { ambiguous: true },
+      ownerInitiated: true,
       replyToMessage: options.message
     },
     settings: options.settings,
@@ -388,6 +392,7 @@ export async function runOwnerWebPromptAgent(options: {
     request: {
       prompt,
       taskId: options.contextTask?.id ?? null,
+      ownerInitiated: true,
       complexity: {
         ambiguous: options.mode !== "quick_reply",
         orchestration: options.mode === "planning"

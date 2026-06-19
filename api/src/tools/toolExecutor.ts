@@ -32,10 +32,12 @@ import {
   type OwnerFeedbackType
 } from "../memory/ownerFeedbackMemory.js";
 import {
-  GuardrailExceededError,
-  recordGuardrailExceeded,
-  runtimeSafetyPolicy
-} from "../security/safetyPolicy.js";
+  OWNER_SCHEDULED_MESSAGE_RECURRENCE,
+  assertOwnerVisibleOutboundBudget,
+  queueOwnerVisibleMessage,
+  resolveOwnerMessageDestination,
+  scheduledOwnerMessagePrompt
+} from "./ownerMessaging.js";
 
 export type ToolExecutionResult = {
   executed: boolean;
@@ -45,38 +47,6 @@ export type ToolExecutionResult = {
 
 function compactPayload(payload: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
-}
-
-async function assertOwnerVisibleOutboundBudget(options: {
-  context: RequestContext;
-  store: AgentStore;
-  settings?: Settings;
-  source: string;
-}): Promise<void> {
-  const safety = runtimeSafetyPolicy(options.settings);
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-  const count = await options.store.countOwnerVisibleOutboundMessagesSince(options.context, since);
-  if (count < safety.maxOwnerVisibleOutboundMessagesPerUserPerDay) {
-    return;
-  }
-  const details = {
-    count,
-    limit: safety.maxOwnerVisibleOutboundMessagesPerUserPerDay,
-    window_start: since.toISOString(),
-    source: options.source
-  };
-  await recordGuardrailExceeded({
-    store: options.store,
-    context: options.context,
-    guardrail: "maxOwnerVisibleOutboundMessagesPerUserPerDay",
-    entityType: "outbound_message",
-    details
-  });
-  throw new GuardrailExceededError(
-    "maxOwnerVisibleOutboundMessagesPerUserPerDay",
-    "Owner-visible outbound message daily guardrail exceeded.",
-    details
-  );
 }
 
 function budgetContractPayload(args: Record<string, unknown>): Record<string, unknown> {
@@ -127,6 +97,7 @@ export async function executeToolCall(options: {
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
+  ownerInitiated?: boolean;
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
 }): Promise<ToolExecutionResult> {
   const callReadIntegration = async (
@@ -161,7 +132,9 @@ export async function executeToolCall(options: {
     };
   };
 
-  const queueIntegrationApproval = async (
+  const ownerInitiated = options.ownerInitiated === true || Boolean(options.replyToMessage);
+
+  const executeOrQueueWriteIntegration = async (
     actionId: IntegrationActionId,
     input: {
       pathParams?: Record<string, string>;
@@ -170,6 +143,43 @@ export async function executeToolCall(options: {
       summary: string;
     }
   ): Promise<ToolExecutionResult> => {
+    if (ownerInitiated) {
+      if (!options.settings || !options.integrationTokenProvider) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: {
+            reason: "integration_not_configured",
+            approval_required: false,
+            action_id: actionId
+          }
+        };
+      }
+      const result = await callIntegrationActionApi({
+        settings: options.settings,
+        context: options.context,
+        actionId,
+        pathParams: input.pathParams,
+        query: input.query,
+        body: input.body,
+        tokenProvider: options.integrationTokenProvider,
+        fetchImpl: options.fetchImpl
+      });
+      return {
+        executed: result.ok,
+        sideEffect: result.ok ? "cross_app_api" : "none",
+        result: result.ok ? {
+          status: result.status,
+          data: result.data,
+          approval_required: false,
+          action_id: actionId
+        } : {
+          reason: result.reason,
+          approval_required: false,
+          action_id: actionId
+        }
+      };
+    }
     const approval = await createCrossAppApproval({
       context: options.context,
       store: options.store,
@@ -556,7 +566,7 @@ export async function executeToolCall(options: {
         query: { include_archived: options.args.includeArchived === true }
       });
     case "create_goal":
-      return queueIntegrationApproval("goals.create_goal", {
+      return executeOrQueueWriteIntegration("goals.create_goal", {
         body: compactPayload({
           goal_type: options.args.goalType,
           title: options.args.title,
@@ -582,7 +592,7 @@ export async function executeToolCall(options: {
         summary: String(options.args.userIntentSummary)
       });
     case "update_goal":
-      return queueIntegrationApproval("goals.update_goal", {
+      return executeOrQueueWriteIntegration("goals.update_goal", {
         pathParams: { goal_id: String(options.args.goalId) },
         body: compactPayload({
           title: options.args.title,
@@ -599,7 +609,7 @@ export async function executeToolCall(options: {
         summary: String(options.args.userIntentSummary)
       });
     case "complete_goal_checklist_item":
-      return queueIntegrationApproval("goals.complete_checklist_item", {
+      return executeOrQueueWriteIntegration("goals.complete_checklist_item", {
         pathParams: {
           goal_id: String(options.args.goalId),
           item_id: String(options.args.itemId)
@@ -612,7 +622,7 @@ export async function executeToolCall(options: {
         query: { include_archived: options.args.includeArchived === true }
       });
     case "record_goal_metric_entry":
-      return queueIntegrationApproval("goals.record_metric_entry", {
+      return executeOrQueueWriteIntegration("goals.record_metric_entry", {
         pathParams: { metric_id: String(options.args.metricId) },
         body: compactPayload({
           number_value: options.args.numberValue,
@@ -626,7 +636,7 @@ export async function executeToolCall(options: {
         query: { timezone: String(options.args.timezone) }
       });
     case "complete_goal_notification":
-      return queueIntegrationApproval("goals.complete_notification", {
+      return executeOrQueueWriteIntegration("goals.complete_notification", {
         pathParams: { notification_id: String(options.args.notificationId) },
         body: compactPayload({
           timezone: options.args.timezone,
@@ -642,7 +652,7 @@ export async function executeToolCall(options: {
         pathParams: { account_id: String(options.args.accountId) }
       });
     case "record_budget_account_value":
-      return queueIntegrationApproval("budget.update_account_value", {
+      return executeOrQueueWriteIntegration("budget.update_account_value", {
         pathParams: { account_id: String(options.args.accountId) },
         body: options.args.value,
         summary: String(options.args.userIntentSummary)
@@ -658,36 +668,36 @@ export async function executeToolCall(options: {
     case "list_budget_contracts":
       return callReadIntegration("budget.list_contracts");
     case "create_budget_contract":
-      return queueIntegrationApproval("budget.create_contract", {
+      return executeOrQueueWriteIntegration("budget.create_contract", {
         body: budgetContractPayload(options.args),
         summary: String(options.args.userIntentSummary)
       });
     case "update_budget_contract":
-      return queueIntegrationApproval("budget.update_contract", {
+      return executeOrQueueWriteIntegration("budget.update_contract", {
         pathParams: { contract_id: String(options.args.contractId) },
         body: budgetContractPayload(options.args),
         summary: String(options.args.userIntentSummary)
       });
     case "delete_budget_contract":
-      return queueIntegrationApproval("budget.delete_contract", {
+      return executeOrQueueWriteIntegration("budget.delete_contract", {
         pathParams: { contract_id: String(options.args.contractId) },
         summary: String(options.args.userIntentSummary)
       });
     case "list_budget_expenses":
       return callReadIntegration("budget.list_expenses");
     case "create_budget_expense":
-      return queueIntegrationApproval("budget.create_expense", {
+      return executeOrQueueWriteIntegration("budget.create_expense", {
         body: budgetExpensePayload(options.args),
         summary: String(options.args.userIntentSummary)
       });
     case "update_budget_expense":
-      return queueIntegrationApproval("budget.update_expense", {
+      return executeOrQueueWriteIntegration("budget.update_expense", {
         pathParams: { expense_id: String(options.args.expenseId) },
         body: budgetExpensePayload(options.args),
         summary: String(options.args.userIntentSummary)
       });
     case "delete_budget_expense":
-      return queueIntegrationApproval("budget.delete_expense", {
+      return executeOrQueueWriteIntegration("budget.delete_expense", {
         pathParams: { expense_id: String(options.args.expenseId) },
         summary: String(options.args.userIntentSummary)
       });
@@ -1104,13 +1114,71 @@ export async function executeToolCall(options: {
         }
       };
     }
+    case "schedule_owner_message": {
+      const task = await options.store.createTask(options.context, {
+        title: "Send owner message",
+        prompt: scheduledOwnerMessagePrompt({
+          body: String(options.args.body),
+          subject: typeof options.args.subject === "string" ? options.args.subject : null
+        }),
+        dueAt: String(options.args.dueAt),
+        priority: 80,
+        scheduleRationale: String(options.args.rationale),
+        recurrencePolicy: OWNER_SCHEDULED_MESSAGE_RECURRENCE
+      });
+      return {
+        executed: true,
+        sideEffect: "local_persistence",
+        result: {
+          task_id: task.id,
+          status: task.status,
+          due_at: task.dueAt,
+          scheduled_owner_message: true
+        }
+      };
+    }
     case "propose_outbound_message": {
-      const destination = await resolveOwnerReplyDestination(options);
+      const destination = await resolveOwnerMessageDestination(options);
       if (!destination) {
         return {
           executed: false,
           sideEffect: "none",
           result: { reason: "owner_reply_destination_unavailable" }
+        };
+      }
+      const requiresApproval = await shouldRequireOutboundApproval({
+        context: options.context,
+        store: options.store,
+        taskId: options.taskId ?? null,
+        ownerInitiated,
+        approvalRequired: options.args.approvalRequired
+      });
+      if (!requiresApproval) {
+        const queued = await queueOwnerVisibleMessage({
+          context: options.context,
+          store: options.store,
+          settings: options.settings,
+          replyToMessage: options.replyToMessage,
+          source: "propose_outbound_message",
+          subject: typeof options.args.subject === "string" ? options.args.subject : null,
+          body: String(options.args.body)
+        });
+        if (!queued.message || !queued.destination) {
+          return {
+            executed: false,
+            sideEffect: "none",
+            result: { reason: queued.reason ?? "owner_reply_destination_unavailable" }
+          };
+        }
+        return {
+          executed: true,
+          sideEffect: "local_persistence",
+          result: {
+            outbound_message_id: queued.message.id,
+            status: queued.message.status,
+            approval_required: false,
+            destination: queued.destination.source
+          }
         };
       }
       await assertOwnerVisibleOutboundBudget({
@@ -1119,31 +1187,6 @@ export async function executeToolCall(options: {
         settings: options.settings,
         source: "propose_outbound_message"
       });
-      const requiresApproval = await shouldRequireOutboundApproval({
-        context: options.context,
-        store: options.store,
-        taskId: options.taskId ?? null,
-        approvalRequired: options.args.approvalRequired
-      });
-      if (!requiresApproval) {
-        const message = await options.store.queueOutboundMessage(options.context, {
-          channel: destination.channel,
-          status: "pending",
-          toAddr: destination.toAddr,
-          subject: typeof options.args.subject === "string" ? options.args.subject : null,
-          bodyText: String(options.args.body)
-        });
-        return {
-          executed: true,
-          sideEffect: "local_persistence",
-          result: {
-            outbound_message_id: message.id,
-            status: message.status,
-            approval_required: false,
-            destination: destination.source
-          }
-        };
-      }
       const { approval, outbound } = await createOutboundApproval({
         context: options.context,
         store: options.store,
@@ -1170,35 +1213,30 @@ export async function executeToolCall(options: {
     case "ask_owner_clarification": {
       const urgency = String(options.args.urgency);
       if (urgency === "now") {
-        const destination = await resolveOwnerReplyDestination(options);
-        if (!destination) {
+        const queued = await queueOwnerVisibleMessage({
+          context: options.context,
+          store: options.store,
+          settings: options.settings,
+          replyToMessage: options.replyToMessage,
+          source: options.toolName,
+          body: String(options.args.question)
+        });
+        if (!queued.message || !queued.destination) {
           return {
             executed: false,
             sideEffect: "none",
             result: { reason: "owner_clarification_destination_unavailable" }
           };
         }
-        await assertOwnerVisibleOutboundBudget({
-          context: options.context,
-          store: options.store,
-          settings: options.settings,
-          source: options.toolName
-        });
-        const message = await options.store.queueOutboundMessage(options.context, {
-          channel: destination.channel,
-          status: "pending",
-          toAddr: destination.toAddr,
-          bodyText: String(options.args.question)
-        });
         return {
           executed: true,
           sideEffect: "local_persistence",
           result: {
-            clarification_request_id: message.id,
-            outbound_message_id: message.id,
-            status: message.status,
+            clarification_request_id: queued.message.id,
+            outbound_message_id: queued.message.id,
+            status: queued.message.status,
             urgency,
-            destination: destination.source
+            destination: queued.destination.source
           }
         };
       }
@@ -1300,75 +1338,16 @@ export async function executeToolCall(options: {
           }
         };
       }
-      if (
-        actionId === "apartment_gate.open_right_gate" &&
-        options.args.approvalRequired !== true &&
-        options.replyToMessage
-      ) {
-        if (!options.settings || !options.integrationTokenProvider) {
-          return {
-            executed: false,
-            sideEffect: "none",
-            result: {
-              reason: "integration_not_configured",
-              approval_required: false,
-              action_id: actionId
-            }
-          };
-        }
-        const result = await callIntegrationActionApi({
-          settings: options.settings,
-          context: options.context,
-          actionId,
-          pathParams: typeof options.args.pathParams === "object" && options.args.pathParams !== null
-            ? options.args.pathParams as Record<string, string>
-            : undefined,
-          query: typeof options.args.query === "object" && options.args.query !== null
-            ? options.args.query as Record<string, string | number | boolean>
-            : undefined,
-          body: options.args.body,
-          tokenProvider: options.integrationTokenProvider,
-          fetchImpl: options.fetchImpl
-        });
-        return {
-          executed: result.ok,
-          sideEffect: result.ok ? "cross_app_api" : "none",
-          result: result.ok ? {
-            status: result.status,
-            data: result.data,
-            approval_required: false,
-            action_id: actionId
-          } : {
-            reason: result.reason,
-            approval_required: false,
-            action_id: actionId
-          }
-        };
-      }
-      const approval = await createCrossAppApproval({
-        context: options.context,
-        store: options.store,
-        runId: options.runId ?? null,
-        actionId,
-        proposedPayload: {
-          action_id: actionId,
-          path_params: options.args.pathParams,
-          query: options.args.query,
-          body: options.args.body ?? null,
-          user_intent_summary: options.args.userIntentSummary
-        },
+      return executeOrQueueWriteIntegration(actionId, {
+        pathParams: typeof options.args.pathParams === "object" && options.args.pathParams !== null
+          ? options.args.pathParams as Record<string, string>
+          : undefined,
+        query: typeof options.args.query === "object" && options.args.query !== null
+          ? options.args.query as Record<string, string | number | boolean>
+          : undefined,
+        body: options.args.body,
         summary: String(options.args.userIntentSummary)
       });
-      return {
-        executed: true,
-        sideEffect: "local_persistence",
-        result: {
-          approval_id: approval.id,
-          status: "queued_approval",
-          approval_required: true,
-          action_id: actionId
-        }
-      };
     }
     default:
       return {
@@ -1422,58 +1401,7 @@ function assessContactCadence(input: {
   };
 }
 
-function configString(config: Record<string, unknown>, key: string): string | undefined {
-  const value = config[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function channelFromSource(source: string | null | undefined): "email" | "sms" | "mms" {
-  if (source === "sms") {
-    return "sms";
-  }
-  if (source === "mms") {
-    return "mms";
-  }
-  return "email";
-}
-
-async function resolveOwnerReplyDestination(options: {
-  context: RequestContext;
-  store: AgentStore;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
-}): Promise<{ channel: "email" | "sms" | "mms"; toAddr: string; source: "inbound_owner_message" | "owner-contact" } | undefined> {
-  const fromAddr = options.replyToMessage?.fromAddr?.trim();
-  if (fromAddr && fromAddr.includes("@")) {
-    return {
-      channel: channelFromSource(options.replyToMessage?.source),
-      toAddr: fromAddr,
-      source: "inbound_owner_message"
-    };
-  }
-
-  const ownerContact = await options.store.getConnector(options.context, "owner-contact");
-  if (ownerContact?.status !== "enabled") {
-    return undefined;
-  }
-  const smsGateway = configString(ownerContact.config, "sms_gateway");
-  if (smsGateway) {
-    return { channel: "sms", toAddr: smsGateway, source: "owner-contact" };
-  }
-  const mmsGateway = configString(ownerContact.config, "mms_gateway");
-  if (mmsGateway) {
-    return { channel: "mms", toAddr: mmsGateway, source: "owner-contact" };
-  }
-  const email = configString(ownerContact.config, "email");
-  if (email) {
-    return { channel: "email", toAddr: email, source: "owner-contact" };
-  }
-  return undefined;
-}
-
 const APPROVAL_GATED_OUTBOUND_TASK_MARKERS = [
-  "newsletter interest",
-  "newsletter interest check",
-  "preference-aware daily interest check",
   "assistant self-review",
   "memory quality review",
   "autonomous agent wake review"
@@ -1483,8 +1411,12 @@ async function shouldRequireOutboundApproval(options: {
   context: RequestContext;
   store: AgentStore;
   taskId?: string | null;
+  ownerInitiated?: boolean;
   approvalRequired: unknown;
 }): Promise<boolean> {
+  if (options.ownerInitiated === true) {
+    return false;
+  }
   if (options.approvalRequired === true) {
     return true;
   }

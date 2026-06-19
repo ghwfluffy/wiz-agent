@@ -80,9 +80,10 @@ The registry includes Apartment Gate with a single high-risk write action:
 
 - `apartment_gate.open_right_gate` calls the app's internal agent endpoint with
   a short-lived token scoped to that exact action;
-- direct execution is allowed only for current inbound owner-message context;
-- scheduled, stale, or explicit-approval contexts use the cross-app approval
-  queue;
+- direct execution is allowed for current authenticated owner commands from web
+  chat, mobile voice, or owner-classified inbound messaging;
+- autonomous, scheduled, stale, or non-owner contexts must not execute physical
+  access actions;
 - the agent must not open any other physical access points;
 - the agent must not request, store, summarize, or expose Gatewise credentials,
   refresh tokens, API keys, or generated page source.

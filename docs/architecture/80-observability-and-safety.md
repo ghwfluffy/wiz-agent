@@ -127,6 +127,9 @@ Self-review prompts are treated as internal operational work. They may inspect
 recent bot activity and write assistant memory, but they explicitly prohibit
 owner contact solely because the review ran. Any owner-visible message still
 uses the normal `propose_outbound_message` approval/outbox controls.
+Owner-requested delayed messages are represented separately with
+`schedule_owner_message`, and due scheduled-message tasks are queued for
+delivery by worker host code without another model decision.
 
 Memory-review prompts are also internal operational work. They receive bounded
 user-scoped memory/list/outcome/self-review context and may write curation

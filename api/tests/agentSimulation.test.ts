@@ -4,8 +4,23 @@ import { createAgentSimulation } from "./helpers/agentSimulation.js";
 
 describe("agent simulation harness", () => {
   it("keeps newsletter ingestion knowledge-only until a scheduled interest check proposes one owner message", async () => {
-    const sim = await createAgentSimulation({ loginLabel: "scenario-newsletter" });
+    const sim = await createAgentSimulation({
+      loginLabel: "scenario-newsletter",
+      settings: { AGENT_OUTBOUND_ENABLED: "true" }
+    });
     await sim.configureOwnerContact();
+    await sim.store.upsertConnector(sim.ownerContext, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
+      }
+    });
     await sim.trustNewsletterSender("infra@example.test");
 
     const inbound = await sim.receiveNewsletter({
@@ -36,16 +51,12 @@ describe("agent simulation harness", () => {
     snapshot = await sim.snapshot();
     expect(snapshot.outbound).toEqual([
       expect.objectContaining({
-        status: "requires_approval",
+        status: "sent",
+        approvalId: null,
         bodyText: expect.stringContaining("outage writeup")
       })
     ]);
-    expect(snapshot.approvals).toEqual([
-      expect.objectContaining({
-        status: "pending",
-        actionType: "send_outbound_message"
-      })
-    ]);
+    expect(snapshot.approvals).toEqual([]);
   });
 
   it("remembers Desperado as a movie-night list item and later recalls it by Banderas", async () => {

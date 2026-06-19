@@ -209,7 +209,7 @@ function newsletterInterestCheckPrompt(dueAt: Date): string {
     "Read newsletter and communication preferences before deciding whether contact is welcome.",
     "Use get_recent_bot_activity when you need current contact cadence, pending approval, failure, or recent owner-response context.",
     "Prefer staying quiet when recent contact cadence is high, approvals are pending, the owner has not been responsive around this hour, or the material is merely routine.",
-    "If you message, use propose_outbound_message only. Keep it short, casual, and about one or two specific discoveries. Do not format it as a report and do not include newsletter command text.",
+    "If you message, use propose_outbound_message only. Keep it short, casual, and about one or two specific discoveries. Do not format it as a report and do not include newsletter command text. Host outbound budgets still apply.",
     "If you stay quiet, call record_observation or record_schedule_rationale with the rationale. You may also write a compact note under /assistant/newsletter-interest/YYYY-MM.md when the decision should be durable.",
     "",
     `Scheduled reason: newsletter interest check at ${dueAt.toISOString()}.`,
@@ -470,7 +470,7 @@ export async function buildScheduledTaskPrompt(options: {
       ? "Choose one outcome: write a compact self-review note with write_file, update communication preferences only with durable evidence, or call record_observation if there is truly nothing to add. Do not queue owner messages from self-review alone."
       : options.task.title === MEMORY_REVIEW_TITLE
         ? "Memory quality review outcome: write compact additive findings with write_file to the monthly /assistant/memory-review/YYYY-MM.md note, use list cleanup tools only for concrete safe mutations, and never silently delete memory."
-        : "Newsletter interest check outcome: use preference memory, recent owner response timing, pending approvals, and recent bot activity before choosing. Propose an approval-gated conversational message only for one or two specific high-interest discoveries; otherwise record rationale and stay quiet.";
+        : "Newsletter interest check outcome: use preference memory, recent owner response timing, pending approvals, and recent bot activity before choosing. Send a short conversational message only for one or two specific high-interest discoveries; otherwise record rationale and stay quiet.";
 
   return [
     options.task.prompt,

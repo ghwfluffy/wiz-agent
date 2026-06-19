@@ -16,6 +16,7 @@ export type ToolExecutionContext = {
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
+  ownerInitiated?: boolean;
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
 };
 
@@ -78,6 +79,7 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   mark_waiting_on: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   request_clarification: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   record_schedule_rationale: { access: "write", risk: "medium", sideEffect: "local_persistence" },
+  schedule_owner_message: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   propose_outbound_message: { access: "write", risk: "high", sideEffect: "local_persistence" },
   ask_owner_clarification: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   record_observation: { access: "write", risk: "low", sideEffect: "none" },

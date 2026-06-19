@@ -428,6 +428,13 @@ export const RecordScheduleRationaleToolSchema = z.object({
   nextReviewAt: z.string().datetime().nullable().optional()
 });
 
+export const ScheduleOwnerMessageToolSchema = z.object({
+  body: z.string().min(1),
+  subject: z.string().optional(),
+  dueAt: z.string().datetime(),
+  rationale: z.string().min(1)
+}).strict();
+
 export const ProposeOutboundMessageToolSchema = z.object({
   intent: z.enum(["reply"]).default("reply"),
   subject: z.string().optional(),
@@ -505,6 +512,7 @@ export const ToolContracts = {
   mark_waiting_on: MarkWaitingOnToolSchema,
   request_clarification: RequestClarificationToolSchema,
   record_schedule_rationale: RecordScheduleRationaleToolSchema,
+  schedule_owner_message: ScheduleOwnerMessageToolSchema,
   propose_outbound_message: ProposeOutboundMessageToolSchema,
   ask_owner_clarification: AskOwnerClarificationToolSchema,
   record_observation: RecordObservationToolSchema,

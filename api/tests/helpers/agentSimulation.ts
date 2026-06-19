@@ -251,6 +251,7 @@ export async function createAgentSimulation(options: {
         context: systemContext,
         settings,
         modelClient: model,
+        mailTransport: { sendMail: async () => ({ accepted: ["ok"] }) },
         now: currentTime
       });
     },

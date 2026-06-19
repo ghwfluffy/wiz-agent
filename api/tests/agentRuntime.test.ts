@@ -6,7 +6,7 @@ import { chooseModelTier, modelTierConfigFromSettings, resolveModelId } from "..
 import { classifyOwnerMessageIntent } from "../src/agent/ownerIntentClassifier.js";
 import { buildAgentPrompt, modelToolDescriptors } from "../src/agent/promptContext.js";
 import { runAgentTask } from "../src/agent/runAgentTask.js";
-import { LocalToolClient } from "../src/agent/toolClient.js";
+import { LocalToolClient, McpToolClient } from "../src/agent/toolClient.js";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
@@ -16,6 +16,7 @@ import { recordDecisionLedgerForToolCall } from "../src/memory/decisionLedger.js
 import { PERSONAL_PROFILE_SLUG } from "../src/memory/personalMemory.js";
 import { buildMcpApp } from "../src/mcp/server.js";
 import { validateOrRepairToolCall } from "../src/tools/validator.js";
+import { OWNER_SCHEDULED_MESSAGE_RECURRENCE } from "../src/tools/ownerMessaging.js";
 
 async function testContext(isAdmin = true): Promise<{ context: RequestContext; store: ReturnType<typeof createMemoryStore> }> {
   const settings = loadSettings({
@@ -1926,7 +1927,7 @@ describe("agent task execution", () => {
     ]);
   });
 
-  it("queues owner replies to the inbound SMS gateway without model-selected recipients", async () => {
+  it("queues owner replies to the inbound SMS gateway without approval even if the model asks for it", async () => {
     const { context, store } = await testContext();
     const message = await store.recordInboundMessage(context, {
       providerMessageId: "owner-reply-1",
@@ -1946,7 +1947,8 @@ describe("agent task execution", () => {
             toolName: "propose_outbound_message",
             arguments: {
               intent: "reply",
-              body: "Yes, I am online."
+              body: "Yes, I am online.",
+              approvalRequired: true
             }
           }
         ]
@@ -2247,6 +2249,240 @@ describe("agent task execution", () => {
       toolResult: expect.objectContaining({
         task_id: expect.any(String)
       })
+    });
+  });
+
+  it("executes mobile voice apartment-gate commands without queuing approval", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OPENAI_TRANSCRIPTION_MODEL: "voice-test-model",
+      APARTMENT_GATE_API_BASE_URL: "https://gate.example.test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://gate.example.test/api/agent/open-right-gate");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("authorization")).toMatch(/^Bearer /);
+      return Response.json({ status: "opened" }, { status: 202 });
+    });
+    const app = buildApp({
+      settings,
+      fetchImpl: fetchMock,
+      integrationTokenProvider: { tokenFor: async () => "test-token" },
+      modelClient: new MockModelClient({
+        transcriptions: ["Open the apartment gate."],
+        tools: [
+          {
+            toolName: "integration_action",
+            arguments: {
+              actionId: "apartment_gate.open_right_gate",
+              pathParams: {},
+              query: {},
+              userIntentSummary: "Open the apartment gate for the owner."
+            }
+          }
+        ]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+    const form = new FormData();
+    form.set("audio", new File(["fake-audio"], "voice.m4a", { type: "audio/mp4" }));
+
+    const response = await app.request("/api/v1/agent/voice-prompts", {
+      method: "POST",
+      headers: { cookie },
+      body: form
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      transcript: "Open the apartment gate.",
+      status: "completed",
+      selectedAction: "integration_action",
+      toolStatus: "accepted",
+      responseText: "Done. I sent the apartment gate open command.",
+      toolResult: {
+        status: 202,
+        data: { status: "opened" },
+        approval_required: false,
+        action_id: "apartment_gate.open_right_gate"
+      }
+    });
+  });
+
+  it("carries owner-initiated app writes through an injected MCP app without queuing approval", async () => {
+    const { context, store } = await testContext();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      APARTMENT_GATE_API_BASE_URL: "https://gate.example.test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://gate.example.test/api/agent/open-right-gate");
+      expect(init?.method).toBe("POST");
+      return Response.json({ status: "opened" }, { status: 202 });
+    });
+    const mcpApp = buildMcpApp({
+      settings,
+      store,
+      integrationTokenProvider: { tokenFor: async () => "test-token" },
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+
+    const result = await runAgentTask({
+      context,
+      store,
+      settings,
+      integrationTokenProvider: { tokenFor: async () => "test-token" },
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      toolClient: new McpToolClient({ app: mcpApp }),
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "integration_action",
+            arguments: {
+              actionId: "apartment_gate.open_right_gate",
+              pathParams: {},
+              query: {},
+              userIntentSummary: "Open the apartment gate for the owner."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Open the apartment gate.",
+        ownerInitiated: true
+      }
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "integration_action",
+      executionResult: {
+        status: 202,
+        data: { status: "opened" },
+        approval_required: false,
+        action_id: "apartment_gate.open_right_gate"
+      }
+    });
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
+  });
+
+  it("schedules owner-requested delayed messages as typed one-off reminder tasks", async () => {
+    const { context, store } = await testContext();
+    const dueAt = "2026-06-18T22:00:00.000Z";
+
+    const result = await runAgentTask({
+      context,
+      store,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "schedule_owner_message",
+            arguments: {
+              body: "Here is the reminder you asked for.",
+              dueAt,
+              rationale: "Owner asked to receive this message in a couple hours."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Message me in a couple hours.",
+        ownerInitiated: true
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolName: "schedule_owner_message",
+      executionResult: {
+        due_at: dueAt,
+        scheduled_owner_message: true
+      }
+    });
+    const [task] = await store.listTasks(context);
+    expect(task).toMatchObject({
+      title: "Send owner message",
+      dueAt,
+      recurrencePolicy: OWNER_SCHEDULED_MESSAGE_RECURRENCE,
+      scheduleRationale: "Owner asked to receive this message in a couple hours."
+    });
+    expect(task.prompt).toContain("OWNER_SCHEDULED_MESSAGE_V1");
+  });
+
+  it("executes direct owner simplified app writes without queuing approval", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      GOALS_API_BASE_URL: "https://goals.example.test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://goals.example.test/goals");
+      expect(init?.method).toBe("POST");
+      expect(new Headers(init?.headers).get("authorization")).toMatch(/^Bearer /);
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        goal_type: "metric",
+        title: "Morning walk"
+      });
+      return Response.json({ id: "goal-1", title: "Morning walk" }, { status: 201 });
+    });
+    const app = buildApp({
+      settings,
+      fetchImpl: fetchMock,
+      integrationTokenProvider: { tokenFor: async () => "test-token" },
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "create_goal",
+            arguments: {
+              goalType: "metric",
+              title: "Morning walk",
+              startDate: "2026-06-16",
+              targetDate: null,
+              targetValueNumber: 10,
+              targetValueDate: null,
+              exceptionDates: [],
+              checklistItems: [],
+              userIntentSummary: "Create a morning walk goal."
+            }
+          }
+        ]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        prompt: "Create a goal for a morning walk.",
+        mode: "normal"
+      })
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      selectedAction: "create_goal",
+      toolStatus: "accepted",
+      toolResult: {
+        status: 201,
+        data: { id: "goal-1", title: "Morning walk" },
+        approval_required: false,
+        action_id: "goals.create_goal"
+      }
     });
   });
 

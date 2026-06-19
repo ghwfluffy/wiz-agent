@@ -14,6 +14,10 @@ import { executeApprovedCrossAppApprovals } from "./approvalExecutor.js";
 import { recordTaskOutcomeMemory } from "../memory/taskOutcomeMemory.js";
 import { recordScheduledTaskDecision } from "../memory/decisionLedger.js";
 import { runtimeSafetyPolicy } from "../security/safetyPolicy.js";
+import {
+  parseScheduledOwnerMessageTask,
+  queueOwnerVisibleMessage
+} from "../tools/ownerMessaging.js";
 
 export async function claimDueTasks(options: {
   store: AgentStore;
@@ -64,6 +68,45 @@ export async function daemonOnce(options: {
     for (const task of claimed) {
       let runFailed = false;
       try {
+        const scheduledOwnerMessage = parseScheduledOwnerMessageTask(task);
+        if (scheduledOwnerMessage) {
+          const queued = await queueOwnerVisibleMessage({
+            context: options.context,
+            store: options.store,
+            settings: options.settings,
+            source: "scheduled_owner_message",
+            subject: scheduledOwnerMessage.subject ?? null,
+            body: scheduledOwnerMessage.body
+          });
+          if (!queued.message) {
+            throw new Error("Owner message destination is unavailable.");
+          }
+          await options.store.updateTask(options.context, task.id, {
+            status: "completed",
+            lastAgentReviewAt: (options.now ?? new Date()).toISOString()
+          });
+          await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.outcome", {
+            outcome: "acted",
+            tool_name: "schedule_owner_message",
+            outbound_message_id: queued.message.id,
+            summary: "Scheduled owner message was queued for delivery."
+          });
+          await recordScheduledTaskDecision({
+            store: options.store,
+            context: options.context,
+            taskId: task.id,
+            outcome: "acted",
+            toolName: "schedule_owner_message",
+            now: options.now
+          });
+          await recordTaskOutcomeMemory({
+            store: options.store,
+            context: options.context,
+            taskId: task.id,
+            now: options.now
+          });
+          continue;
+        }
         const prompt = isAutonomousRecurringTask(task)
           ? await buildScheduledTaskPrompt({
             store: options.store,

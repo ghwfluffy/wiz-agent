@@ -53,9 +53,9 @@ A newsletter interest check is a scheduled agent task, not an inbound side
 effect. That task reviews newsletter knowledge, newsletter preferences,
 communication preferences, recent owner response timing, pending approvals, and
 recent bot activity evidence. It then decides whether now is a good time to
-propose an approval-gated conversational owner message about one or two
-specific discoveries, or to stay quiet and record rationale. It is not a rigid
-daily digest.
+queue a short budgeted conversational owner message about one or two specific
+discoveries, or to stay quiet and record rationale. It is not a rigid daily
+digest.
 
 Connectors should call `processInboundMessage`, not the lower-level sender
 policy helper directly. The processor records the message, applies sender
@@ -136,8 +136,8 @@ self-review notes, then writes compact curation findings to
 `/assistant/memory-review/YYYY-MM.md`.
 The newsletter interest check runs from the schedule, not directly from inbound
 newsletter delivery. It receives newsletter excerpts as trusted knowledge data,
-must still choose a host-approved tool, and can queue an owner message only
-through the normal approval-gated outbound tool. Quiet decisions should record
+must still choose a host-approved tool, and can queue a short owner message only
+through the normal outbox/budget controls. Quiet decisions should record
 rationale through task events or assistant memory such as
 `/assistant/newsletter-interest/YYYY-MM.md`. Autonomous wakes can update task
 schedule, status, waiting/blocked state, follow-up tasks, and schedule rationale
@@ -150,7 +150,7 @@ include current `/assistant/feedback/YYYY-MM.md` context as evidence, not as an
 automatic mutation instruction. A self-review run is not itself a reason to
 contact the owner; a memory-review run is not itself a reason to contact the
 owner or silently delete memory. Any outbound message still has to come from a
-separate task or owner instruction and pass the normal approval/outbox path.
+separate task or owner instruction and pass the normal outbox/budget path.
 
 The worker polls enabled per-user IMAP connector records and processes unread
 mail in bounded batches. IMAP connector settings live in the database and are
@@ -263,10 +263,10 @@ logs.
 ## Outbound
 
 Email, SMS, and MMS sends go through an outbox table. Request handlers and model
-tools should enqueue proposed sends rather than contacting providers directly.
-
-Outbound side effects may require approval. The first implementation should be
-conservative and approval-gated by default.
+tools enqueue sends rather than contacting providers directly. Direct
+owner-command replies, owner-requested messages, and typed scheduled owner
+messages queue as `pending`; self-review, memory-review, autonomous wake, and
+explicit `approvalRequired=true` outreach use approval records.
 
 The current implementation delivers `pending` and `approved` outbox records
 through SMTP from the worker. SMS and MMS use carrier gateway email addresses
@@ -319,14 +319,18 @@ safe SMS text length. Short SMS replies still use the SMS gateway, and email
 replies are unchanged.
 
 Approval gates delivery for records with `status = 'requires_approval'`.
-The owner-reply model tool is conservative in Phase 08: it creates an approval
-and a linked outbox record instead of directly queuing delivery. The delivery
-worker only attempts records with `pending` or `approved` status, so
-`requires_approval` records stay blocked until the owner approves them from the
-operations UI or an owner-classified SMS/email command. Deterministic
-untrusted-sender review notifications remain host-generated from bounded
-message metadata and are queued as `pending`, not `requires_approval`, so the
-owner actually receives the prompt to review the sender.
+The delivery worker only attempts records with `pending` or `approved` status,
+so `requires_approval` records stay blocked until the owner approves them from
+the operations UI or an owner-classified SMS/email command. Deterministic
+untrusted-sender review notifications, direct owner-command replies, and due
+`schedule_owner_message` tasks are queued as `pending`, not
+`requires_approval`, so the owner actually receives requested messages.
+
+Delayed owner-message requests use the `schedule_owner_message` tool rather
+than a generic task. The tool stores a typed one-off scheduled task with a
+concrete due time and bounded message body. When the task becomes due, worker
+host code queues the outbox record directly without another model decision or
+approval hop, then normal SMTP delivery sends it.
 
 Owner approval replies are parsed by host code after sender-review replies get
 first chance. `YES` approves the most recent pending approval for the owner,
@@ -425,14 +429,18 @@ raw `integration_action`. Wrappers such as `list_goals`,
 `record_goal_metric_entry`, `list_budget_accounts`, `create_budget_contract`,
 and `create_budget_expense` provide task-shaped schemas and then map to the
 registered action ids internally. Read wrappers call app APIs through the
-integration gateway with scoped signed tokens. Write/delete wrappers queue
-`cross_app_write_action` approvals with the exact registered action id, path
-params, query, and body to execute after approval.
+integration gateway with scoped signed tokens. Write/delete wrappers execute
+immediately for authenticated owner-command surfaces such as web chat, mobile
+voice, and owner-classified inbound messages. Autonomous or scheduled write
+proposals queue `cross_app_write_action` approvals with the exact registered
+action id, path params, query, and body to execute after approval.
 
-The Apartment Gate open-right-gate action is allowed to execute directly only
-from current inbound owner-message context when the model leaves
-`approvalRequired=false`. Other write actions, stale/scheduled contexts, and
-explicit approval requests still use the cross-app approval queue.
+The Apartment Gate open-right-gate action follows the same owner-command rule:
+a current authenticated owner request from web chat, mobile voice, or
+owner-classified inbound messaging executes through a scoped token immediately.
+Autonomous, scheduled, stale, or non-owner gate proposals must not execute and
+should not be converted into pending owner approvals for routine direct
+commands.
 
 The registry is also a maintenance contract. When a future request adds or
 changes an omnisite app, app API, or major user-facing capability, update the

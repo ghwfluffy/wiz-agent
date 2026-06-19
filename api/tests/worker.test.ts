@@ -6,6 +6,10 @@ import { createMemoryStore } from "../src/domain/store.js";
 import { buildScheduledTaskPrompt } from "../src/scheduler/autonomousTasks.js";
 import { daemonOnce } from "../src/scheduler/taskQueue.js";
 import { recordTaskOutcomeMemory } from "../src/memory/taskOutcomeMemory.js";
+import {
+  OWNER_SCHEDULED_MESSAGE_RECURRENCE,
+  scheduledOwnerMessagePrompt
+} from "../src/tools/ownerMessaging.js";
 import { isWorkerEntrypoint, workerTick } from "../src/worker.js";
 
 describe("worker loop", () => {
@@ -125,6 +129,170 @@ describe("worker loop", () => {
     const tasks = await store.listTasks(context);
     expect(tasks.filter((task) => task.status === "completed")).toHaveLength(1);
     expect(tasks.filter((task) => task.status === "pending" && task.title.startsWith("Due task"))).toHaveLength(1);
+  });
+
+  it("delivers due owner-scheduled messages without another model decision or approval", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OUTBOUND_ENABLED: "true"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-owner-message-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-owner-message-test",
+      session
+    };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
+      }
+    });
+    const task = await store.createTask(context, {
+      title: "Send owner message",
+      prompt: scheduledOwnerMessagePrompt({
+        body: "This is your scheduled reminder.",
+        subject: "Reminder"
+      }),
+      dueAt: "2026-06-18T22:00:00.000Z",
+      priority: 80,
+      scheduleRationale: "Owner asked for a message in a couple hours.",
+      recurrencePolicy: OWNER_SCHEDULED_MESSAGE_RECURRENCE
+    });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "record_observation",
+            arguments: {
+              summary: "This should not be used for the owner message.",
+              source: "unexpected-model-path"
+            }
+          }
+        ]
+      }),
+      mailTransport: { sendMail },
+      now: new Date("2026-06-18T22:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({
+      claimedTasks: 1,
+      ranTasks: 1,
+      outboundAttempted: 1,
+      outboundSent: 1
+    });
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({
+      to: "owner-sms@example.test",
+      subject: "Reminder",
+      text: "This is your scheduled reminder."
+    }));
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
+    await expect(store.listAgentRuns(context)).resolves.toEqual([]);
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({ status: "completed" });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        status: "sent",
+        approvalId: null,
+        bodyText: "This is your scheduled reminder."
+      })
+    ]);
+  });
+
+  it("sends newsletter interest messages without approval when the scheduled check chooses to contact the owner", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OUTBOUND_ENABLED: "true"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-newsletter-contact-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-newsletter-contact-test",
+      session
+    };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
+      }
+    });
+    await store.createTask(context, {
+      title: "Newsletter interest check",
+      prompt: "You woke up for the newsletter interest check.",
+      dueAt: "2026-06-16T17:00:00.000Z",
+      scheduleRationale: "Preference-aware daily newsletter interest check.",
+      recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
+    });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            toolName: "propose_outbound_message",
+            arguments: {
+              intent: "reply",
+              body: "Cool newsletter find: one concrete thing worth checking later."
+            }
+          }
+        ]
+      }),
+      mailTransport: { sendMail },
+      now: new Date("2026-06-16T17:00:00.000Z")
+    });
+
+    expect(result).toMatchObject({
+      claimedTasks: 1,
+      ranTasks: 1,
+      outboundAttempted: 1,
+      outboundSent: 1
+    });
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        status: "sent",
+        approvalId: null,
+        bodyText: "Cool newsletter find: one concrete thing worth checking later."
+      })
+    ]);
   });
 
   it("keeps an existing legacy newsletter synthesis task from duplicating and rolls it forward to interest checks", async () => {
@@ -356,11 +524,12 @@ describe("worker loop", () => {
     )).toHaveLength(1);
   });
 
-  it("lets a scheduled newsletter interest check propose an approval-gated conversational message", async () => {
+  it("lets a scheduled newsletter interest check send a budgeted conversational message", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
       APP_ENV: "test",
-      AUTH_MODE: "standalone"
+      AUTH_MODE: "standalone",
+      AGENT_OUTBOUND_ENABLED: "true"
     });
     const session = await store.createDevelopmentSession(settings, "worker-newsletter-propose-login");
     const context = {
@@ -377,6 +546,18 @@ describe("worker loop", () => {
         sms_gateway: "owner-sms@example.test"
       }
     });
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: {
+          host: "smtp.example.test",
+          from: "sender@example.test",
+          password: "secret"
+        }
+      }
+    });
     await store.writeMarkdownDocument(context, {
       path: "/newsletters/2026-06-13/agent-weekly.md",
       markdown: "# Agent Weekly\n\nA practical agent runtime writeup with a useful approval pattern."
@@ -389,6 +570,7 @@ describe("worker loop", () => {
       recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
     });
 
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
     const result = await daemonOnce({
       store,
       context,
@@ -404,45 +586,41 @@ describe("worker loop", () => {
           }
         ]
       }),
+      mailTransport: { sendMail },
       now: new Date("2026-06-13T17:00:00.000Z")
     });
 
-    expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1, outboundAttempted: 0 });
+    expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1, outboundAttempted: 1, outboundSent: 1 });
+    expect(sendMail).toHaveBeenCalledTimes(1);
     await expect(store.listOutboundMessages(context)).resolves.toEqual([
       expect.objectContaining({
         channel: "sms",
-        status: "requires_approval",
+        status: "sent",
         toAddr: "owner-sms@example.test",
+        approvalId: null,
         bodyText: expect.stringContaining("One newsletter thing worth flagging")
       })
     ]);
-    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([
-      expect.objectContaining({
-        actionType: "send_outbound_message",
-        riskLevel: "high",
-        summary: expect.stringContaining("One newsletter thing worth flagging")
-      })
-    ]);
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
     await expect(store.listToolCalls(context)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
         toolName: "propose_outbound_message",
         status: "accepted",
         result: expect.objectContaining({
           execution: expect.objectContaining({
-            status: "queued_approval"
+            status: "pending",
+            approval_required: false
           })
         })
       })
     ]));
-    const [approval] = await store.listApprovals(context, ["pending"]);
     const [outbound] = await store.listOutboundMessages(context);
     const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
     expect(ledger).toMatchObject({
-      markdown: expect.stringContaining("queued owner-visible outbound proposal for approval")
+      markdown: expect.stringContaining("queued owner-visible outbound message for delivery")
     });
-    expect(ledger?.markdown).toContain(`approvalId: ${approval.id}`);
     expect(ledger?.markdown).toContain(`outboundMessageId: ${outbound.id}`);
-    expect(ledger?.markdown).toContain("Owner-visible side effect status: approval_required:queued_approval");
+    expect(ledger?.markdown).toContain("Owner-visible side effect status: delivery:pending");
   });
 
   it("builds a self-review prompt with activity and preference-memory guidance", async () => {
