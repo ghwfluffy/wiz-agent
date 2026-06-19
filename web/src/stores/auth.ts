@@ -1,6 +1,6 @@
 import { defineStore } from "pinia";
 import { api, type AuthUser } from "../lib/api";
-import { apiUrl } from "../lib/basePath";
+import { authLoginUrl } from "../lib/basePath";
 
 type AuthState = {
   loaded: boolean;
@@ -23,6 +23,7 @@ type OAuthError = {
 };
 
 const oauthAutoRetryKey = "agent.oauth_state_auto_retry";
+let restoreInFlight: Promise<void> | null = null;
 
 function usesOAuthMode(): boolean {
   return import.meta.env.VITE_AUTH_MODE === "oauth";
@@ -62,6 +63,10 @@ function clearOAuthStateAutoRetry(): void {
   }
 }
 
+function messageFromError(error: unknown, fallback: string): string {
+  return error instanceof Error && error.message.trim() !== "" ? error.message : fallback;
+}
+
 export const useAuthStore = defineStore("auth", {
   state: (): AuthState => ({
     loaded: false,
@@ -69,46 +74,68 @@ export const useAuthStore = defineStore("auth", {
     authenticated: false,
     user: null,
     error: null
-    }),
+  }),
   actions: {
-    applyAuth(response: { authenticated: boolean; user: AuthUser | null }): void {
-      this.authenticated = response.authenticated;
-      this.user = response.user;
+    applyAuth(response: { authenticated: boolean; user?: AuthUser | null }): void {
+      const user = response.user ?? null;
+      this.authenticated = response.authenticated && user !== null;
+      this.user = this.authenticated ? user : null;
       this.loaded = true;
       this.error = null;
-      if (response.authenticated) {
+      if (this.authenticated) {
         clearOAuthStateAutoRetry();
       }
     },
     async restore(): Promise<void> {
+      if (restoreInFlight !== null) {
+        return restoreInFlight;
+      }
+
+      restoreInFlight = this.restoreOnce().finally(() => {
+        restoreInFlight = null;
+      });
+      return restoreInFlight;
+    },
+    async restoreOnce(): Promise<void> {
       this.loading = true;
       const oauthError = consumeOAuthError();
+      let redirectStarted = false;
       try {
         this.applyAuth(await api.me());
         if (oauthError?.code === "oauth_state" && usesOAuthMode() && !this.authenticated && claimOAuthStateAutoRetry()) {
-          window.location.assign(apiUrl("/auth/login"));
+          redirectStarted = true;
+          window.location.assign(authLoginUrl());
           return;
         }
         if (oauthError && !this.authenticated) {
           this.error = oauthError.message;
         }
-      } catch {
-        this.loaded = true;
+      } catch (error) {
+        this.applyAuth({ authenticated: false, user: null });
         if (oauthError?.code === "oauth_state" && usesOAuthMode() && claimOAuthStateAutoRetry()) {
-          window.location.assign(apiUrl("/auth/login"));
+          redirectStarted = true;
+          window.location.assign(authLoginUrl());
           return;
         }
-        this.error = oauthError?.message ?? "Unable to restore the current session.";
+        this.error = oauthError?.message ?? messageFromError(error, "Unable to restore the current session.");
       } finally {
-        this.loading = false;
+        if (!redirectStarted) {
+          this.loading = false;
+        }
       }
     },
     async signIn(): Promise<void> {
+      if (usesOAuthMode()) {
+        this.loading = true;
+        window.location.assign(authLoginUrl());
+        return;
+      }
+
       this.loading = true;
       try {
         this.applyAuth(await api.devLogin());
-      } catch {
-        this.error = "Unable to sign in.";
+      } catch (error) {
+        this.error = messageFromError(error, "Unable to sign in.");
       } finally {
         this.loading = false;
       }
@@ -117,6 +144,11 @@ export const useAuthStore = defineStore("auth", {
       this.loading = true;
       try {
         this.applyAuth(await api.logout());
+        if (usesOAuthMode()) {
+          this.error = "You have been signed out.";
+        }
+      } catch (error) {
+        this.error = messageFromError(error, "Unable to sign out.");
       } finally {
         this.loading = false;
       }

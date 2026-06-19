@@ -13,6 +13,42 @@ export type AuthMeResponse = {
   expiresAt?: string;
 };
 
+export type ApiFieldError = {
+  field?: string;
+  message: string;
+};
+
+type ApiErrorEnvelope = {
+  error?: {
+    code?: string;
+    message?: string;
+    field_errors?: ApiFieldError[];
+    request_id?: string;
+  };
+  detail?: unknown;
+};
+
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string | null;
+  readonly requestId: string | null;
+  readonly fieldErrors: ApiFieldError[];
+
+  constructor(message: string, options: {
+    status: number;
+    code?: string | null;
+    requestId?: string | null;
+    fieldErrors?: ApiFieldError[];
+  }) {
+    super(message);
+    this.name = "ApiError";
+    this.status = options.status;
+    this.code = options.code ?? null;
+    this.requestId = options.requestId ?? null;
+    this.fieldErrors = options.fieldErrors ?? [];
+  }
+}
+
 export type Task = {
   id: string;
   status: string;
@@ -443,18 +479,85 @@ export type PersonalDashboard = {
   };
 };
 
+let unauthorizedRedirectPromise: Promise<void> | null = null;
+
+async function parseApiError(response: Response): Promise<ApiError> {
+  try {
+    const payload = (await response.json()) as ApiErrorEnvelope;
+    const message = payload.error?.message;
+    if (typeof message === "string" && message.trim() !== "") {
+      return new ApiError(message, {
+        status: response.status,
+        code: payload.error?.code,
+        requestId: payload.error?.request_id,
+        fieldErrors: payload.error?.field_errors
+      });
+    }
+    if (typeof payload.detail === "string" && payload.detail.trim() !== "") {
+      return new ApiError(payload.detail, { status: response.status });
+    }
+  } catch {
+    // Fall through to a generic status error when the response is not JSON.
+  }
+  return new ApiError(`Request failed with status ${response.status}`, { status: response.status });
+}
+
+function shouldForceLogoutOnUnauthorized(path: string): boolean {
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return !normalizedPath.startsWith("/auth/");
+}
+
+async function forceLogoutRedirect(): Promise<void> {
+  if (unauthorizedRedirectPromise !== null) {
+    return unauthorizedRedirectPromise;
+  }
+
+  unauthorizedRedirectPromise = (async () => {
+    try {
+      await fetch(apiUrl("/auth/logout"), {
+        credentials: "include",
+        keepalive: true,
+        method: "POST"
+      });
+    } catch {
+      // Best-effort cookie clearing. The redirect still needs to happen.
+    }
+
+    if (typeof window !== "undefined") {
+      window.location.assign(import.meta.env.BASE_URL || "/");
+    }
+  })().finally(() => {
+    unauthorizedRedirectPromise = null;
+  });
+
+  return unauthorizedRedirectPromise;
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const headers = new Headers(init.headers);
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
+  if (init.body !== undefined && !headers.has("Content-Type") && !(init.body instanceof FormData)) {
+    headers.set("Content-Type", "application/json");
+  }
+
   const response = await fetch(apiUrl(path), {
+    ...init,
     credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...init.headers
-    },
-    ...init
+    headers
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed with status ${response.status}`);
+    const error = await parseApiError(response);
+    if (error.status === 401 && shouldForceLogoutOnUnauthorized(path)) {
+      await forceLogoutRedirect();
+    }
+    throw error;
+  }
+
+  if (response.status === 204) {
+    return undefined as T;
   }
 
   return (await response.json()) as T;
@@ -467,8 +570,13 @@ export const api = {
   devLogin(): Promise<AuthMeResponse> {
     return request<AuthMeResponse>("/auth/dev-login", { method: "POST" });
   },
-  logout(): Promise<AuthMeResponse> {
-    return request<AuthMeResponse>("/auth/logout", { method: "POST" });
+  async logout(): Promise<AuthMeResponse> {
+    const response = await request<Partial<AuthMeResponse>>("/auth/logout", { method: "POST" });
+    return {
+      authenticated: response.authenticated === true,
+      user: response.user ?? null,
+      expiresAt: response.expiresAt
+    };
   },
   createTask(input: TaskInput): Promise<Task> {
     return request<Task>("/tasks", {
