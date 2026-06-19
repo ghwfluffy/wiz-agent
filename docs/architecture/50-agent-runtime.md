@@ -55,7 +55,9 @@ upload, transcribes it with `AGENT_OPENAI_TRANSCRIPTION_MODEL` (default
 owner web prompt loop. The Android client may warm the auth/session connection
 while recording, but the server still performs all authentication, file
 validation, transcription, tool selection, side-effect policy, and audit work.
-Raw uploaded audio is discarded after request processing.
+Transcription is bounded by the admin runtime budget before any agent run is
+created; a timeout records a `maxRuntimeSecPerRun` guardrail and returns a
+controlled API error. Raw uploaded audio is discarded after request processing.
 
 ## Tool Contracts And MCP Runtime
 
@@ -307,6 +309,14 @@ When a guardrail trips, host code fails closed before creating the side effect,
 records `guardrail.exceeded` with a non-secret reason, and returns a structured
 `guardrail_exceeded` result where the caller has a run/tool context. The model
 does not get to raise, lower, or bypass these caps.
+
+`maxRuntimeSec` is enforced as a single wall-clock deadline for the run phases:
+initial model response, tool-argument repair, validated tool execution, and
+read-only final response synthesis. Model requests and MCP-backed tool requests
+receive an abort signal tied to that deadline. If the deadline is exceeded
+after a model has proposed a tool, the runtime records the tool call as
+rejected or failed with `guardrail_exceeded:maxRuntimeSecPerRun`; if no tool has
+been proposed, the run fails with the same guardrail audit on the agent run.
 
 ## Traceability
 

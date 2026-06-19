@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { File } from "node:buffer";
-import { MockModelClient, OpenAIModelClient } from "../src/agent/modelClient.js";
+import { MockModelClient, OpenAIModelClient, type AgentModelClient } from "../src/agent/modelClient.js";
 import { buildOwnerInboundPrompt, runOwnerInboundAgent } from "../src/agent/inboundMessageAgent.js";
 import { chooseModelTier, modelTierConfigFromSettings, resolveModelId } from "../src/agent/modelTiers.js";
 import { classifyOwnerMessageIntent } from "../src/agent/ownerIntentClassifier.js";
@@ -36,6 +36,18 @@ async function testContext(isAdmin = true): Promise<{ context: RequestContext; s
       session
     }
   };
+}
+
+function cookieHeader(sessionId: string): string {
+  return `agent_session=${sessionId}`;
+}
+
+function waitForAbort<T>(signal: AbortSignal | undefined): Promise<T> {
+  return new Promise((_resolve, reject) => {
+    signal?.addEventListener("abort", () => {
+      reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+    }, { once: true });
+  });
 }
 
 describe("model tiers", () => {
@@ -433,6 +445,249 @@ describe("agent task execution", () => {
         })
       })
     ]));
+  });
+
+  it("fails and audits a run when the model response exceeds the runtime budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-13T12:00:00.000Z"));
+    try {
+      const { context, store } = await testContext();
+      await store.updateAiConfig(context, {
+        fastModel: "gpt-5-mini",
+        smartModel: "gpt-5",
+        orchestratorModel: "gpt-5",
+        repairModel: "gpt-5-mini",
+        maxToolCalls: 10,
+        maxRuntimeSec: 1,
+        repairAttemptLimit: 1
+      });
+      const abortSeen = vi.fn();
+      const modelClient: AgentModelClient = {
+        async runStructured() {
+          return {};
+        },
+        async runWithTools(request) {
+          request.signal?.addEventListener("abort", () => {
+            abortSeen(request.signal?.reason);
+          }, { once: true });
+          return waitForAbort(request.signal);
+        },
+        async runText() {
+          return "";
+        },
+        async transcribeAudio() {
+          return "";
+        },
+        async repairToolArguments() {
+          return {};
+        }
+      };
+
+      const resultPromise = runAgentTask({
+        context,
+        store,
+        modelClient,
+        request: {
+          prompt: "This model call should exceed the runtime budget."
+        }
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(resultPromise).resolves.toMatchObject({
+        status: "failed",
+        toolStatus: "none",
+        failureMessage: "Agent runtime exceeded maxRuntimeSecPerRun during model_response."
+      });
+      expect(abortSeen).toHaveBeenCalledTimes(1);
+      await expect(store.listToolCalls(context)).resolves.toEqual([]);
+      await expect(store.listAgentRuns(context)).resolves.toEqual([
+        expect.objectContaining({
+          status: "failed",
+          failureMessage: "Agent runtime exceeded maxRuntimeSecPerRun during model_response."
+        })
+      ]);
+      await expect(store.listAudit(context, true)).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          action: "guardrail.exceeded",
+          details: expect.objectContaining({
+            guardrail: "maxRuntimeSecPerRun",
+            phase: "model_response",
+            limit_seconds: 1
+          })
+        })
+      ]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects a proposed tool call when argument repair exceeds the runtime budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-13T12:00:00.000Z"));
+    try {
+      const { context, store } = await testContext();
+      await store.updateAiConfig(context, {
+        fastModel: "gpt-5-mini",
+        smartModel: "gpt-5",
+        orchestratorModel: "gpt-5",
+        repairModel: "gpt-5-mini",
+        maxToolCalls: 10,
+        maxRuntimeSec: 1,
+        repairAttemptLimit: 1
+      });
+      const modelClient: AgentModelClient = {
+        async runStructured() {
+          return {};
+        },
+        async runWithTools() {
+          return {
+            toolName: "create_task",
+            arguments: {
+              prompt: "Missing title, so repair is required."
+            }
+          };
+        },
+        async runText() {
+          return "";
+        },
+        async transcribeAudio() {
+          return "";
+        },
+        async repairToolArguments(request) {
+          return waitForAbort(request.signal);
+        }
+      };
+
+      const resultPromise = runAgentTask({
+        context,
+        store,
+        modelClient,
+        toolClient: new LocalToolClient(),
+        request: {
+          prompt: "Create a task with malformed arguments."
+        }
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      await expect(resultPromise).resolves.toMatchObject({
+        status: "failed",
+        toolStatus: "rejected",
+        toolName: "create_task",
+        failureMessage: "Agent runtime exceeded maxRuntimeSecPerRun during tool_argument_repair."
+      });
+      await expect(store.listTasks(context)).resolves.toEqual([]);
+      await expect(store.listToolCalls(context)).resolves.toEqual([
+        expect.objectContaining({
+          toolName: "create_task",
+          status: "rejected",
+          validationError: "guardrail_exceeded:maxRuntimeSecPerRun",
+          result: expect.objectContaining({
+            status: "guardrail_exceeded",
+            reason: "maxRuntimeSecPerRun",
+            phase: "tool_argument_repair",
+            limit_seconds: 1,
+            tool_name: "create_task"
+          })
+        })
+      ]);
+      await expect(store.listAudit(context, true)).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          action: "guardrail.exceeded",
+          details: expect.objectContaining({
+            guardrail: "maxRuntimeSecPerRun",
+            phase: "tool_argument_repair",
+            tool_name: "create_task"
+          })
+        })
+      ]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("bounds voice transcription before creating an agent run", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-13T12:00:00.000Z"));
+    try {
+      const settings = loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "standalone"
+      });
+      const store = createMemoryStore();
+      const session = await store.createDevelopmentSession(settings, "voice-timeout-login");
+      const context: RequestContext = {
+        userId: session.user.id,
+        actorType: "admin",
+        permissions: ["user", "admin"],
+        requestId: "voice-timeout-test",
+        session
+      };
+      await store.updateAiConfig(context, {
+        fastModel: "gpt-5-mini",
+        smartModel: "gpt-5",
+        orchestratorModel: "gpt-5",
+        repairModel: "gpt-5-mini",
+        maxToolCalls: 10,
+        maxRuntimeSec: 1,
+        repairAttemptLimit: 1
+      });
+      const modelClient: AgentModelClient = {
+        async runStructured() {
+          return {};
+        },
+        async runWithTools() {
+          return {};
+        },
+        async runText() {
+          return "";
+        },
+        async transcribeAudio(request) {
+          return waitForAbort(request.signal);
+        },
+        async repairToolArguments() {
+          return {};
+        }
+      };
+      const app = buildApp({
+        settings,
+        store,
+        modelClient
+      });
+      const form = new FormData();
+      form.set("audio", new File(["audio"], "voice.m4a", { type: "audio/mp4" }));
+
+      const responsePromise = app.request("/api/v1/agent/voice-prompts", {
+        method: "POST",
+        headers: {
+          cookie: cookieHeader(session.id)
+        },
+        body: form
+      });
+
+      await vi.advanceTimersByTimeAsync(1000);
+      const response = await responsePromise;
+      expect(response.status).toBe(504);
+      await expect(response.json()).resolves.toMatchObject({
+        error: {
+          code: "guardrail_exceeded",
+          message: "Agent runtime exceeded maxRuntimeSecPerRun during voice_transcription."
+        }
+      });
+      await expect(store.listAgentRuns(context)).resolves.toEqual([]);
+      await expect(store.listAudit(context, true)).resolves.toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          action: "guardrail.exceeded",
+          entityType: "agent_voice_prompt",
+          details: expect.objectContaining({
+            guardrail: "maxRuntimeSecPerRun",
+            phase: "voice_transcription",
+            limit_seconds: 1
+          })
+        })
+      ]));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("blocks owner-visible outbound proposals after the daily guardrail is reached", async () => {

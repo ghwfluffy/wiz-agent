@@ -120,6 +120,9 @@ Current tests cover:
 - runaway guardrails for burst-window agent runs, per-run MCP/tool calls,
   owner-visible outbound proposal caps, bounded scheduled worker claims,
   non-secret guardrail audit details, and Jobs/Workers budget visibility.
+- agent runtime deadline handling for slow model responses, slow argument
+  repair, abort propagation to model calls, tool-call rejection persistence, and
+  voice transcription timeout before run creation.
 - tabbed Carbon dashboard rendering, URL-backed active tabs, and focused tab
   polling.
 - markdown RAG chunking determinism, section metadata preservation, and

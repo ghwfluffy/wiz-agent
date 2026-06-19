@@ -7,6 +7,7 @@ export type StructuredModelRequest = {
   prompt: string;
   schemaName: string;
   schema: unknown;
+  signal?: AbortSignal;
 };
 
 export type ToolModelRequest = {
@@ -14,12 +15,14 @@ export type ToolModelRequest = {
   tier: ModelTier;
   prompt: string;
   tools: unknown[];
+  signal?: AbortSignal;
 };
 
 export type TextModelRequest = {
   model: string;
   tier: ModelTier;
   prompt: string;
+  signal?: AbortSignal;
 };
 
 export type TranscribeAudioRequest = {
@@ -28,6 +31,7 @@ export type TranscribeAudioRequest = {
   filename: string;
   mimeType: string;
   prompt?: string;
+  signal?: AbortSignal;
 };
 
 export type RepairToolArgumentsRequest = {
@@ -37,6 +41,7 @@ export type RepairToolArgumentsRequest = {
   malformedArguments: unknown;
   contractShape: unknown;
   validationErrors: string[];
+  signal?: AbortSignal;
 };
 
 export type AgentModelClient = {
@@ -106,27 +111,37 @@ export class OpenAIModelClient implements AgentModelClient {
   }
 
   async runStructured(request: StructuredModelRequest): Promise<unknown> {
-    const response = await this.createResponse({
-      model: request.model,
-      input: request.prompt,
-      text: {
-        format: {
-          type: "json_schema",
-          name: request.schemaName,
-          strict: false,
-          schema: request.schema
+    const response = await this.createResponse(
+      {
+        model: request.model,
+        input: request.prompt,
+        text: {
+          format: {
+            type: "json_schema",
+            name: request.schemaName,
+            strict: false,
+            schema: request.schema
+          }
         }
+      },
+      {
+        signal: request.signal
       }
-    });
+    );
     return parseJsonOutput(response);
   }
 
   async runWithTools(request: ToolModelRequest): Promise<unknown> {
-    const response = await this.createResponse({
-      model: request.model,
-      input: request.prompt,
-      tools: request.tools.map(toOpenAiTool)
-    });
+    const response = await this.createResponse(
+      {
+        model: request.model,
+        input: request.prompt,
+        tools: request.tools.map(toOpenAiTool)
+      },
+      {
+        signal: request.signal
+      }
+    );
     const functionCall = findFunctionCall(response);
     if (functionCall) {
       return {
@@ -138,10 +153,15 @@ export class OpenAIModelClient implements AgentModelClient {
   }
 
   async runText(request: TextModelRequest): Promise<string> {
-    const response = await this.createResponse({
-      model: request.model,
-      input: request.prompt
-    });
+    const response = await this.createResponse(
+      {
+        model: request.model,
+        input: request.prompt
+      },
+      {
+        signal: request.signal
+      }
+    );
     return parseTextOutput(response);
   }
 
@@ -161,7 +181,8 @@ export class OpenAIModelClient implements AgentModelClient {
       headers: {
         authorization: `Bearer ${this.apiKey}`
       },
-      body: form
+      body: form,
+      signal: request.signal
     });
     const payload = await response.json().catch(() => null) as unknown;
     if (!response.ok) {
@@ -175,26 +196,34 @@ export class OpenAIModelClient implements AgentModelClient {
   }
 
   async repairToolArguments(request: RepairToolArgumentsRequest): Promise<unknown> {
-    const response = await this.createResponse({
-      model: request.model,
-      input: [
-        "Repair these tool arguments so they satisfy the contract.",
-        "Return only a JSON object with the repaired arguments.",
-        `Tool: ${request.toolName}`,
-        `Validation errors: ${JSON.stringify(request.validationErrors)}`,
-        `Contract shape: ${JSON.stringify(request.contractShape)}`,
-        `Malformed arguments: ${JSON.stringify(request.malformedArguments)}`
-      ].join("\n"),
-      text: {
-        format: {
-          type: "json_object"
+    const response = await this.createResponse(
+      {
+        model: request.model,
+        input: [
+          "Repair these tool arguments so they satisfy the contract.",
+          "Return only a JSON object with the repaired arguments.",
+          `Tool: ${request.toolName}`,
+          `Validation errors: ${JSON.stringify(request.validationErrors)}`,
+          `Contract shape: ${JSON.stringify(request.contractShape)}`,
+          `Malformed arguments: ${JSON.stringify(request.malformedArguments)}`
+        ].join("\n"),
+        text: {
+          format: {
+            type: "json_object"
+          }
         }
+      },
+      {
+        signal: request.signal
       }
-    });
+    );
     return parseJsonOutput(response);
   }
 
-  private async createResponse(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async createResponse(
+    body: Record<string, unknown>,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<Record<string, unknown>> {
     if (!this.apiKey) {
       throw new Error("OpenAI API key is not configured. Set AGENT_OPENAI_API_KEY in secrets.");
     }
@@ -204,7 +233,8 @@ export class OpenAIModelClient implements AgentModelClient {
         authorization: `Bearer ${this.apiKey}`,
         "content-type": "application/json"
       },
-      body: JSON.stringify(body)
+      body: JSON.stringify(body),
+      signal: options.signal
     });
     const payload = await response.json().catch(() => null) as unknown;
     if (!response.ok) {

@@ -20,6 +20,7 @@ export type AgentToolClientExecuteInput = {
   fetchImpl?: typeof fetch;
   ownerInitiated?: boolean;
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
+  signal?: AbortSignal;
 };
 
 export type AgentToolClient = {
@@ -28,6 +29,7 @@ export type AgentToolClient = {
 
 export class LocalToolClient implements AgentToolClient {
   async execute(input: AgentToolClientExecuteInput): Promise<ToolExecutionResult> {
+    throwIfAborted(input.signal);
     return executeToolCall({
       context: input.context,
       store: input.store,
@@ -102,7 +104,8 @@ export class McpToolClient implements AgentToolClient {
     const init = {
       method: "POST",
       headers,
-      body: JSON.stringify(input.args)
+      body: JSON.stringify(input.args),
+      signal: input.signal
     };
     const app = this.app ?? buildMcpApp({
       settings: input.settings,
@@ -115,4 +118,14 @@ export class McpToolClient implements AgentToolClient {
     });
     return app.request(path, init);
   }
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (!signal?.aborted) {
+    return;
+  }
+  if (signal.reason instanceof Error) {
+    throw signal.reason;
+  }
+  throw new Error("Tool execution was cancelled.");
 }

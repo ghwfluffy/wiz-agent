@@ -3,6 +3,11 @@ import { getCookie } from "hono/cookie";
 import { File as NodeFile } from "node:buffer";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { OpenAIModelClient, type AgentModelClient } from "../agent/modelClient.js";
+import {
+  AgentRuntimeDeadline,
+  AgentRuntimeDeadlineExceededError,
+  MAX_RUNTIME_GUARDRAIL
+} from "../agent/runtimeDeadline.js";
 import { runOwnerWebPromptAgent } from "../agent/inboundMessageAgent.js";
 import { loadSettings, type Settings } from "../config/settings.js";
 import { clearSessionCookie, writeSessionCookie } from "../auth/session.js";
@@ -29,7 +34,7 @@ import type {
 import { SignedIntegrationTokenProvider } from "../integrations/tokenProvider.js";
 import { decideApproval, editApproval } from "../security/approvalPolicy.js";
 import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
-import { runtimeSafetyPolicy } from "../security/safetyPolicy.js";
+import { recordGuardrailExceeded, runtimeSafetyPolicy } from "../security/safetyPolicy.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 
 export type AppOptions = {
@@ -305,6 +310,14 @@ function fallbackPromptResponseText(result: PromptAgentResult): string | null {
     }
   }
   return `Done. I completed ${humanizeIdentifier(result.toolName)}.`;
+}
+
+function runtimeDeadlineDetails(error: AgentRuntimeDeadlineExceededError): Record<string, unknown> {
+  return {
+    phase: error.phase,
+    elapsed_ms: error.elapsedMs,
+    limit_seconds: error.maxRuntimeSec
+  };
 }
 
 function countByStatus<T extends { status: string }>(records: T[], status: string): number {
@@ -1366,13 +1379,31 @@ export function buildApp(options: AppOptions = {}): Hono {
       return context.json(errorPayload("validation_error", "Unsupported audio file type.", authContext.requestId), 400);
     }
     const recentContext = stringFormValue(form.recent_context);
-    const transcript = await modelClient.transcribeAudio({
-      model: settings.agentOpenaiTranscriptionModel,
-      file: audio as unknown as Blob,
-      filename: audio.name || "voice.m4a",
-      mimeType: audio.type || "audio/mp4",
-      prompt: voiceTranscriptPrompt()
-    });
+    const aiConfig = await store.getAiConfig();
+    const transcriptionDeadline = new AgentRuntimeDeadline(aiConfig.maxRuntimeSec);
+    let transcript: string;
+    try {
+      transcript = await transcriptionDeadline.run("voice_transcription", (signal) => modelClient.transcribeAudio({
+        model: settings.agentOpenaiTranscriptionModel,
+        file: audio as unknown as Blob,
+        filename: audio.name || "voice.m4a",
+        mimeType: audio.type || "audio/mp4",
+        prompt: voiceTranscriptPrompt(),
+        signal
+      }));
+    } catch (error) {
+      if (error instanceof AgentRuntimeDeadlineExceededError) {
+        await recordGuardrailExceeded({
+          store,
+          context: authContext,
+          guardrail: MAX_RUNTIME_GUARDRAIL,
+          entityType: "agent_voice_prompt",
+          details: runtimeDeadlineDetails(error)
+        });
+        return context.json(errorPayload("guardrail_exceeded", error.message, authContext.requestId), 504);
+      }
+      throw error;
+    }
     if (!transcript) {
       return context.json(errorPayload("validation_error", "No speech was transcribed from the audio.", authContext.requestId), 400);
     }

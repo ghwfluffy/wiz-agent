@@ -1,5 +1,10 @@
 import type { AgentModelClient } from "./modelClient.js";
 import {
+  AgentRuntimeDeadline,
+  AgentRuntimeDeadlineExceededError,
+  MAX_RUNTIME_GUARDRAIL
+} from "./runtimeDeadline.js";
+import {
   chooseModelTier,
   modelTierConfigFromAiConfig,
   resolveModelId,
@@ -10,7 +15,7 @@ import type { Settings } from "../config/settings.js";
 import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain/types.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { ToolRegistry } from "../tools/registry.js";
-import { parseToolProposal, validateOrRepairToolCall } from "../tools/validator.js";
+import { parseToolProposal, validateOrRepairToolCall, type ValidatedToolCall } from "../tools/validator.js";
 import { McpToolClient, type AgentToolClient } from "./toolClient.js";
 import {
   GuardrailExceededError,
@@ -77,6 +82,8 @@ export async function runAgentTask(options: {
   }
   const tier = chooseModelTier(options.request.complexity ?? {});
   const modelId = resolveModelId(modelTierConfigFromAiConfig(aiConfig), tier);
+  const runtimeDeadline = new AgentRuntimeDeadline(aiConfig.maxRuntimeSec);
+  const runtimeModelClient = modelClientWithDeadline(options.modelClient, runtimeDeadline);
   const run = await options.store.createAgentRun(options.context, {
     taskId: options.request.taskId ?? null,
     status: "running",
@@ -86,7 +93,7 @@ export async function runAgentTask(options: {
   });
 
   try {
-    const modelOutput = await options.modelClient.runWithTools({
+    const modelOutput = await runtimeModelClient.runWithTools({
       model: modelId,
       tier,
       prompt: buildAgentPrompt(options.request.prompt),
@@ -114,11 +121,44 @@ export async function runAgentTask(options: {
       };
     }
 
-    const validated = await validateOrRepairToolCall(proposal, {
-      modelClient: options.modelClient,
-      repairModel: aiConfig.repairModel,
-      repairAttemptLimit: safety.repairAttemptLimit
-    });
+    let validated: ValidatedToolCall;
+    try {
+      validated = await validateOrRepairToolCall(proposal, {
+        modelClient: runtimeModelClient,
+        repairModel: aiConfig.repairModel,
+        repairAttemptLimit: safety.repairAttemptLimit
+      });
+    } catch (error) {
+      if (error instanceof AgentRuntimeDeadlineExceededError) {
+        await recordRuntimeDeadlineExceeded({
+          store: options.store,
+          context: options.context,
+          runId: run.id,
+          error,
+          toolName: proposal.toolName
+        });
+        await options.store.recordToolCall(options.context, {
+          runId: run.id,
+          toolName: proposal.toolName,
+          status: "rejected",
+          arguments: typeof proposal.arguments === "object" && proposal.arguments !== null
+            ? proposal.arguments as Record<string, unknown>
+            : { value: proposal.arguments },
+          validationError: `guardrail_exceeded:${MAX_RUNTIME_GUARDRAIL}`,
+          result: runtimeGuardrailResult(error, proposal.toolName)
+        });
+        await options.store.finishAgentRun(options.context, run.id, "failed", error.message);
+        return {
+          status: "failed",
+          runId: run.id,
+          toolStatus: "rejected",
+          repaired: false,
+          toolName: proposal.toolName,
+          failureMessage: error.message
+        };
+      }
+      throw error;
+    }
 
     if (!validated.ok) {
       await options.store.recordToolCall(options.context, {
@@ -181,7 +221,7 @@ export async function runAgentTask(options: {
 
     let execution;
     try {
-      execution = await (options.toolClient ?? new McpToolClient()).execute({
+      execution = await runtimeDeadline.run("tool_execution", (signal) => (options.toolClient ?? new McpToolClient()).execute({
         context: options.context,
         store: options.store,
         runId: run.id,
@@ -192,27 +232,43 @@ export async function runAgentTask(options: {
         integrationTokenProvider: options.integrationTokenProvider,
         fetchImpl: options.fetchImpl,
         ownerInitiated: options.request.ownerInitiated === true,
-        replyToMessage: options.request.replyToMessage
-      });
+        replyToMessage: options.request.replyToMessage,
+        signal
+      }));
     } catch (error) {
       const message = error instanceof GuardrailExceededError
         ? error.message
-        : error instanceof Error ? error.message : "Tool execution failed.";
+        : error instanceof AgentRuntimeDeadlineExceededError
+          ? error.message
+          : error instanceof Error ? error.message : "Tool execution failed.";
+      if (error instanceof AgentRuntimeDeadlineExceededError) {
+        await recordRuntimeDeadlineExceeded({
+          store: options.store,
+          context: options.context,
+          runId: run.id,
+          error,
+          toolName: validated.toolName
+        });
+      }
       await options.store.recordToolCall(options.context, {
         runId: run.id,
         toolName: validated.toolName,
         status: "failed",
         arguments: validated.arguments,
-        validationError: error instanceof GuardrailExceededError
+        validationError: error instanceof AgentRuntimeDeadlineExceededError
+          ? `guardrail_exceeded:${MAX_RUNTIME_GUARDRAIL}`
+          : error instanceof GuardrailExceededError
           ? `guardrail_exceeded:${error.guardrail}`
           : message,
-        result: error instanceof GuardrailExceededError
-          ? {
+        result: error instanceof AgentRuntimeDeadlineExceededError
+          ? runtimeGuardrailResult(error, validated.toolName)
+          : error instanceof GuardrailExceededError
+            ? {
               status: "guardrail_exceeded",
               reason: error.guardrail,
               ...error.details
             }
-          : undefined
+            : undefined
       });
       await options.store.finishAgentRun(options.context, run.id, "failed", message);
       return {
@@ -242,29 +298,62 @@ export async function runAgentTask(options: {
       context: options.context,
       toolCall
     });
-    const responseText = ToolRegistry[validated.toolName].access === "read"
-      ? await synthesizeToolResponse({
-          modelClient: options.modelClient,
-          modelId,
-          tier,
-          ownerPrompt: options.request.prompt,
+    let responseText: string | undefined;
+    try {
+      responseText = ToolRegistry[validated.toolName].access === "read"
+        ? await synthesizeToolResponse({
+            modelClient: runtimeModelClient,
+            modelId,
+            tier,
+            ownerPrompt: options.request.prompt,
+            toolName: validated.toolName,
+            toolResult: execution.result
+          })
+        : undefined;
+    } catch (error) {
+      if (error instanceof AgentRuntimeDeadlineExceededError) {
+        await recordRuntimeDeadlineExceeded({
+          store: options.store,
+          context: options.context,
+          runId: run.id,
+          error,
+          toolName: validated.toolName
+        });
+        await options.store.finishAgentRun(options.context, run.id, "failed", error.message);
+        return {
+          status: "failed",
+          runId: run.id,
+          toolStatus: "accepted",
+          repaired: validated.repaired,
           toolName: validated.toolName,
-          toolResult: execution.result
-        })
-      : undefined;
+          sideEffect: execution.sideEffect,
+          executionResult: execution.result,
+          failureMessage: error.message
+        };
+      }
+      throw error;
+    }
     await options.store.finishAgentRun(options.context, run.id, "completed");
-      return {
-        status: "completed",
-        runId: run.id,
-        toolStatus: "accepted",
-        repaired: validated.repaired,
-        toolName: validated.toolName,
-        responseText,
-        sideEffect: execution.sideEffect,
-        executionResult: execution.result
-      };
+    return {
+      status: "completed",
+      runId: run.id,
+      toolStatus: "accepted",
+      repaired: validated.repaired,
+      toolName: validated.toolName,
+      responseText,
+      sideEffect: execution.sideEffect,
+      executionResult: execution.result
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Agent run failed.";
+    if (error instanceof AgentRuntimeDeadlineExceededError) {
+      await recordRuntimeDeadlineExceeded({
+        store: options.store,
+        context: options.context,
+        runId: run.id,
+        error
+      });
+    }
     await options.store.finishAgentRun(options.context, run.id, "failed", message);
     return {
       status: "failed",
@@ -274,6 +363,75 @@ export async function runAgentTask(options: {
       failureMessage: message
     };
   }
+}
+
+function modelClientWithDeadline(
+  modelClient: AgentModelClient,
+  deadline: AgentRuntimeDeadline
+): AgentModelClient {
+  return {
+    runStructured: (request) => deadline.run(
+      "structured_model_response",
+      (signal) => modelClient.runStructured({ ...request, signal })
+    ),
+    runWithTools: (request) => deadline.run(
+      "model_response",
+      (signal) => modelClient.runWithTools({ ...request, signal })
+    ),
+    runText: (request) => deadline.run(
+      "final_response_synthesis",
+      (signal) => modelClient.runText({ ...request, signal })
+    ),
+    transcribeAudio: (request) => deadline.run(
+      "voice_transcription",
+      (signal) => modelClient.transcribeAudio({ ...request, signal })
+    ),
+    repairToolArguments: (request) => deadline.run(
+      "tool_argument_repair",
+      (signal) => modelClient.repairToolArguments({ ...request, signal })
+    )
+  };
+}
+
+async function recordRuntimeDeadlineExceeded(options: {
+  store: AgentStore;
+  context: RequestContext;
+  runId: string;
+  error: AgentRuntimeDeadlineExceededError;
+  toolName?: string;
+}): Promise<void> {
+  await recordGuardrailExceeded({
+    store: options.store,
+    context: options.context,
+    guardrail: MAX_RUNTIME_GUARDRAIL,
+    entityType: "agent_run",
+    entityId: options.runId,
+    details: runtimeGuardrailDetails(options.error, options.toolName)
+  });
+}
+
+function runtimeGuardrailResult(
+  error: AgentRuntimeDeadlineExceededError,
+  toolName?: string
+): Record<string, unknown> {
+  return {
+    status: "guardrail_exceeded",
+    reason: MAX_RUNTIME_GUARDRAIL,
+    message: error.message,
+    ...runtimeGuardrailDetails(error, toolName)
+  };
+}
+
+function runtimeGuardrailDetails(
+  error: AgentRuntimeDeadlineExceededError,
+  toolName?: string
+): Record<string, unknown> {
+  return {
+    phase: error.phase,
+    elapsed_ms: error.elapsedMs,
+    limit_seconds: error.maxRuntimeSec,
+    ...(toolName ? { tool_name: toolName } : {})
+  };
 }
 
 function modelText(output: unknown): string | undefined {
@@ -323,7 +481,10 @@ async function synthesizeToolResponse(options: {
       ].join("\n")
     });
     return response.trim() || undefined;
-  } catch {
+  } catch (error) {
+    if (error instanceof AgentRuntimeDeadlineExceededError) {
+      throw error;
+    }
     return undefined;
   }
 }
