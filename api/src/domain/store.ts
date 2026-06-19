@@ -2792,6 +2792,7 @@ export function createPostgresStore(pool: Pool): AgentStore {
 
 export function createMemoryStore(): AgentStore {
   const sessions = new Map<string, Session>();
+  const oauthStates = new Map<string, { codeVerifier: string; nextPath: string; expiresAt: string }>();
   const users = new Map<string, AuthenticatedUser>();
   const tasks = new Map<string, TaskRecord>();
   const taskEvents = new Map<string, TaskEventRecord[]>();
@@ -2965,27 +2966,21 @@ export function createMemoryStore(): AgentStore {
       return session;
     },
     async createOauthState(input) {
-      sessions.set(`oauth-state:${input.state}`, {
-        id: input.codeVerifier,
-        user: {
-          id: input.nextPath,
-          email: "",
-          displayName: "",
-          isAdmin: false
-        },
-        createdAt: nowIso(),
+      oauthStates.set(input.state, {
+        codeVerifier: input.codeVerifier,
+        nextPath: input.nextPath,
         expiresAt: input.expiresAt
       });
     },
     async consumeOauthState(state) {
-      const record = sessions.get(`oauth-state:${state}`);
-      sessions.delete(`oauth-state:${state}`);
+      const record = oauthStates.get(state);
+      oauthStates.delete(state);
       if (!record || Date.parse(record.expiresAt) <= Date.now()) {
         return undefined;
       }
       return {
-        codeVerifier: record.id,
-        nextPath: record.user.id
+        codeVerifier: record.codeVerifier,
+        nextPath: record.nextPath
       };
     },
     async createOauthSession(settings, input) {

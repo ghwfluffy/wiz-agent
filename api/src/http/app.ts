@@ -944,7 +944,7 @@ export function buildApp(options: AppOptions = {}): Hono {
   });
 
   app.post("/api/v1/auth/dev-login", async (context) => {
-    if (settings.authMode !== "standalone") {
+    if (settings.authMode !== "standalone" || settings.appEnv === "production") {
       return context.json({
         error: {
           code: "not_found",
@@ -999,6 +999,13 @@ export function buildApp(options: AppOptions = {}): Hono {
     const requestId = context.req.header("x-request-id") ?? randomUUID();
     const code = context.req.query("code");
     const state = context.req.query("state");
+    const providerError = context.req.query("error");
+    if (providerError) {
+      if (state) {
+        await store.consumeOauthState(state);
+      }
+      return context.redirect(appRedirect("/", "oauth_failed"), 302);
+    }
     if (!code || !state) {
       return context.redirect(appRedirect("/", "oauth_callback"), 302);
     }

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../src/config/settings.js";
+import { createMemoryStore } from "../src/domain/store.js";
 import { buildApp } from "../src/http/app.js";
 
 describe("standalone auth", () => {
@@ -66,6 +67,27 @@ describe("standalone auth", () => {
     });
   });
 
+  it("disables the development endpoint in production even if standalone is configured", async () => {
+    const app = buildApp({
+      settings: loadSettings({
+        APP_ENV: "production",
+        AUTH_MODE: "standalone",
+        POSTGRES_PASSWORD: "not-the-development-default"
+      }),
+      store: createMemoryStore()
+    });
+
+    const response = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toEqual({
+      error: {
+        code: "not_found",
+        message: "Development sign-in is not available."
+      }
+    });
+  });
+
   it("redirects OAuth mode login to the configured authorization endpoint", async () => {
     const app = buildApp({
       settings: loadSettings({
@@ -100,6 +122,64 @@ describe("standalone auth", () => {
 
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("/agent/?oauth_error=oauth_state");
+  });
+
+  it("does not treat OAuth state records as authenticated sessions", async () => {
+    const app = buildApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "oauth",
+        AUTH_BASE_URL: "/central-auth",
+        APP_BASE_PATH: "/agent",
+        PUBLIC_URL: "https://agent.example.test"
+      })
+    });
+
+    const login = await app.request("/api/v1/auth/login?next=/tasks");
+    const authorize = new URL(`https://agent.example.test${login.headers.get("location") ?? ""}`);
+    const state = authorize.searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const me = await app.request("/api/v1/auth/me", {
+      headers: {
+        cookie: `agent_session=oauth-state:${state}`
+      }
+    });
+
+    expect(me.status).toBe(200);
+    await expect(me.json()).resolves.toEqual({
+      authenticated: false,
+      user: null
+    });
+  });
+
+  it("redirects OAuth provider errors without exchanging tokens and consumes state once", async () => {
+    const fetchImpl = vi.fn();
+    const app = buildApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "oauth",
+        AUTH_BASE_URL: "/central-auth",
+        APP_BASE_PATH: "/agent",
+        PUBLIC_URL: "https://agent.example.test"
+      }),
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    const login = await app.request("/api/v1/auth/login?next=/tasks");
+    const authorize = new URL(`https://agent.example.test${login.headers.get("location") ?? ""}`);
+    const state = authorize.searchParams.get("state");
+    expect(state).toBeTruthy();
+
+    const failed = await app.request(`/api/v1/auth/oauth/callback?error=access_denied&state=${state}`);
+    expect(failed.status).toBe(302);
+    expect(failed.headers.get("location")).toBe("/agent/?oauth_error=oauth_failed");
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    const replay = await app.request(`/api/v1/auth/oauth/callback?code=code-1&state=${state}`);
+    expect(replay.status).toBe(302);
+    expect(replay.headers.get("location")).toBe("/agent/?oauth_error=oauth_state");
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it("exchanges OAuth callbacks for local sessions", async () => {

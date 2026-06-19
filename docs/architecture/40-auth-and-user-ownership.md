@@ -14,7 +14,8 @@ Behavior:
 - The frontend sign-in button calls `dev-login`.
 - No password, registration, invitation-code, or local user-management workflow
   exists.
-- The development endpoint must be disabled outside standalone mode.
+- The development endpoint must be disabled outside standalone mode and in
+  production, even if standalone mode is accidentally configured there.
 - Development auto-login writes an audit event.
 
 Standalone mode still creates the same request context shape used by omnisite
@@ -35,7 +36,9 @@ Behavior:
 - the app creates its own local session after successful OAuth;
 - after the frontend restores auth state and finds no active session, it
   automatically redirects to the OAuth login endpoint;
-- failed callbacks redirect back to the app UI with a friendly error token.
+- failed callbacks, including provider-side OAuth errors, redirect back to the
+  app UI with a friendly error token;
+- OAuth state records are single-use and never treated as app sessions.
 
 The local user id is derived from the central subject and identity provider. The
 central `is_admin` userinfo claim controls the local admin flag.
