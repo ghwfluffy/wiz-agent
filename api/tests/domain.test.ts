@@ -142,6 +142,106 @@ describe("domain and user ownership APIs", () => {
     });
   });
 
+  it("rejects invalid task request payloads before domain writes", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "task-validation-login");
+    const headers = {
+      cookie: cookieHeader(session.id),
+      "content-type": "application/json",
+      "x-request-id": "task-validation"
+    };
+
+    const blank = await app.request("/api/v1/tasks", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "   ",
+        prompt: "Do something."
+      })
+    });
+    expect(blank.status).toBe(400);
+    await expect(blank.json()).resolves.toMatchObject({
+      error: {
+        code: "validation_error",
+        request_id: "task-validation"
+      }
+    });
+
+    const badDueAt = await app.request("/api/v1/tasks", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Bad date",
+        prompt: "Do something.",
+        dueAt: "nextish"
+      })
+    });
+    expect(badDueAt.status).toBe(400);
+
+    const badPriority = await app.request("/api/v1/tasks", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        title: "Bad priority",
+        prompt: "Do something.",
+        priority: -1
+      })
+    });
+    expect(badPriority.status).toBe(400);
+
+    await expect(store.listTasks({
+      userId: session.user.id,
+      actorType: "user",
+      permissions: ["user"],
+      requestId: "task-validation-check",
+      session
+    })).resolves.toEqual([]);
+  });
+
+  it("rejects invalid task updates before mutating existing tasks", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "task-update-validation-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "task-update-validation-seed",
+      session
+    };
+    const task = await store.createTask(context, {
+      title: "Keep this title",
+      prompt: "Keep this prompt."
+    });
+
+    const response = await app.request(`/api/v1/tasks/${task.id}`, {
+      method: "PATCH",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        title: " ",
+        status: "pending"
+      })
+    });
+
+    expect(response.status).toBe(400);
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({
+      title: "Keep this title",
+      prompt: "Keep this prompt."
+    });
+  });
+
   it("restricts admin APIs to administrators and lets admins inspect all user audit", async () => {
     const store = createMemoryStore();
     const adminSettings = loadSettings({
@@ -225,6 +325,42 @@ describe("domain and user ownership APIs", () => {
     await expect(response.json()).resolves.toMatchObject({
       fastModel: "test-fast",
       repairAttemptLimit: 2
+    });
+  });
+
+  it("rejects unsafe admin AI backend config values", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_IS_ADMIN: "true"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "admin-config-validation-login");
+
+    const response = await app.request("/api/v1/admin/ai-config", {
+      method: "PUT",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json",
+        "x-request-id": "admin-config-validation"
+      },
+      body: JSON.stringify({
+        fastModel: " ",
+        maxToolCalls: -1
+      })
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "validation_error",
+        request_id: "admin-config-validation"
+      }
+    });
+    await expect(store.getAiConfig()).resolves.toMatchObject({
+      fastModel: "gpt-5-mini",
+      maxToolCalls: 10
     });
   });
 
@@ -558,6 +694,63 @@ describe("domain and user ownership APIs", () => {
     expect(payload.outbound.bodyText).toContain("Untrusted sender unknown@example.test");
   });
 
+  it("rejects invalid approval status filters instead of broadening the listing", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "approval-filter-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "approval-filter-seed",
+      session
+    };
+    await store.createApproval(context, {
+      actionType: "send_outbound_message",
+      proposedPayload: { body_text: "Pending." },
+      riskLevel: "high",
+      summary: "Pending approval",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    const rejected = await store.createApproval(context, {
+      actionType: "send_outbound_message",
+      proposedPayload: { body_text: "Rejected." },
+      riskLevel: "high",
+      summary: "Rejected approval",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, rejected.id, "rejected", session.user.id);
+
+    const invalid = await app.request("/api/v1/approvals?status=pending,not-a-status", {
+      headers: {
+        cookie: cookieHeader(session.id),
+        "x-request-id": "approval-filter-invalid"
+      }
+    });
+    expect(invalid.status).toBe(400);
+    await expect(invalid.json()).resolves.toMatchObject({
+      error: {
+        code: "validation_error",
+        field_errors: ["not-a-status"],
+        request_id: "approval-filter-invalid"
+      }
+    });
+
+    const pendingOnly = await app.request("/api/v1/approvals?status=pending", {
+      headers: {
+        cookie: cookieHeader(session.id)
+      }
+    });
+    expect(pendingOnly.status).toBe(200);
+    const payload = await pendingOnly.json() as { approvals: Array<{ status: string }> };
+    expect(payload.approvals).toHaveLength(1);
+    expect(payload.approvals[0]?.status).toBe("pending");
+  });
+
   it("lets the current user manage connector configuration with redacted credentials", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
@@ -648,6 +841,36 @@ describe("domain and user ownership APIs", () => {
       }
     });
     expect(JSON.stringify(payload)).not.toContain("password");
+  });
+
+  it("bounds web-created MCP session TTLs", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "mcp-ttl-login");
+
+    const response = await app.request("/api/v1/agent/mcp-sessions", {
+      method: "POST",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json",
+        "x-request-id": "mcp-ttl-validation"
+      },
+      body: JSON.stringify({
+        ttlSeconds: 901
+      })
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "validation_error",
+        request_id: "mcp-ttl-validation"
+      }
+    });
   });
 
   it("returns operational job status for administrators", async () => {

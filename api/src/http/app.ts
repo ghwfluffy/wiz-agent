@@ -12,6 +12,7 @@ import { createMemoryStore, createPostgresStore } from "../domain/store.js";
 import type {
   AgentStore,
   AuditRecord,
+  ApprovalStatus,
   ConnectorKind,
   ConnectorStatus,
   ConversationThreadRecord,
@@ -59,6 +60,9 @@ function createDefaultStore(settings: Settings): AgentStore {
 
 const allowedConnectorKinds = new Set<ConnectorKind>(["owner-contact", "imap", "smtp", "openai"]);
 const allowedConnectorStatuses = new Set<ConnectorStatus>(["enabled", "disabled"]);
+const allowedTaskStatuses = new Set(["pending", "claimed", "running", "completed", "cancelled", "failed"]);
+const allowedApprovalStatuses = new Set<ApprovalStatus>(["pending", "approved", "rejected", "expired"]);
+const maxWebMcpSessionTtlSeconds = 900;
 const allowedVoiceAudioTypes = new Set([
   "audio/mp4",
   "audio/m4a",
@@ -107,6 +111,45 @@ function numberValue(input: Record<string, unknown>, key: string): number | unde
 function booleanValue(input: Record<string, unknown>, key: string): boolean | undefined {
   const value = input[key];
   return typeof value === "boolean" ? value : undefined;
+}
+
+function parseOptionalIsoDate(value: unknown): { ok: true; value?: string | null } | { ok: false } {
+  if (value === undefined) {
+    return { ok: true };
+  }
+  if (value === null) {
+    return { ok: true, value: null };
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return { ok: false };
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return { ok: false };
+  }
+  return { ok: true, value: new Date(timestamp).toISOString() };
+}
+
+function parseStatusCsv<T extends string>(
+  value: string | undefined,
+  allowed: ReadonlySet<T>
+): { ok: true; values?: T[] } | { ok: false; invalid: string[] } {
+  if (value === undefined || !value.trim()) {
+    return { ok: true };
+  }
+  const values = value.split(",").map((item) => item.trim()).filter(Boolean);
+  if (values.length === 0) {
+    return { ok: true };
+  }
+  const invalid = values.filter((item) => !allowed.has(item as T));
+  if (invalid.length > 0) {
+    return { ok: false, invalid };
+  }
+  return { ok: true, values: [...new Set(values as T[])] };
+}
+
+function isIntegerAtLeast(value: unknown, minimum: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= minimum;
 }
 
 function sanitizeConnectorConfig(
@@ -1035,17 +1078,27 @@ export function buildApp(options: AppOptions = {}): Hono {
       return authContext;
     }
     const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
-    if (!payload || typeof payload.title !== "string" || typeof payload.prompt !== "string") {
+    const title = payload ? stringValue(payload, "title") : undefined;
+    const prompt = payload ? stringValue(payload, "prompt") : undefined;
+    if (!payload || !title || !prompt) {
       return context.json(
         errorPayload("validation_error", "Task title and prompt are required.", authContext.requestId),
         400
       );
     }
+    const dueAt = parseOptionalIsoDate(payload.dueAt);
+    if (!dueAt.ok) {
+      return context.json(errorPayload("validation_error", "Task dueAt must be an ISO date string or null.", authContext.requestId), 400);
+    }
+    if (payload.priority !== undefined && !isIntegerAtLeast(payload.priority, 0)) {
+      return context.json(errorPayload("validation_error", "Task priority must be a non-negative integer.", authContext.requestId), 400);
+    }
+    const priority = payload.priority === undefined ? 0 : payload.priority;
     const task = await store.createTask(authContext, {
-      title: payload.title,
-      prompt: payload.prompt,
-      dueAt: typeof payload.dueAt === "string" ? payload.dueAt : null,
-      priority: typeof payload.priority === "number" ? payload.priority : 0
+      title,
+      prompt,
+      dueAt: dueAt.value === undefined ? null : dueAt.value,
+      priority
     });
     return context.json(task, 201);
   });
@@ -1071,14 +1124,27 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (!payload) {
       return context.json(errorPayload("validation_error", "Request body is required.", authContext.requestId), 400);
     }
-    if (payload.status !== undefined && !["pending", "claimed", "running", "completed", "cancelled", "failed"].includes(String(payload.status))) {
+    if (payload.status !== undefined && (typeof payload.status !== "string" || !allowedTaskStatuses.has(payload.status))) {
       return context.json(errorPayload("validation_error", "A valid task status is required.", authContext.requestId), 400);
     }
+    if (payload.title !== undefined && !stringValue(payload, "title")) {
+      return context.json(errorPayload("validation_error", "Task title cannot be blank.", authContext.requestId), 400);
+    }
+    if (payload.prompt !== undefined && !stringValue(payload, "prompt")) {
+      return context.json(errorPayload("validation_error", "Task prompt cannot be blank.", authContext.requestId), 400);
+    }
+    const dueAt = parseOptionalIsoDate(payload.dueAt);
+    if (!dueAt.ok) {
+      return context.json(errorPayload("validation_error", "Task dueAt must be an ISO date string or null.", authContext.requestId), 400);
+    }
+    if (payload.priority !== undefined && !isIntegerAtLeast(payload.priority, 0)) {
+      return context.json(errorPayload("validation_error", "Task priority must be a non-negative integer.", authContext.requestId), 400);
+    }
     const task = await store.updateTask(authContext, context.req.param("id"), {
-      title: typeof payload.title === "string" ? payload.title : undefined,
-      prompt: typeof payload.prompt === "string" ? payload.prompt : undefined,
-      dueAt: typeof payload.dueAt === "string" || payload.dueAt === null ? payload.dueAt : undefined,
-      priority: typeof payload.priority === "number" ? payload.priority : undefined,
+      title: stringValue(payload, "title"),
+      prompt: stringValue(payload, "prompt"),
+      dueAt: dueAt.value,
+      priority: payload.priority as number | undefined,
       status: typeof payload.status === "string" ? payload.status : undefined
     });
     if (!task) {
@@ -1140,11 +1206,11 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (authContext instanceof Response) {
       return authContext;
     }
-    const status = context.req.query("status");
-    const statuses = status ? status.split(",").filter((item) =>
-      ["pending", "approved", "rejected", "expired"].includes(item)
-    ) as Array<"pending" | "approved" | "rejected" | "expired"> : undefined;
-    return context.json({ approvals: await store.listApprovals(authContext, statuses) });
+    const statuses = parseStatusCsv(context.req.query("status"), allowedApprovalStatuses);
+    if (!statuses.ok) {
+      return context.json(errorPayload("validation_error", "Approval status filter is invalid.", authContext.requestId, statuses.invalid), 400);
+    }
+    return context.json({ approvals: await store.listApprovals(authContext, statuses.values) });
   });
 
   app.patch("/api/v1/approvals/:id", async (context) => {
@@ -1248,6 +1314,15 @@ export function buildApp(options: AppOptions = {}): Hono {
       return authContext;
     }
     const payload = await context.req.json().catch(() => null) as Record<string, unknown> | null;
+    if (
+      payload?.ttlSeconds !== undefined &&
+      (!isIntegerAtLeast(payload.ttlSeconds, 1) || payload.ttlSeconds > maxWebMcpSessionTtlSeconds)
+    ) {
+      return context.json(
+        errorPayload("validation_error", `MCP session ttlSeconds must be an integer from 1 to ${maxWebMcpSessionTtlSeconds}.`, authContext.requestId),
+        400
+      );
+    }
     const session = await store.createAgentMcpSession(authContext, {
       runId: typeof payload?.runId === "string" ? payload.runId : null,
       ttlSeconds: typeof payload?.ttlSeconds === "number" ? payload.ttlSeconds : undefined,
@@ -1683,14 +1758,26 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (!payload) {
       return context.json(errorPayload("validation_error", "Request body is required.", authContext.requestId), 400);
     }
+    for (const key of ["fastModel", "smartModel", "orchestratorModel", "repairModel"]) {
+      if (payload[key] !== undefined && !stringValue(payload, key)) {
+        return context.json(errorPayload("validation_error", "Model identifiers cannot be blank.", authContext.requestId), 400);
+      }
+    }
+    if (payload.maxToolCalls !== undefined && !isIntegerAtLeast(payload.maxToolCalls, 0)) {
+      return context.json(errorPayload("validation_error", "maxToolCalls must be a non-negative integer.", authContext.requestId), 400);
+    }
+    if (payload.repairAttemptLimit !== undefined && !isIntegerAtLeast(payload.repairAttemptLimit, 0)) {
+      return context.json(errorPayload("validation_error", "repairAttemptLimit must be a non-negative integer.", authContext.requestId), 400);
+    }
+    if (payload.maxRuntimeSec !== undefined && !isIntegerAtLeast(payload.maxRuntimeSec, 1)) {
+      return context.json(errorPayload("validation_error", "maxRuntimeSec must be a positive integer.", authContext.requestId), 400);
+    }
     const current = await store.getAiConfig();
     return context.json(await store.updateAiConfig(authContext, {
-      fastModel: typeof payload.fastModel === "string" ? payload.fastModel : current.fastModel,
-      smartModel: typeof payload.smartModel === "string" ? payload.smartModel : current.smartModel,
-      orchestratorModel: typeof payload.orchestratorModel === "string"
-        ? payload.orchestratorModel
-        : current.orchestratorModel,
-      repairModel: typeof payload.repairModel === "string" ? payload.repairModel : current.repairModel,
+      fastModel: stringValue(payload, "fastModel") ?? current.fastModel,
+      smartModel: stringValue(payload, "smartModel") ?? current.smartModel,
+      orchestratorModel: stringValue(payload, "orchestratorModel") ?? current.orchestratorModel,
+      repairModel: stringValue(payload, "repairModel") ?? current.repairModel,
       maxToolCalls: typeof payload.maxToolCalls === "number" ? payload.maxToolCalls : current.maxToolCalls,
       maxRuntimeSec: typeof payload.maxRuntimeSec === "number" ? payload.maxRuntimeSec : current.maxRuntimeSec,
       repairAttemptLimit: typeof payload.repairAttemptLimit === "number"
