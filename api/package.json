@@ -14,7 +14,7 @@
     "rag-worker:start": "node dist/ragWorker.js",
     "seed:live-config": "tsx src/ops/seedLiveConfig.ts",
     "start": "node dist/main.js",
-    "test": "vitest run",
+    "test": "vitest run --pool=forks",
     "worker": "tsx watch src/worker.ts",
     "worker:start": "node dist/worker.js"
   },

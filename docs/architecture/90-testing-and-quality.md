@@ -19,6 +19,10 @@ Targeted commands:
 ./web/build.sh
 ```
 
+The API test script uses Vitest's fork pool so full-suite validation exits
+cleanly in environments where the default worker-thread pool can hang during
+teardown after worker and connector coverage.
+
 ## Baseline Coverage
 
 Current tests cover:
