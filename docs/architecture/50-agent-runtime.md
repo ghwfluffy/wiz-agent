@@ -359,9 +359,11 @@ app action id when those records exist.
 Scheduled worker outcomes write a separate decision entry after
 `scheduled_task.outcome` or `scheduled_task.failed` is recorded. This lets the
 owner ask why a newsletter check stayed quiet, why a three-hour wake acted or
-observed, or why a self-review/memory-review task failed. These entries are
-derived from persisted task, event, run, and tool state; the runtime does not
-call the model again solely to create ledger prose.
+observed, or why a self-review/memory-review task failed. Stale claimed tasks
+that outlive the worker grace window are failed through the same event,
+outcome-memory, and decision-ledger path instead of being silently retried.
+These entries are derived from persisted task, event, run, and tool state; the
+runtime does not call the model again solely to create ledger prose.
 
 Owner inbound SMS/MMS/email handling uses the same runtime boundary. After
 sender policy classifies a message as `owner`, host code creates or reuses a
@@ -511,7 +513,10 @@ Trusted newsletter and trusted third-party messages may be ingested into
 long-term knowledge, but they must not directly trigger replies, goal updates,
 or cross-app actions.
 
-The worker maintains recurring agent wake tasks. A newsletter interest check
+The worker reconciles every signed-in user when a model client is configured so
+recurring scheduler tasks are created even before that user has due work,
+outbound delivery, or an enabled inbox connector. The worker maintains
+recurring agent wake tasks. A newsletter interest check
 reviews ingested newsletter knowledge, newsletter preferences, communication
 preferences, recent owner response timing, pending approvals, and recent bot
 activity evidence before deciding whether now is a good time to mention one or
@@ -534,6 +539,9 @@ rationale is stored under `/assistant/memory-review/YYYY-MM.md`.
 The next recurring wake is created in a `finally` path, so failed wake runs
 still schedule the next roughly-three-hour review. Newsletter interest,
 self-review, and memory-review tasks use the same failure-rescheduling pattern.
+If a worker process exits after claiming a recurring task but before the
+`finally` path runs, the next tick marks the stale claim failed after a grace
+window and schedules the next recurrence without rerunning the old claim.
 
 ## Task Outcome Memory
 

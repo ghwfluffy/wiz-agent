@@ -87,6 +87,10 @@ Current tests cover:
   enqueueing.
 - recurring newsletter interest check and three-hour autonomous wake task
   scheduling with durable schedule rationale.
+- worker reconciliation for signed-in users without preexisting due work, stale
+  claimed task failure with recurrence rescheduling, stale sending outbox
+  failure without delivery retry, stale running approval execution failure, and
+  expired approval cancellation of linked outbox records.
 - scheduled memory quality review task scheduling, bounded prompt context from
   recent memory/list/outcome/self-review notes, monthly review-note writes
   through the controlled tool path, no owner messages from review alone, and

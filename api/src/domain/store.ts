@@ -2621,40 +2621,11 @@ export function createPostgresStore(pool: Pool): AgentStore {
       return Number(result.rows[0]?.count ?? 0);
     },
 
-    async listUsersWithWork(statuses = ["pending", "approved"], now = new Date()) {
+    async listUsersWithWork(_statuses = ["pending", "approved"], _now = new Date()) {
       const result = await pool.query(
-        `SELECT DISTINCT u.*
-         FROM users u
-         WHERE EXISTS (
-           SELECT 1
-           FROM outbound_messages om
-           WHERE om.user_id = u.id
-             AND om.status = ANY($1::text[])
-         )
-         OR EXISTS (
-           SELECT 1
-           FROM tasks t
-           WHERE t.user_id = u.id
-             AND t.status = 'pending'
-             AND (t.due_at IS NULL OR t.due_at <= $2)
-         )
-         OR EXISTS (
-           SELECT 1
-           FROM approvals a
-           WHERE a.user_id = u.id
-             AND a.status = 'approved'
-             AND a.action_type = 'cross_app_write_action'
-             AND a.execution_status = 'pending'
-         )
-         OR EXISTS (
-           SELECT 1
-           FROM connectors c
-           WHERE c.user_id = u.id
-             AND c.kind = 'imap'
-             AND c.status = 'enabled'
-         )
-         ORDER BY u.email ASC`,
-        [statuses, now.toISOString()]
+        `SELECT *
+         FROM users
+         ORDER BY email ASC`
       );
       return result.rows.map(userFromRow);
     },
@@ -4106,36 +4077,8 @@ export function createMemoryStore(): AgentStore {
         )
         .length;
     },
-    async listUsersWithWork(statuses = ["pending", "approved"], now = new Date()) {
-      const userIds = new Set<string>();
-      for (const message of outboundMessages.values()) {
-        if (statuses.includes(message.status)) {
-          userIds.add(message.userId);
-        }
-      }
-      for (const task of tasks.values()) {
-        const isDue = task.dueAt === null || Date.parse(task.dueAt) <= now.getTime();
-        if (task.status === "pending" && isDue) {
-          userIds.add(task.userId);
-        }
-      }
-      for (const approval of approvals.values()) {
-        if (
-          approval.status === "approved" &&
-          approval.actionType === "cross_app_write_action" &&
-          approval.executionStatus === "pending"
-        ) {
-          userIds.add(approval.userId);
-        }
-      }
-      for (const connector of connectors.values()) {
-        if (connector.kind === "imap" && connector.status === "enabled") {
-          userIds.add(connector.userId);
-        }
-      }
-      return [...userIds]
-        .map((userId) => users.get(userId))
-        .filter((user): user is AuthenticatedUser => Boolean(user))
+    async listUsersWithWork(_statuses = ["pending", "approved"], _now = new Date()) {
+      return [...users.values()]
         .sort((a, b) => a.email.localeCompare(b.email));
     },
     async updateOutboundMessageStatus(context, messageId, status, failureMessage = null) {

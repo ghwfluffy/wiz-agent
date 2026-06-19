@@ -352,6 +352,10 @@ the integration gateway with a server-minted scoped token. Integration responses
 are redacted before they are written to approval execution results or audit
 details. Automatic retries are not performed; a failed execution stays visible
 on the approval record until a future explicit retry workflow is added.
+If a worker dies while an approval execution is `running`, a later worker tick
+marks the stale execution `failed` with `approval_execution_expired` after a
+grace window. It does not retry because the target app may already have applied
+the write before the local status update was lost.
 
 The operations UI Overview lists only active outbound records that need
 attention or delivery tracking: `requires_approval`, `pending`, `approved`, and
@@ -360,15 +364,21 @@ messages in a paged table, including delivery failure messages. Failed records
 are not shown as actionable approvals; a future retry workflow should make retry
 state explicit rather than reusing the approval button.
 
-The worker enforces outbound pacing. It discovers users with due tasks or
-deliverable outbound messages, then runs scheduler work with a global outbound
-batch limit defaulting to one message per 20 second tick. The lower-level queue
-processor also defaults to one message per call so tests, manual scripts, and
-future workers do not accidentally send a large batch.
+The worker enforces outbound pacing. It reconciles signed-in users, then runs
+scheduler work with a global outbound batch limit defaulting to one message per
+20 second tick. The lower-level queue processor also defaults to one message
+per call so tests, manual scripts, and future workers do not accidentally send
+a large batch.
 `AGENT_OUTBOUND_MESSAGES_PER_WORKER_TICK` controls the host-owned tick cap.
 Owner-visible model proposals are capped per user per rolling day before
 approvals or outbox records are created, so a bad loop cannot fill the approval
 queue or abuse SMTP/SMS/MMS gateways.
+If an outbox record stays `sending` past the worker grace window, the next tick
+marks it `failed` with a delivery-attempt-expired reason instead of sending it
+again. This avoids duplicate owner messages when SMTP accepted the message but
+the worker died before recording `sent`. Expired pending approvals are marked
+`expired`; linked `requires_approval` outbox records are cancelled so they
+cannot be delivered later.
 
 Sender trust is operator-managed. The API and UI can list sender
 classifications, set a sender to `owner`, `newsletter`, `trusted`, `blocked`, or

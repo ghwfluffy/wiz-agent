@@ -73,6 +73,10 @@ export async function workerTick(options: {
   outboundAttempted: number;
   outboundSent: number;
   outboundFailed: number;
+  recoveredTasks: number;
+  expiredApprovals: number;
+  recoveredOutbound: number;
+  recoveredApprovalExecutions: number;
   inboundAttempted: number;
   inboundRecorded: number;
   inboundFailed: number;
@@ -88,6 +92,10 @@ export async function workerTick(options: {
     outboundAttempted: 0,
     outboundSent: 0,
     outboundFailed: 0,
+    recoveredTasks: 0,
+    expiredApprovals: 0,
+    recoveredOutbound: 0,
+    recoveredApprovalExecutions: 0,
     inboundAttempted: 0,
     inboundRecorded: 0,
     inboundFailed: 0
@@ -115,6 +123,10 @@ export async function workerTick(options: {
     totals.outboundAttempted += result.outboundAttempted;
     totals.outboundSent += result.outboundSent;
     totals.outboundFailed += result.outboundFailed;
+    totals.recoveredTasks += result.recoveredTasks;
+    totals.expiredApprovals += result.expiredApprovals;
+    totals.recoveredOutbound += result.recoveredOutbound;
+    totals.recoveredApprovalExecutions += result.recoveredApprovalExecutions;
 
     try {
       const inbound = await withTimeout((options.imapProcessor ?? processImapInbox)({

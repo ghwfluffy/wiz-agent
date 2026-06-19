@@ -131,6 +131,241 @@ describe("worker loop", () => {
     expect(tasks.filter((task) => task.status === "pending" && task.title.startsWith("Due task"))).toHaveLength(1);
   });
 
+  it("reconciles recurring tasks for signed-in users even when they have no due work yet", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-idle-reconcile-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-idle-reconcile-test",
+      session
+    };
+
+    const result = await workerTick({
+      store,
+      settings,
+      modelClient: new MockModelClient(),
+      imapProcessor: async () => ({ attempted: 0, recorded: 0, failed: 0 }),
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+
+    expect(result.users).toBe(1);
+    await expect(store.listTasks(context)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ title: "Newsletter interest check", status: "pending" }),
+      expect.objectContaining({ title: "Autonomous agent wake review", status: "pending" }),
+      expect.objectContaining({ title: "Assistant self-review", status: "pending" }),
+      expect.objectContaining({ title: "Memory quality review", status: "pending" })
+    ]));
+  });
+
+  it("fails stale claimed recurring tasks visibly and schedules the next recurrence", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-stale-task-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-stale-task-test",
+      session
+    };
+    const task = await store.createTask(context, {
+      title: "Autonomous agent wake review",
+      prompt: "Wake and reassess work.",
+      dueAt: new Date().toISOString(),
+      priority: 5,
+      scheduleRationale: "Test stale claim recovery.",
+      recurrencePolicy: "roughly every 3 hours"
+    });
+    await store.claimDueTasks(context, 1, new Date(Date.now() + 1000));
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient(),
+      now: new Date(Date.now() + 31 * 60_000)
+    });
+
+    expect(result).toMatchObject({ recoveredTasks: 1, claimedTasks: 0 });
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({
+      status: "failed",
+      blockedReason: "Worker claim expired before completion."
+    });
+    await expect(store.listTaskEvents(context, task.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventType: "scheduled_task.failed",
+        details: expect.objectContaining({
+          failure_message: "Worker claim expired before completion."
+        })
+      })
+    ]));
+    expect((await store.listTasks(context)).filter((entry) =>
+      entry.title === "Autonomous agent wake review" &&
+      entry.status === "pending" &&
+      entry.id !== task.id
+    )).toHaveLength(1);
+    await expect(store.getMarkdownDocument(context, `/tasks/outcomes/${new Date(Date.now() + 31 * 60_000).toISOString().slice(0, 7)}.md`))
+      .resolves.toMatchObject({
+        markdown: expect.stringContaining(`<!-- task-outcome:${task.id}:failed -->`)
+      });
+    await expect(store.listAudit(context, false)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "worker.recovered_task_claim", entityId: task.id })
+    ]));
+  });
+
+  it("marks stale sending outbox records failed without retrying delivery", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OUTBOUND_ENABLED: "true"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-stale-outbox-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-stale-outbox-test",
+      session
+    };
+    const message = await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "approved",
+      toAddr: "owner-sms@example.test",
+      bodyText: "Possibly already attempted."
+    });
+    await store.updateOutboundMessageStatus(context, message.id, "sending");
+    const sendMail = vi.fn();
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      mailTransport: { sendMail },
+      now: new Date(Date.now() + 31 * 60_000)
+    });
+
+    expect(result).toMatchObject({ recoveredOutbound: 1, outboundAttempted: 0 });
+    expect(sendMail).not.toHaveBeenCalled();
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        id: message.id,
+        status: "failed",
+        failureMessage: "Outbound delivery attempt expired before completion."
+      })
+    ]);
+  });
+
+  it("marks stale running cross-app approvals failed without executing them again", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "oauth:central-oauth:owner-subject",
+      GOALS_API_BASE_URL: "https://goals.example.test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-stale-approval-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-stale-approval-test",
+      session
+    };
+    const approval = await store.createApproval(context, {
+      actionType: "cross_app_write_action",
+      proposedPayload: {
+        action_id: "goals.create_goal",
+        body: { title: "Already attempted" }
+      },
+      riskLevel: "high",
+      summary: "Create goal",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.updateApprovalStatus(context, approval.id, "approved", context.userId);
+    await store.claimApprovalExecution(context, approval.id);
+    const fetchMock = vi.fn();
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      fetchImpl: fetchMock,
+      now: new Date(Date.now() + 31 * 60_000)
+    });
+
+    expect(result).toMatchObject({ recoveredApprovalExecutions: 1, approvalExecutionAttempted: 0 });
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(store.getApproval(context, approval.id)).resolves.toMatchObject({
+      executionStatus: "failed",
+      executionError: "approval_execution_expired"
+    });
+  });
+
+  it("expires stale pending approvals and cancels linked approval outbox records", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-expired-approval-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-expired-approval-test",
+      session
+    };
+    const approval = await store.createApproval(context, {
+      actionType: "send_outbound_message",
+      proposedPayload: {
+        channel: "sms",
+        to_addr: "owner-sms@example.test",
+        body_text: "Expired approval message."
+      },
+      riskLevel: "high",
+      summary: "Send expired message",
+      expiresAt: new Date(Date.now() - 1000).toISOString()
+    });
+    const outbound = await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "requires_approval",
+      toAddr: "owner-sms@example.test",
+      bodyText: "Expired approval message.",
+      approvalId: approval.id
+    });
+    await store.updateApprovalPayload(context, approval.id, {
+      ...approval.proposedPayload,
+      outbound_message_id: outbound.id
+    });
+
+    const result = await daemonOnce({
+      store,
+      context,
+      settings,
+      now: new Date()
+    });
+
+    expect(result.expiredApprovals).toBe(1);
+    await expect(store.getApproval(context, approval.id)).resolves.toMatchObject({ status: "expired" });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({ id: outbound.id, status: "cancelled" })
+    ]);
+    await expect(store.listAudit(context, false)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ action: "worker.expired_approval", entityId: approval.id })
+    ]));
+  });
+
   it("delivers due owner-scheduled messages without another model decision or approval", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({

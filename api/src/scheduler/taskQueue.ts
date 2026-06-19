@@ -19,6 +19,11 @@ import {
   queueOwnerVisibleMessage
 } from "../tools/ownerMessaging.js";
 
+const WORKER_STUCK_STATE_GRACE_MS = 30 * 60 * 1000;
+const STALE_TASK_FAILURE_MESSAGE = "Worker claim expired before completion.";
+const STALE_OUTBOUND_FAILURE_MESSAGE = "Outbound delivery attempt expired before completion.";
+const STALE_APPROVAL_EXECUTION_ERROR = "approval_execution_expired";
+
 export async function claimDueTasks(options: {
   store: AgentStore;
   context: RequestContext;
@@ -26,6 +31,149 @@ export async function claimDueTasks(options: {
   now?: Date;
 }): Promise<TaskRecord[]> {
   return options.store.claimDueTasks(options.context, options.limit ?? 10, options.now ?? new Date());
+}
+
+function payloadString(payload: Record<string, unknown>, key: string): string | undefined {
+  const value = payload[key];
+  return typeof value === "string" && value.trim() ? value : undefined;
+}
+
+function isBefore(value: string | null | undefined, cutoff: Date): boolean {
+  if (!value) {
+    return false;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && parsed < cutoff.getTime();
+}
+
+export async function recoverStuckWorkerState(options: {
+  store: AgentStore;
+  context: RequestContext;
+  now?: Date;
+  staleAfterMs?: number;
+}): Promise<{
+  recoveredTasks: number;
+  expiredApprovals: number;
+  recoveredOutbound: number;
+  recoveredApprovalExecutions: number;
+}> {
+  const now = options.now ?? new Date();
+  const staleBefore = new Date(now.getTime() - (options.staleAfterMs ?? WORKER_STUCK_STATE_GRACE_MS));
+  const totals = {
+    recoveredTasks: 0,
+    expiredApprovals: 0,
+    recoveredOutbound: 0,
+    recoveredApprovalExecutions: 0
+  };
+
+  const claimedTasks = (await options.store.listTasks(options.context))
+    .filter((task) => task.status === "claimed" && isBefore(task.updatedAt, staleBefore));
+  for (const task of claimedTasks) {
+    const failed = await options.store.updateTask(options.context, task.id, {
+      status: "failed",
+      lastAgentReviewAt: now.toISOString(),
+      blockedReason: STALE_TASK_FAILURE_MESSAGE
+    });
+    if (!failed) {
+      continue;
+    }
+    await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.failed", {
+      failure_message: STALE_TASK_FAILURE_MESSAGE,
+      stale_before: staleBefore.toISOString(),
+      summary: "Scheduled task claim expired before completion; recurrence will still be scheduled when applicable."
+    });
+    await recordScheduledTaskDecision({
+      store: options.store,
+      context: options.context,
+      taskId: task.id,
+      outcome: "failed",
+      failureMessage: STALE_TASK_FAILURE_MESSAGE,
+      now
+    });
+    await recordTaskOutcomeMemory({
+      store: options.store,
+      context: options.context,
+      taskId: task.id,
+      now
+    });
+    if (isAutonomousRecurringTask(task)) {
+      await scheduleNextAutonomousTask({
+        store: options.store,
+        context: options.context,
+        task,
+        now
+      });
+    }
+    await options.store.recordAudit(options.context, "worker.recovered_task_claim", "task", task.id, {
+      stale_before: staleBefore.toISOString(),
+      failure_message: STALE_TASK_FAILURE_MESSAGE
+    });
+    totals.recoveredTasks += 1;
+  }
+
+  const pendingApprovals = await options.store.listApprovals(options.context, ["pending"]);
+  for (const approval of pendingApprovals) {
+    const expiresAt = Date.parse(approval.expiresAt);
+    if (!Number.isFinite(expiresAt) || expiresAt > now.getTime()) {
+      continue;
+    }
+    const expired = await options.store.updateApprovalStatus(options.context, approval.id, "expired", options.context.userId);
+    if (!expired) {
+      continue;
+    }
+    if (approval.actionType === "send_outbound_message") {
+      const outboundId = payloadString(approval.proposedPayload, "outbound_message_id");
+      if (outboundId) {
+        await options.store.updateOutboundMessageStatus(options.context, outboundId, "cancelled");
+      }
+    }
+    await options.store.recordAudit(options.context, "worker.expired_approval", "approval", approval.id, {
+      action_type: approval.actionType,
+      expired_at: approval.expiresAt
+    });
+    totals.expiredApprovals += 1;
+  }
+
+  const sendingMessages = (await options.store.listOutboundMessages(options.context, ["sending"]))
+    .filter((message) => isBefore(message.updatedAt, staleBefore));
+  for (const message of sendingMessages) {
+    const failed = await options.store.updateOutboundMessageStatus(
+      options.context,
+      message.id,
+      "failed",
+      STALE_OUTBOUND_FAILURE_MESSAGE
+    );
+    if (failed) {
+      await options.store.recordAudit(options.context, "worker.recovered_outbound_send", "outbound_message", message.id, {
+        stale_before: staleBefore.toISOString(),
+        failure_message: STALE_OUTBOUND_FAILURE_MESSAGE
+      });
+      totals.recoveredOutbound += 1;
+    }
+  }
+
+  const runningApprovals = (await options.store.listApprovals(options.context, ["approved"]))
+    .filter((approval) =>
+      approval.actionType === "cross_app_write_action" &&
+      approval.executionStatus === "running" &&
+      isBefore(approval.updatedAt, staleBefore)
+    );
+  for (const approval of runningApprovals) {
+    const failed = await options.store.failApprovalExecution(
+      options.context,
+      approval.id,
+      STALE_APPROVAL_EXECUTION_ERROR
+    );
+    if (failed) {
+      await options.store.recordAudit(options.context, "worker.recovered_approval_execution", "approval", approval.id, {
+        stale_before: staleBefore.toISOString(),
+        error: STALE_APPROVAL_EXECUTION_ERROR
+      });
+      totals.recoveredApprovalExecutions += 1;
+    }
+  }
+
+  return totals;
 }
 
 export async function daemonOnce(options: {
@@ -46,8 +194,17 @@ export async function daemonOnce(options: {
   outboundAttempted: number;
   outboundSent: number;
   outboundFailed: number;
+  recoveredTasks: number;
+  expiredApprovals: number;
+  recoveredOutbound: number;
+  recoveredApprovalExecutions: number;
 }> {
   const modelClient = options.modelClient;
+  const recovery = await recoverStuckWorkerState({
+    store: options.store,
+    context: options.context,
+    now: options.now
+  });
   if (modelClient) {
     await ensureAutonomousTasks({
       store: options.store,
@@ -237,6 +394,10 @@ export async function daemonOnce(options: {
     approvalExecutionFailed: approvalExecution.failed,
     outboundAttempted: outbound.attempted,
     outboundSent: outbound.sent,
-    outboundFailed: outbound.failed
+    outboundFailed: outbound.failed,
+    recoveredTasks: recovery.recoveredTasks,
+    expiredApprovals: recovery.expiredApprovals,
+    recoveredOutbound: recovery.recoveredOutbound,
+    recoveredApprovalExecutions: recovery.recoveredApprovalExecutions
   };
 }
