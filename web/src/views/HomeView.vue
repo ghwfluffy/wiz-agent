@@ -211,8 +211,8 @@ const configForm = reactive<AiConfig>({
   smartModel: "",
   orchestratorModel: "",
   repairModel: "",
-  maxToolCalls: 10,
-  maxRuntimeSec: 120,
+  maxToolCalls: 50,
+  maxRuntimeSec: 500,
   repairAttemptLimit: 1
 });
 let oauthRedirectStarted = false;
@@ -2978,11 +2978,11 @@ onUnmounted(() => {
             </div>
             <div class="cds--form-item">
               <label class="cds--label" for="max-tool-calls">Max tool calls</label>
-              <input id="max-tool-calls" v-model.number="configForm.maxToolCalls" class="cds--text-input" required type="number" min="1">
+              <input id="max-tool-calls" v-model.number="configForm.maxToolCalls" class="cds--text-input" required type="number" min="1" max="50">
             </div>
             <div class="cds--form-item">
               <label class="cds--label" for="max-runtime-sec">Max runtime sec</label>
-              <input id="max-runtime-sec" v-model.number="configForm.maxRuntimeSec" class="cds--text-input" required type="number" min="1">
+              <input id="max-runtime-sec" v-model.number="configForm.maxRuntimeSec" class="cds--text-input" required type="number" min="1" max="500">
             </div>
             <div class="cds--form-item">
               <label class="cds--label" for="repair-attempts">Repair attempts</label>

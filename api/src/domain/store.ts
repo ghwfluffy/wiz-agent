@@ -6,7 +6,12 @@ import {
   type AuthenticatedUser,
   type Session
 } from "../auth/session.js";
-import type { Settings } from "../config/settings.js";
+import {
+  defaultAiConfig,
+  normalizePersistedAiConfig,
+  validateAiConfig,
+  type Settings
+} from "../config/settings.js";
 import {
   appendToSectionMarkdown,
   basenameForPath,
@@ -70,16 +75,6 @@ import type {
   ToolCallRecord
 } from "./types.js";
 import { qdrantCollectionForUser } from "../rag/qdrant.js";
-
-const DEFAULT_AI_CONFIG: AiConfig = {
-  fastModel: "gpt-5-mini",
-  smartModel: "gpt-5",
-  orchestratorModel: "gpt-5",
-  repairModel: "gpt-5-mini",
-  maxToolCalls: 10,
-  maxRuntimeSec: 120,
-  repairAttemptLimit: 1
-};
 
 const provenanceSourceKinds = new Set<MemoryProvenanceSourceKind>([
   "owner_message",
@@ -970,7 +965,8 @@ async function writeMarkdownDocumentPostgres(
   }
 }
 
-export function createPostgresStore(pool: Pool): AgentStore {
+export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): AgentStore {
+  const aiConfigDefaults = defaultAiConfig(settings);
   return {
     async createDevelopmentSession(settings: Settings, requestId: string): Promise<Session> {
       const session = createSessionFromSettings(settings);
@@ -1464,13 +1460,14 @@ export function createPostgresStore(pool: Pool): AgentStore {
 
     async getAiConfig(): Promise<AiConfig> {
       const result = await pool.query("SELECT config_json FROM admin_ai_config WHERE id = 'default'");
-      return {
-        ...DEFAULT_AI_CONFIG,
-        ...((result.rows[0]?.config_json as Partial<AiConfig> | undefined) ?? {})
-      };
+      return normalizePersistedAiConfig(result.rows[0]?.config_json, aiConfigDefaults);
     },
 
     async updateAiConfig(context: RequestContext, config: AiConfig): Promise<AiConfig> {
+      const validation = validateAiConfig(config);
+      if (!validation.ok) {
+        throw new Error(validation.message);
+      }
       await pool.query(
         `INSERT INTO admin_ai_config (id, config_json, updated_by)
          VALUES ('default', $1, $2)
@@ -1478,10 +1475,10 @@ export function createPostgresStore(pool: Pool): AgentStore {
            SET config_json = EXCLUDED.config_json,
                updated_by = EXCLUDED.updated_by,
                updated_at = now()`,
-        [config, context.userId]
+        [validation.config, context.userId]
       );
       await recordAudit(pool, context, "admin.ai_config.update", "admin_ai_config", "default");
-      return config;
+      return validation.config;
     },
 
     async listMemoryDocuments(context) {
@@ -2937,7 +2934,7 @@ export function createPostgresStore(pool: Pool): AgentStore {
   };
 }
 
-export function createMemoryStore(): AgentStore {
+export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
   const sessions = new Map<string, Session>();
   const oauthStates = new Map<string, { codeVerifier: string; nextPath: string; expiresAt: string }>();
   const users = new Map<string, AuthenticatedUser>();
@@ -2961,7 +2958,7 @@ export function createMemoryStore(): AgentStore {
   const outboundMessages = new Map<string, OutboundMessageRecord>();
   const approvals = new Map<string, ApprovalRecord>();
   const audit: AuditRecord[] = [];
-  let aiConfig = DEFAULT_AI_CONFIG;
+  let aiConfig = defaultAiConfig(settings);
 
   function pushAudit(
     context: Pick<RequestContext, "userId" | "actorType" | "requestId">,
@@ -3392,12 +3389,16 @@ export function createMemoryStore(): AgentStore {
       pushAudit(context, action, entityType, entityId, details);
     },
     async getAiConfig(): Promise<AiConfig> {
-      return aiConfig;
+      return { ...aiConfig };
     },
     async updateAiConfig(context: RequestContext, config: AiConfig): Promise<AiConfig> {
-      aiConfig = config;
+      const validation = validateAiConfig(config);
+      if (!validation.ok) {
+        throw new Error(validation.message);
+      }
+      aiConfig = validation.config;
       pushAudit(context, "admin.ai_config.update", "admin_ai_config", "default");
-      return aiConfig;
+      return { ...aiConfig };
     },
     async listMemoryDocuments(context) {
       return [...memoryDocuments.values()]

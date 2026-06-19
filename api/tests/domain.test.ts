@@ -360,8 +360,81 @@ describe("domain and user ownership APIs", () => {
     });
     await expect(store.getAiConfig()).resolves.toMatchObject({
       fastModel: "gpt-5-mini",
-      maxToolCalls: 10
+      maxToolCalls: 50,
+      maxRuntimeSec: 500
     });
+  });
+
+  it("rejects contradictory admin AI backend config values", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_IS_ADMIN: "true"
+    });
+    const app = buildApp({ settings, store });
+    const session = await store.createDevelopmentSession(settings, "admin-config-contradiction-login");
+
+    const response = await app.request("/api/v1/admin/ai-config", {
+      method: "PUT",
+      headers: {
+        cookie: cookieHeader(session.id),
+        "content-type": "application/json",
+        "x-request-id": "admin-config-contradiction"
+      },
+      body: JSON.stringify({
+        fastModel: "gpt-5-mini",
+        maxToolCalls: 1,
+        repairAttemptLimit: 2
+      })
+    });
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: {
+        code: "validation_error",
+        request_id: "admin-config-contradiction"
+      }
+    });
+    await expect(store.getAiConfig()).resolves.toMatchObject({
+      fastModel: "gpt-5-mini",
+      maxToolCalls: 50,
+      repairAttemptLimit: 1
+    });
+  });
+
+  it("seeds and validates AI backend config defaults at the store boundary", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OPENAI_MODEL_FAST: "test-fast",
+      AGENT_MAX_TOOL_CALLS: "25",
+      AGENT_MAX_RUNTIME_SEC: "300"
+    });
+    const store = createMemoryStore(settings);
+    const session = await store.createDevelopmentSession(settings, "store-ai-config-login");
+    const authContext = {
+      userId: session.user.id,
+      actorType: "admin" as const,
+      permissions: ["user", "admin"],
+      requestId: "store-ai-config",
+      session
+    };
+
+    await expect(store.getAiConfig()).resolves.toMatchObject({
+      fastModel: "test-fast",
+      maxToolCalls: 25,
+      maxRuntimeSec: 300
+    });
+    await expect(store.updateAiConfig(authContext, {
+      fastModel: "test-fast",
+      smartModel: "gpt-5",
+      orchestratorModel: "gpt-5",
+      repairModel: "gpt-5-mini",
+      maxToolCalls: 0,
+      maxRuntimeSec: 300,
+      repairAttemptLimit: 1
+    })).rejects.toThrow(/maxToolCalls/);
   });
 
   it("does not emit schedule context changes for no-op task updates", async () => {
@@ -956,8 +1029,8 @@ describe("domain and user ownership APIs", () => {
         maxAgentRunsPerUserPerBurstWindow: 60,
         agentRunBurstWindowSeconds: 600,
         maxAutonomousRunsPerWorkerTick: 10,
-        maxToolCallsPerRun: 10,
-        maxRuntimeSecPerRun: 120,
+        maxToolCallsPerRun: 50,
+        maxRuntimeSecPerRun: 500,
         maxOwnerVisibleOutboundMessagesPerUserPerDay: 10,
         outboundMessagesPerWorkerTick: 1,
         maxUntrustedReviewNotificationsPerSenderPerDay: 5,

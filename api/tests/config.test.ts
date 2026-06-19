@@ -12,6 +12,9 @@ describe("settings", () => {
     expect(settings.authBaseUrl).toBe("/auth");
     expect(settings.appBasePath).toBe("");
     expect(settings.devUserEmail).toBe("dev@example.test");
+    expect(settings.agentOwnerEmails).toEqual(["dev@example.test"]);
+    expect(settings.agentMaxToolCalls).toBe(50);
+    expect(settings.agentMaxRuntimeSec).toBe(500);
     expect(settings.agentMaxRunsPerUserPerBurstWindow).toBe(60);
     expect(settings.agentRunBurstWindowSeconds).toBe(600);
     expect(settings.agentMaxOwnerVisibleOutboundMessagesPerUserPerDay).toBe(10);
@@ -24,6 +27,8 @@ describe("settings", () => {
       AGENT_MAX_RUNS_PER_USER_PER_BURST_WINDOW: "7",
       AGENT_RUN_BURST_WINDOW_SECONDS: "120",
       AGENT_MAX_AUTONOMOUS_RUNS_PER_WORKER_TICK: "3",
+      AGENT_MAX_TOOL_CALLS: "12",
+      AGENT_MAX_RUNTIME_SEC: "240",
       AGENT_MAX_OWNER_VISIBLE_OUTBOUND_MESSAGES_PER_USER_PER_DAY: "4",
       AGENT_OUTBOUND_MESSAGES_PER_WORKER_TICK: "2",
       AGENT_MAX_NEWSLETTER_DOCUMENTS_PER_INTEREST_CHECK: "11",
@@ -33,6 +38,8 @@ describe("settings", () => {
     expect(settings.agentMaxRunsPerUserPerBurstWindow).toBe(7);
     expect(settings.agentRunBurstWindowSeconds).toBe(120);
     expect(settings.agentMaxAutonomousRunsPerWorkerTick).toBe(3);
+    expect(settings.agentMaxToolCalls).toBe(12);
+    expect(settings.agentMaxRuntimeSec).toBe(240);
     expect(settings.agentMaxOwnerVisibleOutboundMessagesPerUserPerDay).toBe(4);
     expect(settings.agentOutboundMessagesPerWorkerTick).toBe(2);
     expect(settings.agentMaxNewsletterDocumentsPerInterestCheck).toBe(11);
@@ -53,6 +60,77 @@ describe("settings", () => {
     expect(normalizeBasePath("/")).toBe("");
     expect(normalizeBasePath("agent")).toBe("/agent");
     expect(normalizeBasePath("/agent/")).toBe("/agent");
+  });
+
+  it("rejects unsafe base paths", () => {
+    expect(() => normalizeBasePath("https://example.test/agent")).toThrow(/Base paths/);
+    expect(() => normalizeBasePath("/../agent")).toThrow(/dot segments/);
+    expect(() => normalizeBasePath("/agent?debug=true")).toThrow(/Base paths/);
+  });
+
+  it("rejects malformed env booleans, lists, paths, urls, and numeric budgets", () => {
+    expect(() => loadSettings({ AGENT_OUTBOUND_ENABLED: "sometimes" })).toThrow();
+    expect(() => loadSettings({ POSTGRES_PORT: "70000" })).toThrow();
+    expect(() => loadSettings({ AGENT_MAX_TOOL_CALLS: "0" })).toThrow();
+    expect(() => loadSettings({ AGENT_MAX_TOOL_CALLS: "1", AGENT_REPAIR_ATTEMPT_LIMIT: "2" })).toThrow(/REPAIR/);
+    expect(() => loadSettings({ AGENT_OWNER_EMAILS: "not-an-email" })).toThrow();
+    expect(() => loadSettings({ PUBLIC_URL: "https://example.test/agent" })).toThrow();
+    expect(() => loadSettings({ SESSION_COOKIE_PATH: "/agent?debug=true" })).toThrow(/Base paths/);
+  });
+
+  it("fails closed for unsafe production auth and deployment settings", () => {
+    expect(() => loadSettings({
+      APP_ENV: "production",
+      AUTH_MODE: "standalone",
+      POSTGRES_PASSWORD: "not-the-development-default",
+      PUBLIC_URL: "https://agent.example.test",
+      OAUTH_SERVER_BASE_URL: "http://auth-api:8000",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-integration-secret"
+    })).toThrow(/AUTH_MODE/);
+
+    expect(() => loadSettings({
+      APP_ENV: "production",
+      AUTH_MODE: "oauth",
+      POSTGRES_PASSWORD: "not-the-development-default",
+      PUBLIC_URL: "http://localhost:18081",
+      OAUTH_SERVER_BASE_URL: "http://auth-api:8000",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-integration-secret"
+    })).toThrow(/PUBLIC_URL/);
+
+    expect(() => loadSettings({
+      APP_ENV: "production",
+      AUTH_MODE: "oauth",
+      APP_BASE_PATH: "/agent",
+      SESSION_COOKIE_PATH: "/",
+      POSTGRES_PASSWORD: "not-the-development-default",
+      PUBLIC_URL: "https://agent.example.test",
+      OAUTH_SERVER_BASE_URL: "http://auth-api:8000",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-integration-secret"
+    })).toThrow(/SESSION_COOKIE_PATH/);
+  });
+
+  it("fails closed for production app integrations without a signing secret", () => {
+    expect(() => loadSettings({
+      APP_ENV: "production",
+      AUTH_MODE: "oauth",
+      POSTGRES_PASSWORD: "not-the-development-default",
+      PUBLIC_URL: "https://agent.example.test",
+      OAUTH_SERVER_BASE_URL: "http://auth-api:8000",
+      GOALS_API_BASE_URL: "http://goals-api:8000"
+    })).toThrow(/AGENT_INTEGRATION_TOKEN_SECRET/);
+  });
+
+  it("does not bootstrap the development owner address in production", () => {
+    const settings = loadSettings({
+      APP_ENV: "production",
+      AUTH_MODE: "oauth",
+      POSTGRES_PASSWORD: "not-the-development-default",
+      PUBLIC_URL: "https://agent.example.test",
+      OAUTH_SERVER_BASE_URL: "http://auth-api:8000",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-integration-secret"
+    });
+
+    expect(settings.agentOwnerEmails).toEqual([]);
   });
 
   it("loads the OpenAI API key from a configured file", () => {

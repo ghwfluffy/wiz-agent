@@ -24,6 +24,13 @@ The current configuration sources are:
 Administrators can inspect and update `admin_ai_config` from the operations UI.
 The API keeps the admin route separate from normal user routes, so non-admin
 sessions cannot change model tier defaults.
+The built-in runtime defaults are intentionally capable rather than lockout
+or demo values: 50 tool calls per run, 500 runtime seconds per run, and one
+repair attempt. Admin updates must keep `maxToolCalls` between 1 and 50,
+`maxRuntimeSec` between 1 and 500, and `repairAttemptLimit` between 0 and 5
+without exceeding `maxToolCalls`. See [Settings And Config Bootstrap](./config/settings.md)
+for environment validation, production fail-closed checks, and persisted
+config normalization.
 
 The deterministic host chooses the tier before the model call. The first policy
 uses `fast` by default, `smart` for ambiguous/large/retry-prone work,

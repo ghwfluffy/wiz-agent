@@ -181,7 +181,7 @@ function logWorker(event: string, details: Record<string, unknown> = {}): void {
 export function startWorker(): ReturnType<typeof setInterval> {
   const settings = loadSettings();
   const pool = createPool(settings);
-  const store = createPostgresStore(pool);
+  const store = createPostgresStore(pool, settings);
   const modelClient = settings.agentOpenaiApiKey
     ? OpenAIModelClient.fromSettings(settings)
     : undefined;

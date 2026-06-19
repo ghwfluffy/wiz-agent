@@ -31,7 +31,7 @@ export async function ragWorkerTick(): Promise<{
   const settings = loadSettings();
   const pool = createPool(settings);
   try {
-    const store = createPostgresStore(pool);
+    const store = createPostgresStore(pool, settings);
     const qdrant = new HttpQdrantClient(settings);
     const embeddings = new OpenAIEmbeddingClient(settings);
     const [health, processed, pending] = await Promise.all([

@@ -410,14 +410,18 @@ describe("agent task execution", () => {
       smartModel: "gpt-5",
       orchestratorModel: "gpt-5",
       repairModel: "gpt-5-mini",
-      maxToolCalls: 0,
+      maxToolCalls: 1,
       maxRuntimeSec: 120,
       repairAttemptLimit: 1
     });
+    const guardedStore = {
+      ...store,
+      countToolCallsForRun: async () => 1
+    };
 
     const result = await runAgentTask({
       context,
-      store,
+      store: guardedStore,
       toolClient: new LocalToolClient(),
       modelClient: new MockModelClient({
         tools: [
@@ -449,7 +453,7 @@ describe("agent task execution", () => {
         result: expect.objectContaining({
           status: "guardrail_exceeded",
           reason: "maxToolCallsPerRun",
-          limit: 0
+          limit: 1
         })
       })
     ]);

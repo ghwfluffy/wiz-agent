@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../src/config/settings.js";
-import { createMemoryStore } from "../src/domain/store.js";
 import { buildApp } from "../src/http/app.js";
 
 describe("standalone auth", () => {
@@ -67,25 +66,14 @@ describe("standalone auth", () => {
     });
   });
 
-  it("disables the development endpoint in production even if standalone is configured", async () => {
-    const app = buildApp({
-      settings: loadSettings({
-        APP_ENV: "production",
-        AUTH_MODE: "standalone",
-        POSTGRES_PASSWORD: "not-the-development-default"
-      }),
-      store: createMemoryStore()
-    });
-
-    const response = await app.request("/api/v1/auth/dev-login", { method: "POST" });
-
-    expect(response.status).toBe(404);
-    await expect(response.json()).resolves.toEqual({
-      error: {
-        code: "not_found",
-        message: "Development sign-in is not available."
-      }
-    });
+  it("rejects production standalone auth at settings load", () => {
+    expect(() => loadSettings({
+      APP_ENV: "production",
+      AUTH_MODE: "standalone",
+      POSTGRES_PASSWORD: "not-the-development-default",
+      PUBLIC_URL: "https://agent.example.test",
+      OAUTH_SERVER_BASE_URL: "http://auth-api:8000"
+    })).toThrow(/AUTH_MODE/);
   });
 
   it("redirects OAuth mode login to the configured authorization endpoint", async () => {

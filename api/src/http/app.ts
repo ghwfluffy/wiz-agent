@@ -9,7 +9,7 @@ import {
   MAX_RUNTIME_GUARDRAIL
 } from "../agent/runtimeDeadline.js";
 import { runOwnerWebPromptAgent } from "../agent/inboundMessageAgent.js";
-import { loadSettings, type Settings } from "../config/settings.js";
+import { loadSettings, validateAiConfig, type Settings } from "../config/settings.js";
 import { clearSessionCookie, writeSessionCookie } from "../auth/session.js";
 import { testImapConnection } from "../connectors/imapPoller.js";
 import { createPool } from "../db/pool.js";
@@ -58,9 +58,9 @@ function errorPayload(code: string, message: string, requestId: string, fieldErr
 
 function createDefaultStore(settings: Settings): AgentStore {
   if (settings.appEnv === "test") {
-    return createMemoryStore();
+    return createMemoryStore(settings);
   }
-  return createPostgresStore(createPool(settings));
+  return createPostgresStore(createPool(settings), settings);
 }
 
 const allowedConnectorKinds = new Set<ConnectorKind>(["owner-contact", "imap", "smtp", "openai"]);
@@ -1810,32 +1810,20 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (!payload) {
       return context.json(errorPayload("validation_error", "Request body is required.", authContext.requestId), 400);
     }
-    for (const key of ["fastModel", "smartModel", "orchestratorModel", "repairModel"]) {
-      if (payload[key] !== undefined && !stringValue(payload, key)) {
-        return context.json(errorPayload("validation_error", "Model identifiers cannot be blank.", authContext.requestId), 400);
-      }
-    }
-    if (payload.maxToolCalls !== undefined && !isIntegerAtLeast(payload.maxToolCalls, 0)) {
-      return context.json(errorPayload("validation_error", "maxToolCalls must be a non-negative integer.", authContext.requestId), 400);
-    }
-    if (payload.repairAttemptLimit !== undefined && !isIntegerAtLeast(payload.repairAttemptLimit, 0)) {
-      return context.json(errorPayload("validation_error", "repairAttemptLimit must be a non-negative integer.", authContext.requestId), 400);
-    }
-    if (payload.maxRuntimeSec !== undefined && !isIntegerAtLeast(payload.maxRuntimeSec, 1)) {
-      return context.json(errorPayload("validation_error", "maxRuntimeSec must be a positive integer.", authContext.requestId), 400);
-    }
     const current = await store.getAiConfig();
-    return context.json(await store.updateAiConfig(authContext, {
-      fastModel: stringValue(payload, "fastModel") ?? current.fastModel,
-      smartModel: stringValue(payload, "smartModel") ?? current.smartModel,
-      orchestratorModel: stringValue(payload, "orchestratorModel") ?? current.orchestratorModel,
-      repairModel: stringValue(payload, "repairModel") ?? current.repairModel,
-      maxToolCalls: typeof payload.maxToolCalls === "number" ? payload.maxToolCalls : current.maxToolCalls,
-      maxRuntimeSec: typeof payload.maxRuntimeSec === "number" ? payload.maxRuntimeSec : current.maxRuntimeSec,
-      repairAttemptLimit: typeof payload.repairAttemptLimit === "number"
-        ? payload.repairAttemptLimit
-        : current.repairAttemptLimit
-    }));
+    const validation = validateAiConfig({
+      fastModel: payload.fastModel ?? current.fastModel,
+      smartModel: payload.smartModel ?? current.smartModel,
+      orchestratorModel: payload.orchestratorModel ?? current.orchestratorModel,
+      repairModel: payload.repairModel ?? current.repairModel,
+      maxToolCalls: payload.maxToolCalls ?? current.maxToolCalls,
+      maxRuntimeSec: payload.maxRuntimeSec ?? current.maxRuntimeSec,
+      repairAttemptLimit: payload.repairAttemptLimit ?? current.repairAttemptLimit
+    });
+    if (!validation.ok) {
+      return context.json(errorPayload("validation_error", validation.message, authContext.requestId), 400);
+    }
+    return context.json(await store.updateAiConfig(authContext, validation.config));
   });
 
   app.get("/api/v1/admin/jobs", async (context) => {

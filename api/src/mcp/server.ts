@@ -216,9 +216,9 @@ function numberRecordArg(value: unknown): Record<string, number> {
 
 function createDefaultStore(settings: Settings): AgentStore {
   if (settings.appEnv === "test") {
-    return createMemoryStore();
+    return createMemoryStore(settings);
   }
-  return createPostgresStore(createPool(settings));
+  return createPostgresStore(createPool(settings), settings);
 }
 
 export function buildMcpApp(options: McpAppOptions = {}): Hono {

@@ -8,6 +8,7 @@ and approved deviations from `docs/project-standards/`.
 ## Current Architecture Docs
 
 - [System Overview](./10-system-overview.md)
+- [Settings And Config Bootstrap](./config/settings.md)
 - [Decisions And Open Questions](./20-decisions-and-open-questions.md)
 - [Domain Model](./30-domain-model.md)
 - [Auth And User Ownership](./40-auth-and-user-ownership.md)

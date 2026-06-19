@@ -105,7 +105,7 @@ describe("agent simulation harness", () => {
     const aiConfig = await sim.store.getAiConfig();
     await sim.store.updateAiConfig(sim.ownerContext, {
       ...aiConfig,
-      maxToolCalls: 0
+      maxToolCalls: 1
     });
     await sim.createDueTask({
       title: "Looping scheduled task",
@@ -117,7 +117,14 @@ describe("agent simulation harness", () => {
       source: "scenario-loop"
     });
 
-    const failedTick = await sim.runWorkerTick();
+    const countToolCallsForRun = sim.store.countToolCallsForRun;
+    let failedTick: Awaited<ReturnType<typeof sim.runWorkerTick>>;
+    sim.store.countToolCallsForRun = async () => 1;
+    try {
+      failedTick = await sim.runWorkerTick();
+    } finally {
+      sim.store.countToolCallsForRun = countToolCallsForRun;
+    }
 
     expect(failedTick).toMatchObject({ claimedTasks: 1, ranTasks: 1 });
     await sim.expectAudit("guardrail.exceeded");

@@ -1,4 +1,4 @@
-import type { Settings } from "../config/settings.js";
+import { DEFAULT_AI_TOOL_CALLS, type Settings } from "../config/settings.js";
 import type { AgentStore, RequestContext } from "../domain/types.js";
 
 const SENSITIVE_DETAIL_KEY_PATTERN = /(?:password|passwd|pwd|secret|token|api[_\s-]?key|access[_\s-]?key|private[_\s-]?key|credential|authorization|bearer|cookie|session)/i;
@@ -26,7 +26,7 @@ export const DEFAULT_RUNTIME_SAFETY_POLICY: RuntimeSafetyPolicy = {
   maxAgentRunsPerUserPerBurstWindow: 60,
   agentRunBurstWindowSeconds: 600,
   maxAutonomousRunsPerWorkerTick: 10,
-  maxToolCallsPerRun: 10,
+  maxToolCallsPerRun: DEFAULT_AI_TOOL_CALLS,
   maxOwnerVisibleOutboundMessagesPerUserPerDay: 10,
   outboundMessagesPerWorkerTick: 1,
   maxUntrustedReviewNotificationsPerSenderPerDay: 5,
