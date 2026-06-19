@@ -88,6 +88,16 @@ export type InboundMessageInput = {
   bodyText: string;
   receivedAt?: string | null;
   source?: string;
+  attachments?: InboundAttachmentMetadata[];
+};
+
+export type InboundAttachmentMetadata = {
+  filename: string | null;
+  contentType: string;
+  byteSize: number;
+  sha256: string;
+  handling: "metadata_only";
+  reason: "inbound_attachment_storage_not_enabled" | "inbound_image_processing_not_enabled";
 };
 
 export type InboundMessageRecord = InboundMessageInput & {
@@ -100,6 +110,7 @@ export type InboundMessageRecord = InboundMessageInput & {
   taskEventId: string | null;
   agentRunId: string | null;
   outboundMessageId: string | null;
+  attachments: InboundAttachmentMetadata[];
   createdAt: string;
 };
 
@@ -206,6 +217,7 @@ export type InboundHandlingResult = {
     | "accepted_trusted"
     | "blocked"
     | "rate_limited"
+    | "duplicate"
     | "sender_reviewed"
     | "approval_decided";
   messageId?: string;

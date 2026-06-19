@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { ImapFlow, type SearchObject } from "imapflow";
 import { simpleParser } from "mailparser";
 import type { AgentModelClient } from "../agent/modelClient.js";
 import type { Settings } from "../config/settings.js";
-import type { AgentStore, InboundMessageInput, RequestContext } from "../domain/types.js";
+import type { AgentStore, InboundAttachmentMetadata, InboundMessageInput, RequestContext } from "../domain/types.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { processInboundMessage } from "./inboundProcessor.js";
 import { loadEmailSecret } from "./smtpSender.js";
@@ -85,6 +86,10 @@ function booleanConfig(primary: unknown, fallback: unknown): boolean | undefined
 
 function stringFromConfig(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function firstNonBlank(...values: Array<string | undefined>): string | undefined {
+  return values.find((value) => typeof value === "string" && value.trim())?.trim();
 }
 
 function numberFromConfig(value: unknown): number | undefined {
@@ -240,6 +245,42 @@ function textBody(parsed: Awaited<ReturnType<typeof simpleParser>>): string {
   return parsed.html ? parsed.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "";
 }
 
+function sanitizeAttachmentFilename(value: string | undefined): string | null {
+  if (!value?.trim()) {
+    return null;
+  }
+  return value
+    .replace(/[\u0000-\u001f\u007f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 180) || null;
+}
+
+function hashAttachment(content: Buffer | undefined, fallback: string): string {
+  return createHash("sha256").update(content ?? fallback).digest("hex");
+}
+
+export function metadataForParsedAttachments(
+  parsed: Awaited<ReturnType<typeof simpleParser>>
+): InboundAttachmentMetadata[] {
+  return parsed.attachments.slice(0, 20).map((attachment) => {
+    const contentType = (attachment.contentType || "application/octet-stream").trim().toLowerCase().slice(0, 160);
+    const byteSize = Number.isFinite(attachment.size)
+      ? Math.max(0, Math.trunc(attachment.size))
+      : attachment.content.byteLength;
+    return {
+      filename: sanitizeAttachmentFilename(attachment.filename),
+      contentType,
+      byteSize,
+      sha256: hashAttachment(attachment.content, `${attachment.filename ?? ""}:${contentType}:${byteSize}`),
+      handling: "metadata_only",
+      reason: contentType.startsWith("image/")
+        ? "inbound_image_processing_not_enabled"
+        : "inbound_attachment_storage_not_enabled"
+    };
+  });
+}
+
 function sourceForAddress(address: string): string {
   const normalized = address.toLowerCase();
   if (normalized.includes("mms") || normalized.includes("mypixmessages")) {
@@ -311,13 +352,14 @@ export async function processImapInbox(options: {
           const parsed = await simpleParser(message.source ?? Buffer.from(""));
           const fromAddr = firstAddress(parsed.from);
           const inbound: InboundMessageInput = {
-            providerMessageId: parsed.messageId ?? message.envelope?.messageId ?? `${config.mailbox}:${message.uid}`,
+            providerMessageId: firstNonBlank(parsed.messageId, message.envelope?.messageId) ?? `${config.mailbox}:${message.uid}`,
             fromAddr,
             toAddr: addressText(parsed.to) || config.username,
             subject: parsed.subject ?? null,
             bodyText: textBody(parsed),
             receivedAt: parsed.date?.toISOString() ?? new Date().toISOString(),
-            source: sourceForAddress(fromAddr)
+            source: sourceForAddress(fromAddr),
+            attachments: metadataForParsedAttachments(parsed)
           };
           if (!isNewerThanLastReceived(inbound.receivedAt ?? "", config.lastReceivedAt)) {
             await updateImapProgress({

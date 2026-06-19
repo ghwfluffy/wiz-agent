@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { simpleParser } from "mailparser";
 import { loadSettings } from "../src/config/settings.js";
 import { MockModelClient } from "../src/agent/modelClient.js";
-import { buildImapSearchCriteria, isNewerThanLastReceived } from "../src/connectors/imapPoller.js";
+import { buildOwnerInboundPrompt } from "../src/agent/inboundMessageAgent.js";
+import { buildImapSearchCriteria, isNewerThanLastReceived, metadataForParsedAttachments } from "../src/connectors/imapPoller.js";
 import { processInboundMessage } from "../src/connectors/inboundProcessor.js";
 import { processOutboundQueue, resolveSmtpSecure } from "../src/connectors/smtpSender.js";
 import { createMemoryStore } from "../src/domain/store.js";
@@ -58,6 +60,44 @@ describe("inbound sender policy", () => {
     });
     expect(isNewerThanLastReceived("2026-06-01T03:00:01.000Z", "2026-06-01T03:00:00.000Z")).toBe(true);
     expect(isNewerThanLastReceived("2026-06-01T03:00:00.000Z", "2026-06-01T03:00:00.000Z")).toBe(false);
+  });
+
+  it("extracts IMAP attachment metadata without persisting raw attachment bytes", async () => {
+    const raw = [
+      "From: Owner <owner@example.test>",
+      "To: agent@example.test",
+      "Subject: Photo",
+      "MIME-Version: 1.0",
+      "Content-Type: multipart/mixed; boundary=\"boundary-1\"",
+      "",
+      "--boundary-1",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      "See attached.",
+      "--boundary-1",
+      "Content-Type: image/png; name=\"photo.png\"",
+      "Content-Disposition: attachment; filename=\"photo.png\"",
+      "Content-Transfer-Encoding: base64",
+      "",
+      Buffer.from([1, 2, 3, 4]).toString("base64"),
+      "--boundary-1--",
+      ""
+    ].join("\r\n");
+    const parsed = await simpleParser(Buffer.from(raw));
+
+    const attachments = metadataForParsedAttachments(parsed);
+
+    expect(attachments).toEqual([
+      expect.objectContaining({
+        filename: "photo.png",
+        contentType: "image/png",
+        byteSize: 4,
+        handling: "metadata_only",
+        reason: "inbound_image_processing_not_enabled"
+      })
+    ]);
+    expect(attachments[0]?.sha256).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(attachments)).not.toContain(Buffer.from([1, 2, 3, 4]).toString("base64"));
   });
 
   it("routes owner messages to the agent path", async () => {
@@ -268,6 +308,44 @@ describe("inbound sender policy", () => {
     ]));
   });
 
+  it("includes only inbound attachment metadata in owner prompts", async () => {
+    const { context, store } = await testContext();
+    const recorded = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-attachment-1",
+      fromAddr: "owner@example.test",
+      toAddr: "agent@example.test",
+      subject: "Photo",
+      bodyText: "See attached.",
+      source: "mms",
+      attachments: [
+        {
+          filename: "photo\none.png",
+          contentType: "image/png",
+          byteSize: 4,
+          sha256: "a".repeat(64),
+          handling: "metadata_only",
+          reason: "inbound_image_processing_not_enabled"
+        }
+      ]
+    }, "owner");
+
+    const prompt = await buildOwnerInboundPrompt({ store, context, message: recorded });
+
+    expect(recorded.attachments).toEqual([
+      expect.objectContaining({
+        filename: "photo one.png",
+        contentType: "image/png",
+        byteSize: 4,
+        handling: "metadata_only",
+        reason: "inbound_image_processing_not_enabled"
+      })
+    ]);
+    expect(prompt).toContain("attachments:");
+    expect(prompt).toContain("filename: photo one.png");
+    expect(prompt).toContain("attachment_boundary:");
+    expect(prompt).not.toContain("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  });
+
   it("accepts trusted newsletter senders without treating them as owner commands", async () => {
     const { context, store } = await testContext();
     await store.setSenderStatus(context, "news@example.test", "newsletter");
@@ -360,6 +438,101 @@ describe("inbound sender policy", () => {
     })).toContain("Reply YES to trust as a newsletter");
   });
 
+  it("returns duplicate for repeated provider messages without queueing another review", async () => {
+    const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        sms_gateway: "owner-sms@example.test"
+      }
+    });
+    const settings = loadSettings({ APP_ENV: "test" });
+    const limiter = new SlidingWindowRateLimiter(3, 60_000);
+
+    const first = await handleInboundMessage({
+      context,
+      settings,
+      store,
+      rateLimiter: limiter,
+      message: {
+        providerMessageId: " <provider-duplicate-1> ",
+        fromAddr: "unknown@example.test",
+        toAddr: "agent@example.test",
+        subject: "first",
+        bodyText: "first"
+      }
+    });
+    const duplicate = await handleInboundMessage({
+      context,
+      settings,
+      store,
+      rateLimiter: limiter,
+      message: {
+        providerMessageId: "<provider-duplicate-1>",
+        fromAddr: "unknown@example.test",
+        toAddr: "agent@example.test",
+        subject: "repeat",
+        bodyText: "repeat"
+      }
+    });
+
+    expect(first.action).toBe("queued_owner_review");
+    expect(duplicate).toMatchObject({
+      action: "duplicate",
+      messageId: first.messageId
+    });
+    await expect(store.listInboundMessages(context)).resolves.toHaveLength(1);
+    await expect(store.listOutboundMessages(context)).resolves.toHaveLength(1);
+  });
+
+  it("uses content fallback keys for blank provider ids instead of collapsing unrelated messages", async () => {
+    const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        sms_gateway: "owner-sms@example.test"
+      }
+    });
+    const settings = loadSettings({ APP_ENV: "test" });
+    const limiter = new SlidingWindowRateLimiter(3, 60_000);
+
+    const first = await handleInboundMessage({
+      context,
+      settings,
+      store,
+      rateLimiter: limiter,
+      message: {
+        providerMessageId: "",
+        fromAddr: "unknown@example.test",
+        toAddr: "agent@example.test",
+        subject: "one",
+        bodyText: "first",
+        receivedAt: "2026-06-13T10:00:00.000Z"
+      }
+    });
+    const second = await handleInboundMessage({
+      context,
+      settings,
+      store,
+      rateLimiter: limiter,
+      message: {
+        providerMessageId: "  ",
+        fromAddr: "unknown@example.test",
+        toAddr: "agent@example.test",
+        subject: "two",
+        bodyText: "second",
+        receivedAt: "2026-06-13T10:01:00.000Z"
+      }
+    });
+
+    expect(first.action).toBe("queued_owner_review");
+    expect(second.action).toBe("queued_owner_review");
+    await expect(store.listInboundMessages(context)).resolves.toHaveLength(2);
+    await expect(store.listOutboundMessages(context)).resolves.toHaveLength(2);
+  });
+
   it("lets owner SMS replies trust a reviewed sender as a newsletter and ingest knowledge", async () => {
     const { context, store } = await testContext();
     const receivedAt = new Date().toISOString();
@@ -428,6 +601,83 @@ describe("inbound sender policy", () => {
         })
       ])
     );
+  });
+
+  it("normalizes display-name sender reviews before trusting future newsletter mail", async () => {
+    const { context, store } = await testContext();
+    const receivedAt = new Date().toISOString();
+    const ownerReplyAt = new Date(Date.now() + 1_000).toISOString();
+    const futureReceivedAt = new Date(Date.now() + 2_000).toISOString();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: {
+        sms_gateway: "owner-sms@example.test"
+      }
+    });
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AGENT_OWNER_SMS_EMAILS: "owner-sms@example.test"
+    });
+
+    await handleInboundMessage({
+      context,
+      settings,
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      message: {
+        providerMessageId: "display-newsletter-review-1",
+        fromAddr: "Robots Weekly <news@example.test>",
+        toAddr: "agent@example.test",
+        subject: "Robots Weekly",
+        bodyText: "A useful robotics link.",
+        receivedAt
+      }
+    });
+    const review = await handleInboundMessage({
+      context,
+      settings,
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      message: {
+        providerMessageId: "display-newsletter-owner-yes",
+        fromAddr: "owner-sms@example.test",
+        toAddr: "agent@example.test",
+        subject: null,
+        bodyText: "YES",
+        source: "sms",
+        receivedAt: ownerReplyAt
+      }
+    });
+
+    expect(review.action).toBe("sender_reviewed");
+    await expect(store.getSenderStatus(context, "news@example.test")).resolves.toBe("newsletter");
+    await expect(store.listSenders(context)).resolves.toEqual([
+      expect.objectContaining({
+        address: "news@example.test",
+        status: "newsletter"
+      })
+    ]);
+
+    const future = await handleInboundMessage({
+      context,
+      settings,
+      store,
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      message: {
+        providerMessageId: "display-newsletter-future",
+        fromAddr: "News <news@example.test>",
+        toAddr: "agent@example.test",
+        subject: "Next issue",
+        bodyText: "A follow-up robotics link.",
+        receivedAt: futureReceivedAt
+      }
+    });
+
+    expect(future).toMatchObject({
+      classification: "newsletter",
+      action: "accepted_newsletter"
+    });
   });
 
   it("lets owner SMS replies ingest one reviewed newsletter without trusting future sender mail", async () => {

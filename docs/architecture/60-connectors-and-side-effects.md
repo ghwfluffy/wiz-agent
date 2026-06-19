@@ -48,6 +48,9 @@ message memory extractor, and does not queue an immediate owner message. Owner
 `ONCE` replies ingest only the reviewed message without trusting future
 messages. Owner `YES` replies mark the sender as `newsletter` and ingest the
 reviewed message. Owner `NO` replies mark the sender as `blocked`.
+Sender review decisions normalize display-name addresses before writing sender
+trust rows, so `Name <sender@example>` stores and later matches
+`sender@example`.
 
 A newsletter interest check is a scheduled agent task, not an inbound side
 effect. That task reviews newsletter knowledge, newsletter preferences,
@@ -79,6 +82,14 @@ allowed cross-app integration action. The host validates every tool call,
 creates a user/run-scoped MCP session with an explicit tool allowlist, and
 records the final handling action and optional conversation thread id back on
 the inbox record.
+
+Inbound de-duplication happens before any side effect. Provider message ids are
+trimmed and normalized for matching; when a provider id is missing or blank,
+the store uses a deterministic fallback key from source, normalized sender,
+recipient, timestamp, subject, and body. A duplicate returns the explicit
+`duplicate` handling result and does not queue another sender-review
+notification, ingest newsletter knowledge, integrate trusted memory, or route
+owner-command tools.
 
 Owner SMS/MMS follow-ups often refer to older messages or completed tasks in a
 conversational way. The owner inbound prompt therefore includes bounded recent
@@ -158,6 +169,13 @@ managed from the Settings tab, including the assistant mailbox password. API rea
 redact saved passwords and expose only a `password_set` flag. A user will not
 see new mail in the Inbox unless their IMAP connector is enabled, complete, and
 the worker is running.
+
+The IMAP parser records attachment metadata only. It caps metadata entries,
+sanitizes filenames and content types, records byte size and SHA-256 for
+operator traceability, and labels all entries `metadata_only`. Image/MMS
+attachments are marked as not processed until a host-owned sanitizer/storage
+flow accepts them. Raw attachment bytes are not written to `messages`, not
+written to audit details, and not included in model prompts.
 
 The IMAP inbox is the assistant's dedicated mailbox, not the owner's personal
 inbox. The assistant should only poll mailboxes intentionally configured for

@@ -69,11 +69,14 @@ Current tests cover:
 - user-managed connector configuration with API-redacted credentials.
 - IMAP settings tests with redacted provider errors.
 - incremental IMAP search criteria from stored mailbox progress.
+- IMAP attachment metadata extraction without raw attachment persistence.
 - worker IMAP failure audit visibility.
 - sender-table owner classification.
 - owner-contact backed untrusted sender review notification queueing.
+- explicit duplicate inbound-message handling without repeated side effects.
 - owner SMS sender-review replies for newsletter trust, one-time review, and
   blocking.
+- display-name sender review normalization before sender trust writes.
 - trusted newsletter knowledge ingestion without immediate owner messaging.
 - trusted non-owner sender memory integration without owner-command tool
   routing.

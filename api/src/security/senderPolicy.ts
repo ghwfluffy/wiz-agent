@@ -163,7 +163,7 @@ export async function handleInboundMessage(
   if (recorded.duplicate) {
     return {
       classification,
-      action: "rate_limited",
+      action: "duplicate",
       messageId: recorded.id
     };
   }

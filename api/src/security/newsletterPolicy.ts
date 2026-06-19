@@ -210,9 +210,10 @@ export async function handleOwnerNewsletterReply(options: {
   }
 
   let knowledgePath: string | undefined;
+  const reviewedSender = normalizeAddress(reviewed.fromAddr);
   if (decision === "newsletter" || decision === "once") {
     if (decision === "newsletter") {
-      await options.store.setSenderStatus(options.context, reviewed.fromAddr, "newsletter" satisfies SenderStatus);
+      await options.store.setSenderStatus(options.context, reviewedSender, "newsletter" satisfies SenderStatus);
     }
     knowledgePath = await appendNewsletterKnowledge({
       store: options.store,
@@ -224,13 +225,13 @@ export async function handleOwnerNewsletterReply(options: {
       action: "accepted_newsletter"
     });
   } else {
-    await options.store.setSenderStatus(options.context, reviewed.fromAddr, "blocked");
+    await options.store.setSenderStatus(options.context, reviewedSender, "blocked");
     await options.store.updateInboundMessageHandling(options.context, reviewed.id, {
       action: "blocked"
     });
   }
 
-  await options.store.recordAudit(options.context, "newsletter.sender_review", "sender", normalizeAddress(reviewed.fromAddr), {
+  await options.store.recordAudit(options.context, "newsletter.sender_review", "sender", reviewedSender, {
     decision,
     reviewed_message_id: reviewed.id,
     knowledge_path: knowledgePath ?? null

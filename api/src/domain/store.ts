@@ -36,6 +36,7 @@ import type {
   ConnectorRecord,
   ConnectorStatus,
   AuditRecord,
+  InboundAttachmentMetadata,
   InboundMessageInput,
   InboundMessageRecord,
   MarkdownConflict,
@@ -102,6 +103,82 @@ function nowIso(): string {
 
 function hashOauthState(state: string): string {
   return createHash("sha256").update(state).digest("hex");
+}
+
+function sha256(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function normalizeSenderAddress(value: string): string {
+  const trimmed = value.trim().toLowerCase();
+  const match = trimmed.match(/<([^>]+)>/);
+  return match?.[1]?.trim().toLowerCase() ?? trimmed;
+}
+
+function normalizeProviderMessageId(value: string): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const bracketed = trimmed.match(/^<([^>]+)>$/);
+  return bracketed?.[1]?.trim() || trimmed;
+}
+
+function inboundDedupKey(input: InboundMessageInput): string {
+  const providerId = normalizeProviderMessageId(input.providerMessageId);
+  if (providerId) {
+    return providerId;
+  }
+  const bodyHash = sha256([
+    input.source ?? "imap",
+    normalizeSenderAddress(input.fromAddr),
+    normalizeSenderAddress(input.toAddr),
+    input.receivedAt ?? "",
+    input.subject ?? "",
+    input.bodyText
+  ].join("\n"));
+  return `fallback:${bodyHash}`;
+}
+
+function attachmentReason(contentType: string): InboundAttachmentMetadata["reason"] {
+  return contentType.startsWith("image/")
+    ? "inbound_image_processing_not_enabled"
+    : "inbound_attachment_storage_not_enabled";
+}
+
+function normalizeInboundAttachments(value: unknown): InboundAttachmentMetadata[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.slice(0, 20).flatMap((item) => {
+    if (typeof item !== "object" || item === null) {
+      return [];
+    }
+    const entry = item as Record<string, unknown>;
+    const contentType = typeof entry.contentType === "string" && entry.contentType.trim()
+      ? entry.contentType.trim().toLowerCase().slice(0, 160)
+      : "application/octet-stream";
+    const byteSize = typeof entry.byteSize === "number" && Number.isFinite(entry.byteSize) && entry.byteSize >= 0
+      ? Math.trunc(entry.byteSize)
+      : 0;
+    const sha = typeof entry.sha256 === "string" && /^[a-f0-9]{64}$/i.test(entry.sha256)
+      ? entry.sha256.toLowerCase()
+      : sha256(`${contentType}:${byteSize}:${String(entry.filename ?? "")}`);
+    const filename = typeof entry.filename === "string" && entry.filename.trim()
+      ? entry.filename.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 180)
+      : null;
+    const reason = entry.reason === "inbound_image_processing_not_enabled" || entry.reason === "inbound_attachment_storage_not_enabled"
+      ? entry.reason
+      : attachmentReason(contentType);
+    return [{
+      filename,
+      contentType,
+      byteSize,
+      sha256: sha,
+      handling: "metadata_only" as const,
+      reason
+    }];
+  });
 }
 
 function taskFromRow(row: Record<string, unknown>): TaskRecord {
@@ -439,6 +516,7 @@ function inboundFromRow(row: Record<string, unknown>): InboundMessageRecord {
     taskEventId: typeof authJson.task_event_id === "string" ? authJson.task_event_id : null,
     agentRunId: typeof authJson.agent_run_id === "string" ? authJson.agent_run_id : null,
     outboundMessageId: typeof authJson.outbound_message_id === "string" ? authJson.outbound_message_id : null,
+    attachments: normalizeInboundAttachments(authJson.attachments),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
   };
 }
@@ -2433,43 +2511,48 @@ export function createPostgresStore(pool: Pool): AgentStore {
     },
 
     async getSenderStatus(context, address) {
+      const normalized = normalizeSenderAddress(address);
       const result = await pool.query(
         `SELECT status FROM senders
          WHERE user_id = $1 AND lower(address) = lower($2)`,
-        [context.userId, address]
+        [context.userId, normalized]
       );
       return result.rows[0]?.status as SenderStatus | undefined;
     },
 
     async setSenderStatus(context, address, status) {
+      const normalized = normalizeSenderAddress(address);
       await pool.query(
         `INSERT INTO senders (id, user_id, address, status)
          VALUES ($1, $2, lower($3), $4)
          ON CONFLICT (user_id, address) DO UPDATE
            SET status = EXCLUDED.status, updated_at = now()`,
-        [randomUUID(), context.userId, address, status]
+        [randomUUID(), context.userId, normalized, status]
       );
-      await recordAudit(pool, context, "sender.status.set", "sender", address, { status });
+      await recordAudit(pool, context, "sender.status.set", "sender", normalized, { status });
     },
 
     async deleteSender(context, address) {
+      const normalized = normalizeSenderAddress(address);
       const result = await pool.query(
         `DELETE FROM senders
          WHERE user_id = $1 AND lower(address) = lower($2)`,
-        [context.userId, address]
+        [context.userId, normalized]
       );
       const deleted = Number(result.rowCount ?? 0) > 0;
       if (deleted) {
-        await recordAudit(pool, context, "sender.status.delete", "sender", address, {});
+        await recordAudit(pool, context, "sender.status.delete", "sender", normalized, {});
       }
       return deleted;
     },
 
     async recordInboundMessage(context, input: InboundMessageInput, classification: SenderClassification) {
+      const providerMessageId = inboundDedupKey(input);
+      const attachments = normalizeInboundAttachments(input.attachments);
       const existing = await pool.query(
         `SELECT * FROM messages
          WHERE user_id = $1 AND provider_message_id = $2`,
-        [context.userId, input.providerMessageId]
+        [context.userId, providerMessageId]
       );
       if (existing.rows[0]) {
         return { ...inboundFromRow(existing.rows[0]), duplicate: true };
@@ -2478,22 +2561,28 @@ export function createPostgresStore(pool: Pool): AgentStore {
       const result = await pool.query(
         `INSERT INTO messages
           (id, user_id, direction, source, provider_message_id, from_addr, to_addr, subject, body_text,
-           auth_status, received_at)
-         VALUES ($1, $2, 'inbound', $3, $4, lower($5), lower($6), $7, $8, $9, $10)`,
+           body_hash, auth_status, auth_json, received_at)
+         VALUES ($1, $2, 'inbound', $3, $4, lower($5), lower($6), $7, $8, $9, $10, $11::jsonb, $12)`,
         [
           id,
           context.userId,
           input.source ?? "imap",
-          input.providerMessageId,
+          providerMessageId,
           input.fromAddr,
           input.toAddr,
           input.subject ?? null,
           input.bodyText,
+          sha256(input.bodyText),
           classification,
+          JSON.stringify(attachments.length > 0 ? { attachments } : {}),
           input.receivedAt ?? new Date().toISOString()
         ]
       );
-      await recordAudit(pool, context, "message.inbound.record", "message", id, { classification });
+      await recordAudit(pool, context, "message.inbound.record", "message", id, {
+        classification,
+        attachment_count: attachments.length,
+        image_attachment_count: attachments.filter((attachment) => attachment.reason === "inbound_image_processing_not_enabled").length
+      });
       const inserted = await pool.query("SELECT * FROM messages WHERE id = $1 AND user_id = $2", [id, context.userId]);
       return { ...inboundFromRow(inserted.rows[0] ?? result.rows[0]), duplicate: false };
     },
@@ -3931,38 +4020,43 @@ export function createMemoryStore(): AgentStore {
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.address.localeCompare(b.address));
     },
     async getSenderStatus(context, address) {
-      return senderStatuses.get(`${context.userId}:${address.toLowerCase()}`)?.status;
+      return senderStatuses.get(`${context.userId}:${normalizeSenderAddress(address)}`)?.status;
     },
     async setSenderStatus(context, address, status) {
-      const key = `${context.userId}:${address.toLowerCase()}`;
+      const normalized = normalizeSenderAddress(address);
+      const key = `${context.userId}:${normalized}`;
       const existing = senderStatuses.get(key);
       const now = nowIso();
       senderStatuses.set(key, {
         id: existing?.id ?? randomUUID(),
         userId: context.userId,
-        address: address.toLowerCase(),
+        address: normalized,
         status,
         createdAt: existing?.createdAt ?? now,
         updatedAt: now
       });
-      pushAudit(context, "sender.status.set", "sender", address, { status });
+      pushAudit(context, "sender.status.set", "sender", normalized, { status });
     },
     async deleteSender(context, address) {
-      const key = `${context.userId}:${address.toLowerCase()}`;
+      const normalized = normalizeSenderAddress(address);
+      const key = `${context.userId}:${normalized}`;
       const deleted = senderStatuses.delete(key);
       if (deleted) {
-        pushAudit(context, "sender.status.delete", "sender", address, {});
+        pushAudit(context, "sender.status.delete", "sender", normalized, {});
       }
       return deleted;
     },
     async recordInboundMessage(context, input, classification) {
-      const key = `${context.userId}:${input.providerMessageId}`;
+      const providerMessageId = inboundDedupKey(input);
+      const attachments = normalizeInboundAttachments(input.attachments);
+      const key = `${context.userId}:${providerMessageId}`;
       const existing = inboundProviderIds.get(key);
       if (existing) {
         const message = inboundMessages.get(existing);
         if (!message) {
           return {
             ...input,
+            providerMessageId,
             id: existing,
             userId: context.userId,
             classification,
@@ -3972,6 +4066,10 @@ export function createMemoryStore(): AgentStore {
             taskEventId: null,
             agentRunId: null,
             outboundMessageId: null,
+            attachments,
+            subject: input.subject ?? null,
+            receivedAt: input.receivedAt ?? null,
+            source: input.source ?? "imap",
             createdAt: nowIso(),
             duplicate: true
           };
@@ -3981,6 +4079,7 @@ export function createMemoryStore(): AgentStore {
       const id = randomUUID();
       const message: InboundMessageRecord = {
         ...input,
+        providerMessageId,
         id,
         userId: context.userId,
         classification,
@@ -3990,6 +4089,7 @@ export function createMemoryStore(): AgentStore {
         taskEventId: null,
         agentRunId: null,
         outboundMessageId: null,
+        attachments,
         subject: input.subject ?? null,
         receivedAt: input.receivedAt ?? null,
         source: input.source ?? "imap",
@@ -3997,7 +4097,11 @@ export function createMemoryStore(): AgentStore {
       };
       inboundProviderIds.set(key, id);
       inboundMessages.set(id, message);
-      pushAudit(context, "message.inbound.record", "message", id, { classification });
+      pushAudit(context, "message.inbound.record", "message", id, {
+        classification,
+        attachment_count: attachments.length,
+        image_attachment_count: attachments.filter((attachment) => attachment.reason === "inbound_image_processing_not_enabled").length
+      });
       return { ...message, duplicate: false };
     },
     async listInboundMessages(context) {

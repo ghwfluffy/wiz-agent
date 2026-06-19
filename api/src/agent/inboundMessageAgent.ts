@@ -51,6 +51,20 @@ function threadSummary(thread: ConversationThreadRecord): string {
   ].join("\n");
 }
 
+function attachmentSummary(message: InboundMessageRecord): string {
+  if (message.attachments.length === 0) {
+    return "None.";
+  }
+  return message.attachments.map((attachment, index) => [
+    `- attachment_index: ${index + 1}`,
+    `  filename: ${attachment.filename ?? "unknown"}`,
+    `  content_type: ${attachment.contentType}`,
+    `  byte_size: ${attachment.byteSize}`,
+    `  handling: ${attachment.handling}`,
+    `  reason: ${attachment.reason}`
+  ].join("\n")).join("\n");
+}
+
 async function recentThreadSummary(options: {
   store: AgentStore;
   context: RequestContext;
@@ -254,6 +268,9 @@ export async function buildOwnerInboundPrompt(options: {
     `to: ${options.message.toAddr}`,
     `received_at: ${options.message.receivedAt ?? options.message.createdAt}`,
     `subject: ${options.message.subject ?? "(none)"}`,
+    "attachments:",
+    attachmentSummary(options.message),
+    "attachment_boundary: Attachment bytes are not available in this prompt. Image/MMS attachments are metadata-only unless a future host-owned sanitizer/storage flow accepts them.",
     "body:",
     options.message.bodyText
   ].join("\n");

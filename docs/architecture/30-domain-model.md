@@ -190,12 +190,23 @@ Inbound email/SMS/MMS records are source records in `messages` with
 in `auth_status`; derived handling state such as `routed_to_agent`,
 `queued_owner_review`, `accepted_newsletter`, `accepted_trusted`,
 `sender_reviewed`, `blocked`, and `rate_limited` is stored in `auth_json`.
+Connector processing returns `duplicate` for a repeated provider message id or
+deterministic fallback key and does not re-run sender review, newsletter
+ingestion, memory integration, or owner-command tools for that duplicate.
 
 Inbox entries are not command history by themselves. Only messages classified as
 `owner` may be handed to the owner-command agent path. Newsletter and trusted
 third-party messages may be integrated into knowledge. Untrusted and blocked
 messages remain durable data for review/audit and must not trigger model tool
 calls.
+
+Inbound attachment bytes are not persisted on `messages` and are not passed to
+the model. When the IMAP parser sees attachments, the message stores bounded
+sanitized metadata in `auth_json.attachments`: filename, content type, byte
+size, SHA-256, `metadata_only` handling, and a reason that distinguishes general
+attachment storage from image/MMS processing that has not been accepted by a
+host-owned sanitizer. Owner prompts may show this metadata plus the boundary,
+but not raw bytes or hashes.
 
 Newsletter sender review is represented as source inbox records plus derived
 handling state. Unknown newsletter-like senders start as `untrusted` and queue
