@@ -83,6 +83,9 @@ function parseCrossAppApprovalPayload(approval: ApprovalRecord): CrossAppApprova
   if (action.access !== "write") {
     return { error: "integration_action_not_write" };
   }
+  if (action.approvalMode === "direct_owner_only") {
+    return { error: "direct_owner_command_required" };
+  }
   const pathParams = stringMap(approval.proposedPayload.path_params);
   if (pathParams === undefined && approval.proposedPayload.path_params !== undefined) {
     return { error: "invalid_path_params" };

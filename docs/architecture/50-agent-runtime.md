@@ -264,7 +264,11 @@ self-review, memory-review, autonomous wake, and explicit
 `approvalRequired=true` outreach create approval records. Cross-app write tools
 execute immediately for authenticated owner-command surfaces such as web chat,
 mobile voice, and owner-classified inbound messages. Autonomous or scheduled
-cross-app write proposals still create `cross_app_write_action` approvals.
+cross-app write proposals still create `cross_app_write_action` approvals
+unless the capability registry marks the action direct-owner-only. Direct-owner
+only actions, such as physical-access operations, are rejected instead of
+queued when the request is autonomous, scheduled, stale, or not from an owner
+command surface.
 Approval records preserve the source run, source reference, proposed payload,
 risk level, summary, expiration, execution status, redacted execution result or
 failure, and audit trail.

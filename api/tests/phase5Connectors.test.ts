@@ -1189,11 +1189,11 @@ describe("cross-app integration gateway", () => {
 
     expect(resolveIntegrationActionRequest({
       actionId: "goals.list_notifications",
-      query: { timezone: "America/Chicago" }
+      query: { timezone: "America/Chicago", include_completed: true }
     })).toEqual({
       ok: true,
       app: "goals",
-      path: "/notifications?timezone=America%2FChicago",
+      path: "/notifications?timezone=America%2FChicago&include_completed=true",
       method: "GET",
       body: undefined
     });
@@ -1246,6 +1246,65 @@ describe("cross-app integration gateway", () => {
     );
   });
 
+  it("rejects unsafe gateway paths before fetch", async () => {
+    const { context } = await testContext();
+    const fetchImpl = vi.fn();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      GOALS_API_BASE_URL: "https://goals.example.test/api"
+    });
+
+    await expect(callIntegrationApi({
+      settings,
+      context,
+      app: "goals",
+      path: "https://evil.example.test/goals",
+      tokenProvider: { tokenFor: async () => "goals-user-token" },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })).resolves.toEqual({
+      ok: false,
+      reason: "invalid_integration_path"
+    });
+
+    await expect(callIntegrationApi({
+      settings,
+      context,
+      app: "goals",
+      path: "/../admin",
+      tokenProvider: { tokenFor: async () => "goals-user-token" },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    })).resolves.toEqual({
+      ok: false,
+      reason: "invalid_integration_path"
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("redacts and bounds thrown integration gateway errors", async () => {
+    const { context } = await testContext();
+    const result = await callIntegrationApi({
+      settings: loadSettings({
+        APP_ENV: "test",
+        GOALS_API_BASE_URL: "https://goals.example.test/api"
+      }),
+      context,
+      app: "goals",
+      path: "/goals",
+      tokenProvider: { tokenFor: async () => "goals-user-token" },
+      fetchImpl: (async () => {
+        throw new Error(`Request failed at https://goals.example.test/api token=abc.def password=super-secret Authorization: Bearer abc.def ${"x".repeat(400)}`);
+      }) as unknown as typeof fetch
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).not.toContain("goals.example.test");
+      expect(result.reason).not.toContain("abc.def");
+      expect(result.reason).not.toContain("super-secret");
+      expect(result.reason.length).toBeLessThanOrEqual(240);
+    }
+  });
+
   it("loads legacy integration tokens from ignored secret storage", async () => {
     const { context } = await testContext();
     const dir = mkdtempSync(join(tmpdir(), "agent-integration-tokens-"));
@@ -1290,6 +1349,21 @@ describe("cross-app integration gateway", () => {
     });
   });
 
+  it("does not mint signed tokens for unknown or cross-app action scopes", async () => {
+    const { context } = await testContext();
+    const provider = new SignedIntegrationTokenProvider(loadSettings({
+      APP_ENV: "test",
+      AGENT_INTEGRATION_TOKEN_SECRET: "integration-secret"
+    }), { now: () => 1_700_000_000 });
+    const oauthContext = {
+      ...context,
+      userId: "oauth:central-oauth:central-user-1"
+    };
+
+    await expect(provider.tokenFor(oauthContext, "goals", "budget.list_accounts")).resolves.toBeUndefined();
+    await expect(provider.tokenFor(oauthContext, "goals", "goals.not_registered")).resolves.toBeUndefined();
+  });
+
   it("does not mint signed integration tokens for non-OAuth users or missing secrets", async () => {
     const { context } = await testContext();
     const provider = new SignedIntegrationTokenProvider(loadSettings({ APP_ENV: "test" }));
@@ -1303,14 +1377,16 @@ describe("cross-app integration gateway", () => {
         session_token: "secret",
         nested: [{ password: "secret", value: 10 }]
       },
-      authorization: "Bearer secret"
+      authorization: "Bearer secret",
+      message: "Request failed at https://budget.example.test/api Authorization: Bearer abc.def token=abc.def"
     })).toEqual({
       account: {
         name: "Checking",
         session_token: "[redacted]",
         nested: [{ password: "[redacted]", value: 10 }]
       },
-      authorization: "[redacted]"
+      authorization: "[redacted]",
+      message: "Request failed at [url] Authorization: Bearer [redacted] token=[redacted]"
     });
   });
 });

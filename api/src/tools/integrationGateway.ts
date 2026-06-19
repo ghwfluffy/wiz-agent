@@ -39,9 +39,68 @@ function isApiBackedIntegrationApp(app: string): app is IntegrationApp {
   return app === "goals" || app === "budget" || app === "apartment_gate";
 }
 
+const MAX_INTEGRATION_FAILURE_REASON_LENGTH = 240;
+
+export function redactIntegrationText(value: string): string {
+  return value
+    .replace(/\b(authorization)\b(\s*[=:]\s*)(Bearer\s+)?([^\s,;]+)/gi, "$1$2$3[redacted]")
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s"'<>),]+/gi, "[url]")
+    .replace(
+      /\b(password|secret|token|credential|cookie|session)\b(\s*[=:]\s*)([^\s,;]+)/gi,
+      "$1$2[redacted]"
+    );
+}
+
+function safeIntegrationFailureReason(value: unknown, fallback: string): string {
+  const raw = value instanceof Error ? value.message : typeof value === "string" ? value : fallback;
+  const redacted = redactIntegrationText(raw).replace(/\s+/g, " ").trim();
+  return redacted.slice(0, MAX_INTEGRATION_FAILURE_REASON_LENGTH) || fallback;
+}
+
+function hasEscapingPathSegment(relativePath: string): boolean {
+  const pathOnly = relativePath.split(/[?#]/, 1)[0] ?? "";
+  if (pathOnly.includes("\\")) {
+    return true;
+  }
+  for (const segment of pathOnly.split("/")) {
+    let decoded = segment;
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return true;
+    }
+    if (decoded === "..") {
+      return true;
+    }
+  }
+  return false;
+}
+
+function resolveIntegrationUrl(baseUrl: string, path: string): { ok: true; url: URL } | { ok: false; reason: string } {
+  const trimmedPath = path.trim();
+  if (!trimmedPath || /^[a-z][a-z0-9+.-]*:/i.test(trimmedPath) || trimmedPath.startsWith("//")) {
+    return { ok: false, reason: "invalid_integration_path" };
+  }
+  const relativePath = trimmedPath.replace(/^\/+/, "");
+  if (hasEscapingPathSegment(relativePath)) {
+    return { ok: false, reason: "invalid_integration_path" };
+  }
+  const normalizedBaseUrl = `${baseUrl.replace(/\/$/, "")}/`;
+  const url = new URL(relativePath, normalizedBaseUrl);
+  const base = new URL(normalizedBaseUrl);
+  if (url.origin !== base.origin || !url.pathname.startsWith(base.pathname)) {
+    return { ok: false, reason: "invalid_integration_path" };
+  }
+  return { ok: true, url };
+}
+
 export function redactIntegrationData(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(redactIntegrationData);
+  }
+  if (typeof value === "string") {
+    return redactIntegrationText(value);
   }
   if (!value || typeof value !== "object") {
     return value;
@@ -77,16 +136,24 @@ export async function callIntegrationApi(options: {
     return { ok: false, reason: "missing_user_integration_token" };
   }
   const fetcher = options.fetchImpl ?? fetch;
-  const url = new URL(options.path.replace(/^\//, ""), `${baseUrl.replace(/\/$/, "")}/`);
-  const response = await fetcher(url, {
-    method: options.method ?? "GET",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json",
-      "x-agent-user-id": options.context.userId
-    },
-    body: options.body === undefined ? undefined : JSON.stringify(options.body)
-  });
+  const resolvedUrl = resolveIntegrationUrl(baseUrl, options.path);
+  if (!resolvedUrl.ok) {
+    return resolvedUrl;
+  }
+  let response: Response;
+  try {
+    response = await fetcher(resolvedUrl.url, {
+      method: options.method ?? "GET",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+        "x-agent-user-id": options.context.userId
+      },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body)
+    });
+  } catch (error) {
+    return { ok: false, reason: safeIntegrationFailureReason(error, "integration_request_failed") };
+  }
   const data = redactIntegrationData(await response.json().catch(() => null));
   return {
     ok: true,

@@ -125,6 +125,12 @@ export const ListGoalMetricsToolSchema = z.object({
   reason: z.string().min(1).optional()
 });
 
+export const CreateGoalMetricToolSchema = InlineGoalMetricSchema.extend({
+  updateType: z.string().min(1).max(80).nullable().optional(),
+  reminderTimes: z.array(z.string().min(1).max(20)).max(24).default([]),
+  userIntentSummary: z.string().min(1)
+});
+
 export const RecordGoalMetricEntryToolSchema = z.object({
   metricId: z.string().min(1),
   numberValue: z.number().nullable().optional(),
@@ -135,6 +141,7 @@ export const RecordGoalMetricEntryToolSchema = z.object({
 
 export const ListGoalNotificationsToolSchema = z.object({
   timezone: z.string().min(1),
+  includeCompleted: z.boolean().default(false),
   reason: z.string().min(1).optional()
 });
 
@@ -181,7 +188,6 @@ export const ListBudgetAuditLogsToolSchema = z.object({
 
 const BudgetContractFieldsSchema = z.object({
   name: z.string().min(1).optional(),
-  type: z.enum(["income", "payment", "transfer"]).optional(),
   automatic: z.boolean().optional(),
   amountCents: z.number().int().min(0).optional(),
   organization: z.string().min(1).optional(),
@@ -458,8 +464,7 @@ export const IntegrationActionToolSchema = z.object({
   pathParams: z.record(z.string(), z.string()).default({}),
   query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean()])).default({}),
   body: z.record(z.string(), z.unknown()).optional(),
-  userIntentSummary: z.string().min(1),
-  approvalRequired: z.boolean().default(false)
+  userIntentSummary: z.string().min(1)
 });
 
 export const ToolContracts = {
@@ -477,6 +482,7 @@ export const ToolContracts = {
   update_goal: UpdateGoalToolSchema,
   complete_goal_checklist_item: CompleteGoalChecklistItemToolSchema,
   list_goal_metrics: ListGoalMetricsToolSchema,
+  create_goal_metric: CreateGoalMetricToolSchema,
   record_goal_metric_entry: RecordGoalMetricEntryToolSchema,
   list_goal_notifications: ListGoalNotificationsToolSchema,
   complete_goal_notification: CompleteGoalNotificationToolSchema,

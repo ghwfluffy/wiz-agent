@@ -50,9 +50,12 @@ Current tests cover:
 - cross-app integration token enforcement.
 - app capability registry coverage for Goals, Fluffynomics, and Apartment Gate.
 - read-only MCP capability lookup for app registry data.
-- simplified MCP wrappers for Goals and Fluffynomics reads and write-approval
-  proposals.
+- simplified MCP wrappers for Goals and Fluffynomics reads, Goals metric
+  creation, and write-approval proposals.
 - allowlisted integration-action request resolution.
+- integration gateway rejection of unsafe direct paths, redaction of thrown
+  gateway errors and string response fields, and signed-token action/app scope
+  matching.
 - MCP-backed agent tool execution through the default runtime client.
 - MCP session expiration, tool allowlist rejection, and agent-tool argument
   validation.
@@ -61,6 +64,9 @@ Current tests cover:
   owner-initiated header rejection, and browser session refusal of caller
   supplied run ids.
 - local tool executor compatibility through `LocalToolClient`.
+- direct-owner-only physical-access actions executing from current owner
+  command surfaces while failing closed instead of queuing autonomous,
+  scheduled, or stale approvals.
 - frontend base-path helpers.
 - sign-in button behavior.
 - OAuth login redirect, callback failure handling, and callback session

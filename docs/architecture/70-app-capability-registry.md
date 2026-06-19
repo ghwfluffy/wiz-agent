@@ -64,10 +64,22 @@ The registry includes actions for:
 - reading a specific account;
 - reading net-worth history and forecast data;
 - recording owner-provided account value updates;
-- listing transfers, contracts, expenses, investments, and audit logs.
+- listing transfers, contracts, expenses, investments, and audit logs;
+- creating, updating, and deleting recurring contracts and projected expenses.
 
 Use Fluffynomics when the owner asks about accounts, balances, net worth,
 forecasts, bills, expenses, investments, transfers, or financial history.
+
+### Federated Services
+
+Federated Services is directory knowledge for the central authenticated
+launcher, account settings, app switching, registration-code management, user
+administration, and OAuth service administration.
+
+It has no agent-callable integration actions, no app API token, and no internal
+base URL setting in this registry. Use it only to tell the owner where shared
+account or app-launcher settings live. Do not claim the agent can edit shared
+identity or directory records unless a dedicated scoped API is added later.
 
 ### Apartment Gate
 
@@ -83,9 +95,9 @@ The registry includes Apartment Gate with a single high-risk write action:
 - direct execution is allowed for current authenticated owner commands from web
   chat, mobile voice, or owner-classified inbound messaging;
 - autonomous, scheduled, stale, or non-owner contexts must not execute physical
-  access actions;
+  access actions and must be rejected rather than queued for approval;
 - the agent must not open any other physical access points;
-- the agent must not request, store, summarize, or expose Gatewise credentials,
+- the agent must not request, store, summarize, or expose provider credentials,
   refresh tokens, API keys, or generated page source.
 
 ### Android Assistant

@@ -432,7 +432,7 @@ describe("approval and notification policy", () => {
     ]));
   });
 
-  it("executes approved apartment gate writes with a scoped signed token", async () => {
+  it("rejects approved apartment gate writes because they require a direct owner command", async () => {
     const { context, store, settings } = await testContext({
       DEV_USER_ID: "oauth:central-oauth:owner-subject",
       APARTMENT_GATE_API_BASE_URL: "https://gate.example.test",
@@ -451,18 +451,7 @@ describe("approval and notification policy", () => {
       expiresAt: new Date(Date.now() + 60_000).toISOString()
     });
     await store.updateApprovalStatus(context, approval.id, "approved", context.userId);
-    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe("https://gate.example.test/api/agent/open-right-gate");
-      expect(init?.method).toBe("POST");
-      const authorization = new Headers(init?.headers).get("authorization") ?? "";
-      const payload = JSON.parse(Buffer.from(authorization.split(".")[1] ?? "", "base64url").toString("utf8"));
-      expect(payload).toMatchObject({
-        aud: "apartment_gate",
-        scope: "apartment_gate.open_right_gate",
-        sub: "owner-subject"
-      });
-      return Response.json({ status: "opened" }, { status: 202 });
-    });
+    const fetchMock = vi.fn();
 
     const result = await executeApprovedCrossAppApproval({
       context,
@@ -473,13 +462,10 @@ describe("approval and notification policy", () => {
       fetchImpl: fetchMock
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
     expect(result).toMatchObject({
-      executionStatus: "succeeded",
-      executionResult: {
-        status: 202,
-        data: { status: "opened" }
-      }
+      executionStatus: "failed",
+      executionError: "direct_owner_command_required"
     });
   });
 
@@ -487,6 +473,7 @@ describe("approval and notification policy", () => {
     const { context, store, settings } = await testContext({ GOALS_API_BASE_URL: "https://goals.example.test" });
     const cases = [
       { action_id: "goals.list_goals", error: "integration_action_not_write" },
+      { action_id: "apartment_gate.open_right_gate", error: "direct_owner_command_required" },
       { action_id: "apartment_gate.open_gate", error: "unknown_integration_action" },
       { action_id: "not.registered", error: "unknown_integration_action" }
     ];

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import type { Settings } from "../config/settings.js";
 import type { RequestContext } from "../domain/types.js";
 import type { IntegrationApp, IntegrationTokenProvider } from "../tools/integrationGateway.js";
+import { getIntegrationAction, isIntegrationActionId } from "./capabilityRegistry.js";
 
 type TokenFile = {
   users?: Record<string, Partial<Record<IntegrationApp, string>>>;
@@ -52,6 +53,9 @@ export class SignedIntegrationTokenProvider implements IntegrationTokenProvider 
 
   async tokenFor(context: RequestContext, app: IntegrationApp, scope: string): Promise<string | undefined> {
     if (!this.settings.agentIntegrationTokenSecret) {
+      return undefined;
+    }
+    if (!isIntegrationActionId(scope) || getIntegrationAction(scope).app !== app) {
       return undefined;
     }
     const subject = centralSubjectFromContext(context);

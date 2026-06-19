@@ -436,18 +436,26 @@ sizes; and time out aggressively before article extraction or summarization.
 
 The agent understands other apps through the app capability registry in
 `api/src/integrations/capabilityRegistry.ts`. The registry currently covers
-Goals, Fluffynomics, and Apartment Gate. Goals and Fluffynomics expose
-agent-callable API actions, and Apartment Gate exposes one scoped high-risk
-action for the configured right gate. Cross-app calls go through a deterministic
-integration gateway:
+Goals, Fluffynomics, Federated Services, Android Assistant, and Apartment Gate.
+Goals and Fluffynomics expose agent-callable API actions, Federated Services
+and Android Assistant are directory-only entries with no agent API, and
+Apartment Gate exposes one scoped high-risk action for the configured right
+gate. Cross-app calls go through a deterministic integration gateway:
 
 - the model requests an allowed integration action;
 - the host chooses the target app and endpoint;
 - the host mints a short-lived user-scoped token for that app and action;
 - the token is never shown to the model;
 - requests include a user context header for downstream audit;
-- missing token signing configuration or non-OAuth users fail closed without
-  calling the target app.
+- signed tokens are minted only when the scope is a registered action for the
+  requested target app;
+- missing token signing configuration, non-OAuth users, mismatched action
+  scopes, invalid gateway paths, or unsafe direct URLs fail closed without
+  calling the target app;
+- integration response data and provider/client failure text are scrubbed for
+  bearer tokens, credential-like fields, cookies, session values, and URLs
+  before they can enter model-visible tool results or approval execution
+  records.
 
 Cross-app requests include `x-agent-user-id` only. They do not include a tenant
 context header.
@@ -457,27 +465,30 @@ app-specific aliases such as `goals_api`, `budget_api`, and
 `apartment_gate_api`.
 
 The `list_app_capabilities` MCP tool is read-only and returns the registry
-contents without credentials. The `integration_action` MCP tool is the only
-cross-app execution path and accepts only action ids registered in the
+contents without credentials. Simplified wrappers and the advanced
+`integration_action` MCP tool both resolve to action ids registered in the
 capability registry.
 
 Most model-facing app work should use simplified MCP wrapper tools instead of
 raw `integration_action`. Wrappers such as `list_goals`,
-`record_goal_metric_entry`, `list_budget_accounts`, `create_budget_contract`,
-and `create_budget_expense` provide task-shaped schemas and then map to the
-registered action ids internally. Read wrappers call app APIs through the
-integration gateway with scoped signed tokens. Write/delete wrappers execute
-immediately for authenticated owner-command surfaces such as web chat, mobile
-voice, and owner-classified inbound messages. Autonomous or scheduled write
-proposals queue `cross_app_write_action` approvals with the exact registered
-action id, path params, query, and body to execute after approval.
+`create_goal_metric`, `record_goal_metric_entry`, `list_budget_accounts`,
+`create_budget_contract`, and `create_budget_expense` provide task-shaped
+schemas and then map to the registered action ids internally. Read wrappers
+call app APIs through the integration gateway with scoped signed tokens.
+Write/delete wrappers execute immediately for authenticated owner-command
+surfaces such as web chat, mobile voice, and owner-classified inbound messages.
+Autonomous or scheduled write proposals queue `cross_app_write_action`
+approvals with the exact registered action id, path params, query, and body to
+execute after approval unless the registry marks the action direct-owner-only.
 
 The Apartment Gate open-right-gate action follows the same owner-command rule:
 a current authenticated owner request from web chat, mobile voice, or
 owner-classified inbound messaging executes through a scoped token immediately.
 Autonomous, scheduled, stale, or non-owner gate proposals must not execute and
 should not be converted into pending owner approvals for routine direct
-commands.
+commands. The approval executor also rechecks that direct-owner-only registry
+flag so stale or manually inserted physical-access approvals fail closed before
+fetching a target app.
 
 The registry is also a maintenance contract. When a future request adds or
 changes an omnisite app, app API, or major user-facing capability, update the

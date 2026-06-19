@@ -44,6 +44,7 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   update_goal: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   complete_goal_checklist_item: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   list_goal_metrics: { access: "read", risk: "low", sideEffect: "cross_app_api" },
+  create_goal_metric: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   record_goal_metric_entry: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   list_goal_notifications: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   complete_goal_notification: { access: "write", risk: "medium", sideEffect: "local_persistence" },

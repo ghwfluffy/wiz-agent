@@ -148,7 +148,8 @@ token, password, or raw recipient selectors.
 Approved cross-app writes are not MCP/model execution. They are host-owned
 worker executions that revalidate the stored action id and access level against
 the capability registry immediately before calling the integration gateway.
-Directory-only apps and read actions fail closed in this executor.
+Directory-only apps, read actions, and direct-owner-only actions fail closed in
+this executor.
 Stale running executions also fail closed instead of retrying automatically,
 because the worker cannot prove whether the external write happened before a
 local crash.

@@ -11,7 +11,13 @@ import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
 import { buildApp } from "../src/http/app.js";
-import { buildCapabilityContext, getIntegrationAction, listAppCapabilities } from "../src/integrations/capabilityRegistry.js";
+import {
+  buildCapabilityContext,
+  getIntegrationAction,
+  IntegrationActionIds,
+  listAppCapabilities,
+  listIntegrationActions
+} from "../src/integrations/capabilityRegistry.js";
 import { recordDecisionLedgerForToolCall } from "../src/memory/decisionLedger.js";
 import { PERSONAL_PROFILE_SLUG } from "../src/memory/personalMemory.js";
 import { buildMcpApp } from "../src/mcp/server.js";
@@ -164,6 +170,9 @@ describe("app capability registry", () => {
     const context = buildCapabilityContext();
 
     expect(apps.map((app) => app.id)).toEqual(["goals", "budget", "federated_services", "android_client", "apartment_gate"]);
+    expect(listIntegrationActions().map((action) => action.id).sort()).toEqual([...IntegrationActionIds].sort());
+    expect(apps.find((app) => app.id === "federated_services")?.actions).toEqual([]);
+    expect(apps.find((app) => app.id === "android_client")?.actions).toEqual([]);
     expect(context).toContain("Personal goal tracking");
     expect(context).toContain("Personal finance planning");
     expect(context).toContain("Central authenticated launcher");
@@ -172,12 +181,19 @@ describe("app capability registry", () => {
     expect(context).toContain("Federated-login protected mobile web app");
     expect(context).toContain("goals.record_metric_entry");
     expect(context).toContain("budget.get_net_worth_forecast");
+    expect(context).toContain("direct owner command only");
     expect(getIntegrationAction("budget.update_account_value")).toMatchObject({
       app: "budget",
       access: "write",
       risk: "high",
       method: "PUT",
       pathTemplate: "/accounts/:account_id/value"
+    });
+    expect(getIntegrationAction("apartment_gate.open_right_gate")).toMatchObject({
+      app: "apartment_gate",
+      access: "write",
+      risk: "high",
+      approvalMode: "direct_owner_only"
     });
   });
 
@@ -193,6 +209,7 @@ describe("app capability registry", () => {
         expect.objectContaining({ name: "list_app_capabilities", access: "read", sideEffect: "none" }),
         expect.objectContaining({ name: "list_goals", access: "read", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "create_goal", access: "write", sideEffect: "local_persistence" }),
+        expect.objectContaining({ name: "create_goal_metric", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "list_budget_accounts", access: "read", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "create_budget_contract", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "create_budget_expense", access: "write", sideEffect: "local_persistence" }),
@@ -1053,7 +1070,8 @@ describe("agent task execution", () => {
                 id: "apartment_gate.open_right_gate",
                 access: "write",
                 risk: "high",
-                method: "POST"
+                method: "POST",
+                approval_mode: "direct_owner_only"
               })
             ]
           })
@@ -1117,6 +1135,66 @@ describe("agent task execution", () => {
     );
   });
 
+  it("queues simplified Goals metric writes for approval", async () => {
+    const { context, store } = await testContext();
+    const app = buildMcpApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      store
+    });
+    const session = await store.createAgentMcpSession(context, {
+      ttlSeconds: 60,
+      allowedTools: ["create_goal_metric"]
+    });
+
+    const response = await app.request("/mcp/v1/tools/create_goal_metric/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        name: "Weight",
+        metricType: "number",
+        decimalPlaces: 1,
+        unitLabel: "lb",
+        updateType: "manual",
+        reminderTimes: ["08:00"],
+        initialNumberValue: 185.4,
+        userIntentSummary: "Track body weight as a goal metric."
+      })
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      tool: "create_goal_metric",
+      sideEffect: "local_persistence",
+      result: {
+        status: "queued_approval",
+        approval_required: true,
+        action_id: "goals.create_metric"
+      }
+    });
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([
+      expect.objectContaining({
+        actionType: "cross_app_write_action",
+        sourceRef: "goals.create_metric",
+        proposedPayload: expect.objectContaining({
+          action_id: "goals.create_metric",
+          body: expect.objectContaining({
+            name: "Weight",
+            metric_type: "number",
+            decimal_places: 1,
+            unit_label: "lb",
+            update_type: "manual",
+            reminder_times: ["08:00"],
+            initial_number_value: 185.4
+          })
+        })
+      })
+    ]);
+  });
+
   it("queues simplified budget contract and expense writes for approval", async () => {
     const { context, store } = await testContext();
     const app = buildMcpApp({
@@ -1125,7 +1203,7 @@ describe("agent task execution", () => {
     });
     const session = await store.createAgentMcpSession(context, {
       ttlSeconds: 60,
-      allowedTools: ["create_budget_contract", "create_budget_expense"]
+      allowedTools: ["create_budget_contract", "update_budget_contract", "create_budget_expense"]
     });
 
     const contractResponse = await app.request("/mcp/v1/tools/create_budget_contract/call", {
@@ -1148,6 +1226,22 @@ describe("agent task execution", () => {
     });
     expect(contractResponse.status).toBe(200);
 
+    const contractUpdateResponse = await app.request("/mcp/v1/tools/update_budget_contract/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        contractId: "contract-codex",
+        type: "income",
+        amountCents: 21000,
+        notes: "Price changed.",
+        userIntentSummary: "Update the monthly Codex amount."
+      })
+    });
+    expect(contractUpdateResponse.status).toBe(200);
+
     const expenseResponse = await app.request("/mcp/v1/tools/create_budget_expense/call", {
       method: "POST",
       headers: {
@@ -1165,6 +1259,17 @@ describe("agent task execution", () => {
     });
     expect(expenseResponse.status).toBe(200);
 
+    const approvals = await store.listApprovals(context, ["pending"]);
+    const contractUpdate = approvals.find((approval) => approval.sourceRef === "budget.update_contract");
+    expect(contractUpdate?.proposedPayload).toEqual(expect.objectContaining({
+      action_id: "budget.update_contract",
+      path_params: { contract_id: "contract-codex" },
+      body: expect.objectContaining({
+        amount_cents: 21000,
+        notes: "Price changed."
+      })
+    }));
+    expect(contractUpdate?.proposedPayload.body).not.toHaveProperty("type");
     await expect(store.listApprovals(context, ["pending"])).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
         actionType: "cross_app_write_action",
@@ -1196,7 +1301,7 @@ describe("agent task execution", () => {
     ]));
   });
 
-  it("does not trust caller-supplied owner-initiated MCP headers", async () => {
+  it("rejects direct-owner-only app actions when MCP callers are not owner initiated", async () => {
     const { context, store } = await testContext();
     const fetchMock = vi.fn(async () => Response.json({ status: "opened" }, { status: 202 }));
     const app = buildMcpApp({
@@ -1233,15 +1338,16 @@ describe("agent task execution", () => {
     expect(response.status).toBe(200);
     expect(fetchMock).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
-      ok: true,
-      sideEffect: "local_persistence",
+      ok: false,
+      sideEffect: "none",
       result: {
-        status: "queued_approval",
-        approval_required: true,
+        rejected: true,
+        reason: "direct_owner_command_required",
+        approval_required: false,
         action_id: "apartment_gate.open_right_gate"
       }
     });
-    await expect(store.listApprovals(context, ["pending"])).resolves.toHaveLength(1);
+    await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
   });
 
   it("records a failed tool call when the MCP boundary rejects execution", async () => {

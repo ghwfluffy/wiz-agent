@@ -49,10 +49,10 @@ function compactPayload(payload: Record<string, unknown>): Record<string, unknow
   return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
 }
 
-function budgetContractPayload(args: Record<string, unknown>): Record<string, unknown> {
+function budgetContractPayload(args: Record<string, unknown>, options: { includeType?: boolean } = {}): Record<string, unknown> {
   return compactPayload({
     name: args.name,
-    type: args.type,
+    type: options.includeType === true ? args.type : undefined,
     automatic: args.automatic,
     amount_cents: args.amountCents,
     organization: args.organization,
@@ -143,6 +143,7 @@ export async function executeToolCall(options: {
       summary: string;
     }
   ): Promise<ToolExecutionResult> => {
+    const action = getIntegrationAction(actionId);
     if (ownerInitiated) {
       if (!options.settings || !options.integrationTokenProvider) {
         return {
@@ -175,6 +176,18 @@ export async function executeToolCall(options: {
           action_id: actionId
         } : {
           reason: result.reason,
+          approval_required: false,
+          action_id: actionId
+        }
+      };
+    }
+    if (action.approvalMode === "direct_owner_only") {
+      return {
+        executed: false,
+        sideEffect: "none",
+        result: {
+          rejected: true,
+          reason: "direct_owner_command_required",
           approval_required: false,
           action_id: actionId
         }
@@ -552,7 +565,8 @@ export async function executeToolCall(options: {
             purpose: action.purpose,
             when_to_use: action.whenToUse,
             safety: action.safety,
-            response_use: action.responseUse
+            response_use: action.responseUse,
+            approval_mode: action.approvalMode ?? "queue_for_approval"
           })) : []
         }));
       return {
@@ -621,6 +635,21 @@ export async function executeToolCall(options: {
       return callReadIntegration("goals.list_metrics", {
         query: { include_archived: options.args.includeArchived === true }
       });
+    case "create_goal_metric":
+      return executeOrQueueWriteIntegration("goals.create_metric", {
+        body: compactPayload({
+          name: options.args.name,
+          metric_type: options.args.metricType,
+          decimal_places: options.args.decimalPlaces,
+          unit_label: options.args.unitLabel,
+          update_type: options.args.updateType,
+          reminder_times: options.args.reminderTimes,
+          initial_number_value: options.args.initialNumberValue,
+          initial_date_value: options.args.initialDateValue,
+          recorded_at: options.args.recordedAt
+        }),
+        summary: String(options.args.userIntentSummary)
+      });
     case "record_goal_metric_entry":
       return executeOrQueueWriteIntegration("goals.record_metric_entry", {
         pathParams: { metric_id: String(options.args.metricId) },
@@ -633,7 +662,10 @@ export async function executeToolCall(options: {
       });
     case "list_goal_notifications":
       return callReadIntegration("goals.list_notifications", {
-        query: { timezone: String(options.args.timezone) }
+        query: compactPayload({
+          timezone: options.args.timezone,
+          include_completed: options.args.includeCompleted === true ? true : undefined
+        }) as Record<string, string | number | boolean>
       });
     case "complete_goal_notification":
       return executeOrQueueWriteIntegration("goals.complete_notification", {
@@ -669,7 +701,7 @@ export async function executeToolCall(options: {
       return callReadIntegration("budget.list_contracts");
     case "create_budget_contract":
       return executeOrQueueWriteIntegration("budget.create_contract", {
-        body: budgetContractPayload(options.args),
+        body: budgetContractPayload(options.args, { includeType: true }),
         summary: String(options.args.userIntentSummary)
       });
     case "update_budget_contract":
