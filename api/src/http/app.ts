@@ -1343,8 +1343,14 @@ export function buildApp(options: AppOptions = {}): Hono {
         400
       );
     }
+    if (payload?.runId !== undefined) {
+      return context.json(
+        errorPayload("validation_error", "Browser-created MCP sessions cannot be bound to agent runs.", authContext.requestId),
+        400
+      );
+    }
     const session = await store.createAgentMcpSession(authContext, {
-      runId: typeof payload?.runId === "string" ? payload.runId : null,
+      runId: null,
       ttlSeconds: typeof payload?.ttlSeconds === "number" ? payload.ttlSeconds : undefined,
       allowedTools: webMcpSessionTools
     });

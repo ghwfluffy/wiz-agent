@@ -936,6 +936,42 @@ describe("agent task execution", () => {
     });
     expect(expiredResponse.status).toBe(401);
 
+    const otherSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "other-user",
+      DEV_USER_EMAIL: "other@example.test"
+    });
+    const otherSession = await store.createDevelopmentSession(otherSettings, "other-login");
+    const otherContext: RequestContext = {
+      userId: otherSession.user.id,
+      actorType: "user",
+      permissions: ["user"],
+      requestId: "other-request",
+      session: otherSession
+    };
+    const otherRun = await store.createAgentRun(otherContext, {
+      status: "running",
+      modelTier: "fast",
+      modelId: "test-model",
+      promptVersion: "test"
+    });
+    const mismatchedRunSession = await store.createAgentMcpSession(context, {
+      ttlSeconds: 60,
+      runId: otherRun.id,
+      allowedTools: ["list_ongoing_tasks"]
+    });
+    const mismatchedRun = await app.request("/mcp/v1/tools/list_ongoing_tasks/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${mismatchedRunSession.token}`,
+        "x-agent-run-id": otherRun.id,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({})
+    });
+    expect(mismatchedRun.status).toBe(401);
+
     const session = await store.createAgentMcpSession(context, {
       ttlSeconds: 60,
       allowedTools: ["list_ongoing_tasks"]
@@ -1158,6 +1194,54 @@ describe("agent task execution", () => {
         })
       })
     ]));
+  });
+
+  it("does not trust caller-supplied owner-initiated MCP headers", async () => {
+    const { context, store } = await testContext();
+    const fetchMock = vi.fn(async () => Response.json({ status: "opened" }, { status: 202 }));
+    const app = buildMcpApp({
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "standalone",
+        APARTMENT_GATE_API_BASE_URL: "https://gate.example.test",
+        AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+      }),
+      store,
+      integrationTokenProvider: { tokenFor: async () => "test-token" },
+      fetchImpl: fetchMock as unknown as typeof fetch
+    });
+    const session = await store.createAgentMcpSession(context, {
+      ttlSeconds: 60,
+      allowedTools: ["integration_action"]
+    });
+
+    const response = await app.request("/mcp/v1/tools/integration_action/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "x-agent-owner-initiated": "true",
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        actionId: "apartment_gate.open_right_gate",
+        pathParams: {},
+        query: {},
+        userIntentSummary: "Open the apartment gate for the owner."
+      })
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      sideEffect: "local_persistence",
+      result: {
+        status: "queued_approval",
+        approval_required: true,
+        action_id: "apartment_gate.open_right_gate"
+      }
+    });
+    await expect(store.listApprovals(context, ["pending"])).resolves.toHaveLength(1);
   });
 
   it("records a failed tool call when the MCP boundary rejects execution", async () => {
@@ -2585,7 +2669,8 @@ describe("agent task execution", () => {
       settings,
       store,
       integrationTokenProvider: { tokenFor: async () => "test-token" },
-      fetchImpl: fetchMock as unknown as typeof fetch
+      fetchImpl: fetchMock as unknown as typeof fetch,
+      ownerInitiated: true
     });
 
     const result = await runAgentTask({
@@ -2898,6 +2983,19 @@ describe("agent task execution", () => {
     expect(session.allowedTools).toContain("read_file");
     expect(session.allowedTools).not.toContain("create_task");
 
+    const runBoundSessionResponse = await app.request("/api/v1/agent/mcp-sessions", {
+      method: "POST",
+      headers: {
+        cookie,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ ttlSeconds: 60, runId: "browser-supplied-run" })
+    });
+    expect(runBoundSessionResponse.status).toBe(400);
+    await expect(runBoundSessionResponse.json()).resolves.toMatchObject({
+      error: { code: "validation_error" }
+    });
+
     const readOnly = await mcp.request("/mcp/v1/tools/list_dir/call", {
       method: "POST",
       headers: {
@@ -2907,6 +3005,19 @@ describe("agent task execution", () => {
       body: JSON.stringify({ path: "/" })
     });
     expect(readOnly.status).toBe(200);
+
+    const forbiddenSelector = await mcp.request("/mcp/v1/tools/list_dir/call", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({ path: "/", userId: "other-user" })
+    });
+    expect(forbiddenSelector.status).toBe(400);
+    await expect(forbiddenSelector.json()).resolves.toMatchObject({
+      error: { code: "mcp_validation_failed" }
+    });
 
     const forbidden = await mcp.request("/mcp/v1/tools/create_task/call", {
       method: "POST",

@@ -56,6 +56,10 @@ Current tests cover:
 - MCP-backed agent tool execution through the default runtime client.
 - MCP session expiration, tool allowlist rejection, and agent-tool argument
   validation.
+- MCP run/user mismatch rejection, malformed stored allowlist fail-closed
+  behavior, forbidden scope/recipient selector rejection, spoofed
+  owner-initiated header rejection, and browser session refusal of caller
+  supplied run ids.
 - local tool executor compatibility through `LocalToolClient`.
 - frontend base-path helpers.
 - sign-in button behavior.

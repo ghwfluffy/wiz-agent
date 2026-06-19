@@ -9,6 +9,7 @@ export type RequestContext = {
   requestId: string;
   session: Session;
   mcpAllowedTools?: string[] | null;
+  mcpRunId?: string | null;
 };
 
 export type TaskRecord = {

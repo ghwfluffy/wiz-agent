@@ -48,6 +48,33 @@ describe("postgres store", () => {
 
     expect(session.allowedTools).toEqual(["create_task", "list_tasks"]);
     const insert = calls.find((call) => call.sql.includes("INSERT INTO agent_mcp_sessions"));
+    expect(insert?.values?.[1]).not.toBe(session.token);
+    expect(String(insert?.values?.[1])).toMatch(/^[a-f0-9]{64}$/);
     expect(insert?.values?.[4]).toBe(JSON.stringify(["create_task", "list_tasks"]));
+  });
+
+  it("fails closed when stored MCP allowed_tools_json is malformed", async () => {
+    const pool = {
+      async query(sql: string) {
+        if (sql.includes("FROM agent_mcp_sessions")) {
+          return {
+            rows: [{
+              id: "mcp-session-1",
+              user_id: "owner",
+              run_id: null,
+              allowed_tools_json: { tool: "create_task" },
+              expires_at: new Date(Date.now() + 60_000)
+            }],
+            rowCount: 1
+          };
+        }
+        return { rows: [], rowCount: 0 };
+      }
+    } as unknown as Pool;
+    const store = createPostgresStore(pool);
+
+    const context = await store.resolveAgentMcpSession("raw-token");
+
+    expect(context?.mcpAllowedTools).toEqual([]);
   });
 });

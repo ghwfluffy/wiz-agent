@@ -395,15 +395,21 @@ describe("MCP markdown tools", () => {
     });
     expect(missingAuth.status).toBe(401);
 
+    const run = await store.createAgentRun(context, {
+      status: "running",
+      modelTier: "fast",
+      modelId: "test-model",
+      promptVersion: "test"
+    });
     const session = await store.createAgentMcpSession(context, {
-      runId: "run-1",
+      runId: run.id,
       ttlSeconds: 60
     });
     const write = await app.request("/mcp/v1/tools/write_file", {
       method: "POST",
       headers: {
         authorization: `Bearer ${session.token}`,
-        "x-agent-run-id": "run-1",
+        "x-agent-run-id": run.id,
         "content-type": "application/json"
       },
       body: JSON.stringify({
@@ -412,7 +418,25 @@ describe("MCP markdown tools", () => {
         userId: "other"
       })
     });
-    expect(write.status).toBe(200);
+    expect(write.status).toBe(400);
+    await expect(write.json()).resolves.toMatchObject({
+      error: { code: "mcp_validation_failed" }
+    });
+    await expect(store.getMarkdownDocument(context, "/assistant/notification-policy.md")).resolves.toBeUndefined();
+
+    const validWrite = await app.request("/mcp/v1/tools/write_file", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "x-agent-run-id": run.id,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        path: "/assistant/notification-policy.md",
+        content: "# Notification Policy\nUse discretion."
+      })
+    });
+    expect(validWrite.status).toBe(200);
     await expect(store.getMarkdownDocument(context, "/assistant/notification-policy.md")).resolves.toMatchObject({
       userId: "owner",
       version: 1
@@ -486,13 +510,19 @@ describe("MCP markdown tools", () => {
       settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
       store
     });
+    const run = await store.createAgentRun(context, {
+      status: "running",
+      modelTier: "fast",
+      modelId: "test-model",
+      promptVersion: "test"
+    });
     const session = await store.createAgentMcpSession(context, {
-      runId: "run-lists",
+      runId: run.id,
       ttlSeconds: 60
     });
     const headers = {
       authorization: `Bearer ${session.token}`,
-      "x-agent-run-id": "run-lists",
+      "x-agent-run-id": run.id,
       "content-type": "application/json"
     };
 
@@ -644,13 +674,19 @@ describe("MCP markdown tools", () => {
       settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
       store
     });
+    const ownerRun = await store.createAgentRun(owner, {
+      status: "running",
+      modelTier: "fast",
+      modelId: "test-model",
+      promptVersion: "test"
+    });
     const ownerSession = await store.createAgentMcpSession(owner, {
-      runId: "run-owner-lists",
+      runId: ownerRun.id,
       ttlSeconds: 60
     });
     const ownerHeaders = {
       authorization: `Bearer ${ownerSession.token}`,
-      "x-agent-run-id": "run-owner-lists",
+      "x-agent-run-id": ownerRun.id,
       "content-type": "application/json"
     };
 
@@ -674,15 +710,21 @@ describe("MCP markdown tools", () => {
     });
     await expect(store.getMarkdownDocument(other, "/personal/lists/restaurants.md")).resolves.toBeUndefined();
 
+    const otherRun = await store.createAgentRun(other, {
+      status: "running",
+      modelTier: "fast",
+      modelId: "test-model",
+      promptVersion: "test"
+    });
     const otherMcpSession = await store.createAgentMcpSession(other, {
-      runId: "run-other-lists",
+      runId: otherRun.id,
       ttlSeconds: 60
     });
     const otherList = await app.request("/mcp/v1/tools/list_memory_items/call", {
       method: "POST",
       headers: {
         authorization: `Bearer ${otherMcpSession.token}`,
-        "x-agent-run-id": "run-other-lists",
+        "x-agent-run-id": otherRun.id,
         "content-type": "application/json"
       },
       body: JSON.stringify({

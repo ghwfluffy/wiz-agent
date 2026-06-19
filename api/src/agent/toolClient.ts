@@ -7,6 +7,7 @@ import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { executeToolCall, type ToolExecutionResult } from "../tools/toolExecutor.js";
 import { agentToolNames } from "../tools/registry.js";
 import { GuardrailExceededError } from "../security/safetyPolicy.js";
+import { validateToolArguments } from "../tools/validator.js";
 
 export type AgentToolClientExecuteInput = {
   context: RequestContext;
@@ -30,13 +31,17 @@ export type AgentToolClient = {
 export class LocalToolClient implements AgentToolClient {
   async execute(input: AgentToolClientExecuteInput): Promise<ToolExecutionResult> {
     throwIfAborted(input.signal);
+    const validated = validateToolArguments(input.toolName, input.args);
+    if (!validated.ok) {
+      throw new Error(`Tool arguments failed validation: ${validated.validationErrors.join("; ")}`);
+    }
     return executeToolCall({
       context: input.context,
       store: input.store,
       runId: input.runId,
       taskId: input.taskId ?? null,
       toolName: input.toolName,
-      args: input.args,
+      args: validated.arguments,
       settings: input.settings,
       integrationTokenProvider: input.integrationTokenProvider,
       fetchImpl: input.fetchImpl,
@@ -95,12 +100,6 @@ export class McpToolClient implements AgentToolClient {
       "x-agent-run-id": input.runId,
       "content-type": "application/json"
     };
-    if (input.taskId) {
-      headers["x-agent-task-id"] = input.taskId;
-    }
-    if (input.ownerInitiated === true) {
-      headers["x-agent-owner-initiated"] = "true";
-    }
     const init = {
       method: "POST",
       headers,

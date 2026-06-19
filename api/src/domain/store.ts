@@ -617,6 +617,43 @@ function isMarkdownConflict(value: unknown): value is MarkdownConflict {
   return typeof value === "object" && value !== null && (value as { code?: unknown }).code === "conflict";
 }
 
+function normalizeAllowedTools(value: readonly string[] | null | undefined): string[] | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const normalized: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) {
+      throw new Error("MCP allowedTools must be an array of non-empty strings.");
+    }
+    const tool = item.trim();
+    if (!normalized.includes(tool)) {
+      normalized.push(tool);
+    }
+  }
+  return normalized;
+}
+
+function allowedToolsFromStoredJson(value: unknown): string[] | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const normalized: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string" || !item.trim()) {
+      return [];
+    }
+    const tool = item.trim();
+    if (!normalized.includes(tool)) {
+      normalized.push(tool);
+    }
+  }
+  return normalized;
+}
+
 function contextForAgentSession(session: AgentMcpSession): RequestContext {
   return {
     userId: session.userId,
@@ -634,7 +671,8 @@ function contextForAgentSession(session: AgentMcpSession): RequestContext {
       createdAt: nowIso(),
       expiresAt: session.expiresAt
     },
-    mcpAllowedTools: session.allowedTools
+    mcpAllowedTools: session.allowedTools,
+    mcpRunId: session.runId
   };
 }
 
@@ -2113,6 +2151,7 @@ export function createPostgresStore(pool: Pool): AgentStore {
     },
 
     async createAgentMcpSession(context, input) {
+      const allowedTools = normalizeAllowedTools(input.allowedTools);
       const token = randomUUID();
       const expiresAt = new Date(Date.now() + (input.ttlSeconds ?? 900) * 1000).toISOString();
       const id = randomUUID();
@@ -2124,15 +2163,15 @@ export function createPostgresStore(pool: Pool): AgentStore {
           hashSessionToken(token),
           context.userId,
           input.runId ?? null,
-          input.allowedTools ? JSON.stringify(input.allowedTools) : null,
+          allowedTools === null ? null : JSON.stringify(allowedTools),
           expiresAt
         ]
       );
       await recordAudit(pool, context, "mcp.session.create", "agent_mcp_session", id, {
         run_id: input.runId ?? null,
-        allowed_tools: input.allowedTools ?? null
+        allowed_tools: allowedTools
       });
-      return { id, token, userId: context.userId, runId: input.runId ?? null, expiresAt, allowedTools: input.allowedTools ?? null };
+      return { id, token, userId: context.userId, runId: input.runId ?? null, expiresAt, allowedTools };
     },
 
     async resolveAgentMcpSession(token, runId) {
@@ -2158,10 +2197,19 @@ export function createPostgresStore(pool: Pool): AgentStore {
         userId: String(row.user_id),
         runId: row.run_id ? String(row.run_id) : null,
         expiresAt: row.expires_at instanceof Date ? row.expires_at.toISOString() : String(row.expires_at),
-        allowedTools: Array.isArray(row.allowed_tools_json) ? row.allowed_tools_json.map(String) : null
+        allowedTools: allowedToolsFromStoredJson(row.allowed_tools_json)
       };
       if (session.runId && session.runId !== runId) {
         return undefined;
+      }
+      if (session.runId) {
+        const runResult = await pool.query(
+          `SELECT 1 FROM agent_runs WHERE id = $1 AND user_id = $2 LIMIT 1`,
+          [session.runId, session.userId]
+        );
+        if (runResult.rowCount === 0) {
+          return undefined;
+        }
       }
       return contextForAgentSession(session);
     },
@@ -3714,13 +3762,14 @@ export function createMemoryStore(): AgentStore {
       ragHealth.set(userId, record);
     },
     async createAgentMcpSession(context, input) {
+      const allowedTools = normalizeAllowedTools(input.allowedTools);
       const session: AgentMcpSession = {
         id: randomUUID(),
         token: randomUUID(),
         userId: context.userId,
         runId: input.runId ?? null,
         expiresAt: new Date(Date.now() + (input.ttlSeconds ?? 900) * 1000).toISOString(),
-        allowedTools: input.allowedTools ?? null
+        allowedTools
       };
       agentMcpSessions.set(session.token, session);
       pushAudit(context, "mcp.session.create", "agent_mcp_session", session.id, {
@@ -3739,6 +3788,12 @@ export function createMemoryStore(): AgentStore {
       }
       if (session.runId && session.runId !== runId) {
         return undefined;
+      }
+      if (session.runId) {
+        const run = runs.get(session.runId);
+        if (!run || run.userId !== session.userId) {
+          return undefined;
+        }
       }
       return contextForAgentSession(session);
     },

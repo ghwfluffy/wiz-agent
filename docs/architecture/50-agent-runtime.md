@@ -153,8 +153,8 @@ Accepted tool calls execute through the server-owned MCP boundary by default:
    explicit allowlist of agent tool names;
 3. the runtime sends the validated call to `POST /mcp/v1/tools/:tool/call`;
 4. MCP resolves the bearer token server-side, rejects expired, mismatched-run,
-   or disallowed-tool sessions, validates arguments, executes host-owned logic,
-   and writes MCP audit events;
+   foreign-run, or disallowed-tool sessions, validates arguments, executes
+   host-owned logic, and writes MCP audit events;
 5. the runtime records the accepted or rejected tool-call result on the agent
    run.
 
@@ -166,7 +166,9 @@ Authenticated browser sessions can request MCP tokens for operator-console
 memory browsing, but those sessions are restricted to read-only memory and
 search tools. Decision tools such as `create_task`, `write_memory`,
 `propose_outbound_message`, and `integration_action` are only minted through
-run-bound agent sessions.
+run-bound agent sessions. Browser-created MCP sessions are always unbound from
+agent runs; the browser may choose a TTL within the host cap but cannot provide
+a run id or widen the allowlist.
 
 Current migrated agent tools:
 
@@ -460,9 +462,14 @@ The Phase 01 MCP boundary exposes long-term memory as a virtual markdown
 filesystem. API or worker host code creates a short-lived `agent_mcp_sessions`
 row for a specific user and optional agent run. The MCP service receives only
 the opaque bearer token, resolves user/run scope server-side, and rejects
-missing, expired, revoked, or mismatched-run sessions. Tool arguments must not
-include user IDs, tenant IDs, collection names, connector credentials, or raw
-recipient information.
+missing, expired, revoked, mismatched-run, or foreign-run sessions. When a
+session is run-bound, the run id used for execution and audit is the resolved
+server-side session run id, not a caller-supplied value beyond the
+`X-Agent-Run-Id` proof required to use that token. Caller-supplied owner/task
+authority headers are not trusted; owner-initiated state and task context come
+from host-owned runtime wiring. Tool arguments must not include user IDs,
+tenant IDs, collection names, connector credentials, bearer tokens, passwords,
+or raw recipient information.
 
 Initial MCP memory/RAG tools are:
 
@@ -477,7 +484,10 @@ tool call records an audit event with the resolved user, tool name, optional run
 id, path when supplied, side-effect classification, and outcome. Markdown writes
 update source rows, parse sections, and enqueue RAG index jobs. RAG indexing
 remains a deterministic host concern; the model never receives or supplies
-Qdrant collection names.
+Qdrant collection names. MCP validates both migrated agent tool contracts and
+memory/RAG tool argument schemas at the boundary; invalid or forbidden
+scope-selector arguments return the stable MCP error envelope and are audited
+as rejected when a session has resolved.
 
 ## Host-Owned Controls
 

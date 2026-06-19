@@ -114,9 +114,15 @@ health metadata. Local Compose binds Qdrant to `127.0.0.1` by default; productio
 network exposure is owned by the root deployment repository and should not make
 Qdrant publicly reachable.
 
-MCP sessions remain short-lived, user/run scoped, and allowlisted. Browser MCP
-sessions are limited to read-only memory/search tools. Agent-created MCP
-sessions are tied to one run and the host-selected tool allowlist.
+MCP sessions remain short-lived, user/run scoped, and allowlisted. Stored
+allowlists must be JSON arrays of non-empty tool names; malformed stored
+allowlists fail closed instead of becoming unrestricted. Browser MCP sessions
+are limited to read-only memory/search tools and cannot be bound to caller
+supplied run ids. Agent-created MCP sessions are tied to one user-owned run and
+the host-selected tool allowlist. MCP execution/audit uses the run id resolved
+from the session, validates memory/RAG and migrated agent-tool arguments at the
+boundary, and rejects caller-supplied user, tenant, collection, credential,
+token, password, or raw recipient selectors.
 
 Approved cross-app writes are not MCP/model execution. They are host-owned
 worker executions that revalidate the stored action id and access level against

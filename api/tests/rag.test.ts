@@ -321,7 +321,7 @@ describe("MCP semantic search", () => {
       qdrant,
       embeddings: new MockEmbeddingClient()
     });
-    const response = await app.request("/mcp/v1/tools/search_semantic", {
+    const forbiddenSelector = await app.request("/mcp/v1/tools/search_semantic", {
       method: "POST",
       headers: {
         authorization: `Bearer ${session.token}`,
@@ -332,6 +332,23 @@ describe("MCP semantic search", () => {
         pathPrefix: "/projects",
         limit: 10,
         userId: "other"
+      })
+    });
+    expect(forbiddenSelector.status).toBe(400);
+    await expect(forbiddenSelector.json()).resolves.toMatchObject({
+      error: { code: "mcp_validation_failed" }
+    });
+
+    const response = await app.request("/mcp/v1/tools/search_semantic", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${session.token}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        query: "launch",
+        pathPrefix: "/projects",
+        limit: 10
       })
     });
 
