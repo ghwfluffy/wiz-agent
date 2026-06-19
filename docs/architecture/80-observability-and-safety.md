@@ -5,9 +5,23 @@ without moving ownership of policy, credentials, or side effects to the model.
 
 ## Status Surfaces
 
+`GET /api/v1/status` is an unauthenticated readiness/status surface. It returns
+the app/version plus safe configuration status labels only: environment,
+auth mode, whether an app base path is configured, whether the session cookie is
+scoped when a base path exists, outbound delivery enabled/disabled state,
+optional integration status, and production-safety issue codes. It must not
+return configured public URLs, app base-path values, integration base URLs,
+connector hosts, or secret paths. Missing optional integrations are reported as
+`missing_optional`; configured cross-app integration URLs without token signing
+are reported as misconfigured so operators can distinguish absent optional apps
+from unsafe or nonfunctional production wiring.
+
 Authenticated users can call `GET /api/v1/jobs` for their own operational
 status. Administrators can call `GET /api/v1/admin/jobs` for the same shape
-with admin-scoped audit, run, tool-call, and RAG visibility.
+with admin-scoped task, connector, outbox, approval, audit, run, tool-call, and
+RAG visibility. Admin aggregation still returns bounded counts and redacted
+summaries rather than connector secrets, recipient addresses, raw tool
+arguments/results, or integration URLs.
 
 Authenticated users can also call `GET /api/v1/dashboard` for the owner
 command-center summary used by the Overview tab. The endpoint is read-only,
@@ -23,11 +37,18 @@ connector passwords, MCP bearer tokens, raw tool-call arguments/results, or
 deployment-owned host/secret values. Outbound summaries omit recipient
 addresses; memory snippets skip credential-like lines before display.
 
-The response includes:
+The jobs response includes:
 
 - API status and recent audit time.
 - Worker tick, task-runner, inbound mailbox, outbox, approval, MCP/tool, RAG
   index, and Qdrant collection rows.
+- Safe configuration and connector-health summaries, including incomplete
+  enabled IMAP/SMTP/owner-contact connectors without returning hostnames,
+  usernames, passwords, base URLs, or secret refs.
+- Stale-state counts for claimed/running tasks, running agent runs, sending
+  outbox messages, expired pending approvals, and running cross-app approval
+  executions. These counts correspond to worker recovery behavior and let
+  operators see stuck state before or after recovery.
 - Host-owned run budgets: max agent runs per user per short burst window,
   autonomous runs per worker tick, max tool calls per run, max runtime seconds,
   repair attempts, autonomous/proactive owner-visible outbound messages per
@@ -37,6 +58,8 @@ The response includes:
   TTL.
 - Recent failed agent runs, rejected or failed tool calls, and failed/dead RAG
   index jobs.
+- Recent worker connector failures, approval execution failures, and worker
+  recovery events.
 - Recent `guardrail.exceeded` audit events and a `runaway-guardrails` job row.
 - RAG user index health rows with expected document/chunk counts and Qdrant
   point count when the RAG worker has reconciled it.
@@ -116,7 +139,11 @@ IDs, collection names, or retry timing.
 Operational endpoints expose state that is already user-owned or admin-owned;
 they do not expose connector passwords, raw credential references, MCP bearer
 tokens, or secret file contents. Connector reads continue to redact IMAP/SMTP
-passwords.
+passwords. Audit/log endpoints return sanitized details: secret-like keys are
+redacted, bearer tokens and credential assignments are scrubbed, URLs are
+replaced with `[url]`, arrays and nested objects are bounded, and long strings
+are capped before display. Worker and RAG-worker JSON logs use the same
+operator boundary for provider exception text.
 
 Memory change diffs follow the same boundary. They may show owner-visible
 markdown content, but credential-like assignments on lines containing password,

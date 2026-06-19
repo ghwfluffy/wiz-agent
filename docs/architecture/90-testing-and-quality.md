@@ -28,7 +28,8 @@ Current tests cover:
   ingestion, time advancement, worker ticks, staged model tool calls, and
   memory/task/outbox/approval/decision/thread assertions.
 - API config loading.
-- status route.
+- status route with safe configuration summaries that do not expose base-path
+  values or integration URLs.
 - standalone development auto-login.
 - core schema table coverage.
 - API error envelope.
@@ -128,12 +129,14 @@ Current tests cover:
 - operations dashboard rendering.
 - personal dashboard insight API coverage for user scoping, active tasks,
   approvals, decisions, feedback, memory changes, threads, contact cadence,
-  personal lists, guardrail/failed-run visibility, and omission of connector
-  secrets or outbound recipients.
+  personal lists, guardrail/failed-run visibility, worker/RAG/approval
+  execution failure visibility, and omission of connector secrets, integration
+  URLs, or outbound recipients.
 - personal dashboard Overview rendering with representative dense insight
   sections, memory provenance summaries, and compact empty-state behavior.
-- operational jobs visibility, budget exposure, RAG failure listing, and manual
-  RAG retry audit.
+- operational jobs visibility, admin all-user aggregation, budget exposure,
+  connector completeness summaries, stale worker-state counts, redacted
+  connector/approval/RAG failure listing, and manual RAG retry audit.
 - runaway guardrails for burst-window agent runs, per-run MCP/tool calls,
   owner-visible outbound proposal caps, bounded scheduled worker claims,
   non-secret guardrail audit details, and Jobs/Workers budget visibility.

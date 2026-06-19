@@ -33,10 +33,11 @@ friendly message and removes it from the URL.
 The Overview tab is backed by `GET /api/v1/dashboard`, a read-only owner-scoped
 insight aggregate. It summarizes active tasks, pending approvals, recent
 decision and feedback notes, recent memory changes, active threads, contact
-cadence, personal list counts, guardrail trips, failed runs/tool calls, and
-failed outbound delivery. The endpoint derives those panels from existing
-source records and does not return connector credentials, MCP tokens, raw
-tool-call payloads, or outbound recipient addresses.
+cadence, personal list counts, guardrail trips, failed runs/tool calls, failed
+outbound delivery, worker problems/recoveries, RAG indexing failures, and
+failed cross-app approval executions. The endpoint derives those panels from
+existing source records and does not return connector credentials, MCP tokens,
+raw tool-call payloads, integration URLs, or outbound recipient addresses.
 
 Markdown memory writes include audit-backed provenance metadata. The agent
 should pass `sourceKind`, `confidence`, `evidence`, and `durability` when it
@@ -178,14 +179,18 @@ it through the Memory tab or:
 GET /api/v1/knowledge/files/%2Fassistant%2Fdecisions%2FYYYY-MM.md
 ```
 
-Runaway guardrails are configured through host settings and shown in the
-Workers tab / `GET /api/v1/jobs`. Defaults are intentionally capable loop
-protection rather than daily usage lockouts: 50 tool calls per run, 500 runtime
-seconds per run, 60 agent runs per user per 600-second burst window, 10
-scheduled agent runs per worker tick, 10 autonomous/proactive owner-visible
-outbound proposals per user per rolling day, one outbound send per worker tick,
-five untrusted review notifications per sender per day, and 25 newsletter
-documents per interest check. Local overrides use:
+Runaway guardrails and operational recovery state are configured through host
+settings and shown in the Workers tab / `GET /api/v1/jobs`. The jobs response
+also reports safe optional integration status, connector completeness,
+failed/dead RAG jobs, failed cross-app approval executions, worker connector
+failures, recovery events, and stale claimed/running/sending state. Defaults are
+intentionally capable loop protection rather than daily usage lockouts: 50 tool
+calls per run, 500 runtime seconds per run, 60 agent runs per user per
+600-second burst window, 10 scheduled agent runs per worker tick, 10
+autonomous/proactive owner-visible outbound proposals per user per rolling day,
+one outbound send per worker tick, five untrusted review notifications per
+sender per day, and 25 newsletter documents per interest check. Local overrides
+use:
 
 ```text
 AGENT_MAX_TOOL_CALLS

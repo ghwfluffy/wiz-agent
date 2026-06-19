@@ -563,7 +563,7 @@ export type AgentStore = {
   getSession(sessionId: string | undefined): Promise<Session | undefined>;
   revokeSession(sessionId: string | undefined, requestId: string): Promise<void>;
   createTask(context: RequestContext, input: TaskInput): Promise<TaskRecord>;
-  listTasks(context: RequestContext): Promise<TaskRecord[]>;
+  listTasks(context: RequestContext, includeAllUsers?: boolean): Promise<TaskRecord[]>;
   getTask(context: RequestContext, taskId: string): Promise<TaskRecord | undefined>;
   updateTask(context: RequestContext, taskId: string, update: TaskUpdate): Promise<TaskRecord | undefined>;
   listTaskEvents(context: RequestContext, taskId: string): Promise<TaskEventRecord[]>;
@@ -687,7 +687,7 @@ export type AgentStore = {
     allowedTools?: string[] | null;
   }): Promise<AgentMcpSession>;
   resolveAgentMcpSession(token: string | undefined, runId?: string | null): Promise<RequestContext | undefined>;
-  listConnectors(context: RequestContext): Promise<ConnectorRecord[]>;
+  listConnectors(context: RequestContext, includeAllUsers?: boolean): Promise<ConnectorRecord[]>;
   getConnector(context: RequestContext, kind: ConnectorKind): Promise<ConnectorRecord | undefined>;
   upsertConnector(context: RequestContext, input: ConnectorInput): Promise<ConnectorRecord>;
   createAgentRun(
@@ -740,7 +740,7 @@ export type AgentStore = {
     }
   ): Promise<InboundMessageRecord | undefined>;
   queueOutboundMessage(context: RequestContext, input: OutboundMessageInput): Promise<OutboundMessageRecord>;
-  listOutboundMessages(context: RequestContext, statuses?: string[]): Promise<OutboundMessageRecord[]>;
+  listOutboundMessages(context: RequestContext, statuses?: string[], includeAllUsers?: boolean): Promise<OutboundMessageRecord[]>;
   countOwnerVisibleOutboundMessagesSince(context: Pick<RequestContext, "userId">, since: Date): Promise<number>;
   listUsersWithWork(statuses?: string[], now?: Date): Promise<AuthenticatedUser[]>;
   updateOutboundMessageStatus(
@@ -751,7 +751,7 @@ export type AgentStore = {
   ): Promise<OutboundMessageRecord | undefined>;
   claimOutboundMessageForSending(context: RequestContext, messageId: string): Promise<OutboundMessageRecord | undefined>;
   createApproval(context: RequestContext, input: ApprovalInput): Promise<ApprovalRecord>;
-  listApprovals(context: RequestContext, statuses?: ApprovalStatus[]): Promise<ApprovalRecord[]>;
+  listApprovals(context: RequestContext, statuses?: ApprovalStatus[], includeAllUsers?: boolean): Promise<ApprovalRecord[]>;
   getApproval(context: RequestContext, approvalId: string): Promise<ApprovalRecord | undefined>;
   updateApprovalStatus(
     context: RequestContext,

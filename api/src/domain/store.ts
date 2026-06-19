@@ -1191,12 +1191,13 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
       return taskFromRow(result.rows[0]);
     },
 
-    async listTasks(context: RequestContext): Promise<TaskRecord[]> {
+    async listTasks(context: RequestContext, includeAllUsers = false): Promise<TaskRecord[]> {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const result = await pool.query(
         `SELECT * FROM tasks
-         WHERE user_id = $1
+         WHERE ($2 = true OR user_id = $1)
          ORDER BY created_at DESC`,
-        [context.userId]
+        [context.userId, includeAll]
       );
       return result.rows.map(taskFromRow);
     },
@@ -1445,11 +1446,12 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
     },
 
     async listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]> {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const result = await pool.query(
-        includeAllUsers
+        includeAll
           ? `SELECT * FROM audit_log ORDER BY created_at DESC LIMIT 200`
           : `SELECT * FROM audit_log WHERE user_id = $1 ORDER BY created_at DESC LIMIT 200`,
-        includeAllUsers ? [] : [context.userId]
+        includeAll ? [] : [context.userId]
       );
       return result.rows.map(auditFromRow);
     },
@@ -2039,6 +2041,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
     },
 
     async listRagIndexJobs(context, includeAllUsers = false, statuses) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const statusFilter = statuses && statuses.length > 0 ? statuses : null;
       const result = await pool.query(
         `SELECT *
@@ -2047,12 +2050,13 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
            AND ($3::text[] IS NULL OR status = ANY($3::text[]))
          ORDER BY created_at DESC
          LIMIT 200`,
-        [context.userId, includeAllUsers, statusFilter]
+        [context.userId, includeAll, statusFilter]
       );
       return result.rows.map(ragIndexJobFromRow);
     },
 
     async retryRagIndexJob(context, jobId, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const result = await pool.query(
         `UPDATE rag_index_jobs
          SET status = 'pending',
@@ -2064,7 +2068,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
            AND ($2 = true OR user_id = $3)
            AND status IN ('failed', 'dead')
          RETURNING *`,
-        [jobId, includeAllUsers, context.userId]
+        [jobId, includeAll, context.userId]
       );
       const record = result.rows[0] ? ragIndexJobFromRow(result.rows[0]) : undefined;
       if (record) {
@@ -2189,13 +2193,14 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
     },
 
     async listRagUserIndexHealth(context, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const result = await pool.query(
         `SELECT *
          FROM rag_user_indexes
          WHERE ($2 = true OR user_id = $1)
          ORDER BY updated_at DESC
          LIMIT 200`,
-        [context.userId, includeAllUsers]
+        [context.userId, includeAll]
       );
       return result.rows.map(ragUserIndexHealthFromRow);
     },
@@ -2307,13 +2312,14 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
       return contextForAgentSession(session);
     },
 
-    async listConnectors(context: RequestContext): Promise<ConnectorRecord[]> {
+    async listConnectors(context: RequestContext, includeAllUsers = false): Promise<ConnectorRecord[]> {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const result = await pool.query(
-        `SELECT DISTINCT ON (kind) *
+        `SELECT DISTINCT ON (user_id, kind) *
          FROM connectors
-         WHERE user_id = $1
-         ORDER BY kind, updated_at DESC, created_at DESC`,
-        [context.userId]
+         WHERE ($2 = true OR user_id = $1)
+         ORDER BY user_id, kind, updated_at DESC, created_at DESC`,
+        [context.userId, includeAll]
       );
       return result.rows.map(connectorFromRow);
     },
@@ -2394,13 +2400,14 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
     },
 
     async listAgentRuns(context, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const result = await pool.query(
         `SELECT *
          FROM agent_runs
          WHERE ($2 = true OR user_id = $1)
          ORDER BY started_at DESC
          LIMIT 200`,
-        [context.userId, includeAllUsers]
+        [context.userId, includeAll]
       );
       return result.rows.map(runFromRow);
     },
@@ -2475,13 +2482,14 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
     },
 
     async listToolCalls(context, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const result = await pool.query(
         `SELECT *
          FROM tool_calls
          WHERE ($2 = true OR user_id = $1)
          ORDER BY created_at DESC
          LIMIT 200`,
-        [context.userId, includeAllUsers]
+        [context.userId, includeAll]
       );
       return result.rows.map(toolCallFromRow);
     },
@@ -2676,17 +2684,18 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
       return record;
     },
 
-    async listOutboundMessages(context, statuses) {
+    async listOutboundMessages(context, statuses, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const statusFilter = statuses && statuses.length > 0;
       const result = await pool.query(
         statusFilter
           ? `SELECT * FROM outbound_messages
-             WHERE user_id = $1 AND status = ANY($2::text[])
+             WHERE ($2 = true OR user_id = $1) AND status = ANY($3::text[])
              ORDER BY created_at ASC`
           : `SELECT * FROM outbound_messages
-             WHERE user_id = $1
+             WHERE ($2 = true OR user_id = $1)
              ORDER BY created_at DESC`,
-        statusFilter ? [context.userId, statuses] : [context.userId]
+        statusFilter ? [context.userId, includeAll, statuses] : [context.userId, includeAll]
       );
       return result.rows.map(outboundFromRow);
     },
@@ -2786,19 +2795,20 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
       return record;
     },
 
-    async listApprovals(context, statuses) {
+    async listApprovals(context, statuses, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const statusFilter = statuses && statuses.length > 0;
       const result = await pool.query(
         statusFilter
           ? `SELECT * FROM approvals
-             WHERE user_id = $1 AND status = ANY($2::text[])
+             WHERE ($2 = true OR user_id = $1) AND status = ANY($3::text[])
              ORDER BY created_at DESC
              LIMIT 500`
           : `SELECT * FROM approvals
-             WHERE user_id = $1
+             WHERE ($2 = true OR user_id = $1)
              ORDER BY created_at DESC
              LIMIT 500`,
-        statusFilter ? [context.userId, statuses] : [context.userId]
+        statusFilter ? [context.userId, includeAll, statuses] : [context.userId, includeAll]
       );
       return result.rows.map(approvalFromRow);
     },
@@ -3221,8 +3231,9 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       pushAudit(context, "task.create", "task", task.id);
       return task;
     },
-    async listTasks(context: RequestContext): Promise<TaskRecord[]> {
-      return [...tasks.values()].filter((task) => task.userId === context.userId);
+    async listTasks(context: RequestContext, includeAllUsers = false): Promise<TaskRecord[]> {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
+      return [...tasks.values()].filter((task) => includeAll || task.userId === context.userId);
     },
     async getTask(context: RequestContext, taskId: string): Promise<TaskRecord | undefined> {
       const task = tasks.get(taskId);
@@ -3381,8 +3392,9 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       return claimed;
     },
     async listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]> {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       return audit.filter((entry) => {
-        return includeAllUsers || entry.userId === context.userId;
+        return includeAll || entry.userId === context.userId;
       });
     },
     async recordAudit(context, action, entityType, entityId, details = {}) {
@@ -3756,17 +3768,19 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       return claimed;
     },
     async listRagIndexJobs(context, includeAllUsers = false, statuses) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const statusSet = statuses && statuses.length > 0 ? new Set(statuses) : null;
       return markdownIndexJobs
-        .filter((job) => (includeAllUsers || job.userId === context.userId) && (!statusSet || statusSet.has(job.status)))
+        .filter((job) => (includeAll || job.userId === context.userId) && (!statusSet || statusSet.has(job.status)))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, 200)
         .map((job) => ({ ...job }));
     },
     async retryRagIndexJob(context, jobId, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       const job = markdownIndexJobs.find((entry) => {
         return entry.id === jobId
-          && (includeAllUsers || entry.userId === context.userId)
+          && (includeAll || entry.userId === context.userId)
           && ["failed", "dead"].includes(entry.status);
       });
       if (!job) {
@@ -3842,8 +3856,9 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       return markdownChunks.get(`${context.userId}:${documentId}`) ?? [];
     },
     async listRagUserIndexHealth(context, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       return [...ragHealth.values()]
-        .filter((entry) => includeAllUsers || entry.userId === context.userId)
+        .filter((entry) => includeAll || entry.userId === context.userId)
         .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
         .slice(0, 200);
     },
@@ -3905,10 +3920,11 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       }
       return contextForAgentSession(session);
     },
-    async listConnectors(context: RequestContext): Promise<ConnectorRecord[]> {
+    async listConnectors(context: RequestContext, includeAllUsers = false): Promise<ConnectorRecord[]> {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       return [...connectors.values()]
-        .filter((connector) => connector.userId === context.userId)
-        .sort((a, b) => a.kind.localeCompare(b.kind));
+        .filter((connector) => includeAll || connector.userId === context.userId)
+        .sort((a, b) => a.userId.localeCompare(b.userId) || a.kind.localeCompare(b.kind));
     },
     async getConnector(context: RequestContext, kind: ConnectorKind): Promise<ConnectorRecord | undefined> {
       return [...connectors.values()].find((connector) => connector.userId === context.userId && connector.kind === kind);
@@ -3961,8 +3977,9 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       return run;
     },
     async listAgentRuns(context, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       return [...runs.values()]
-        .filter((run) => includeAllUsers || run.userId === context.userId)
+        .filter((run) => includeAll || run.userId === context.userId)
         .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
         .slice(0, 200);
     },
@@ -4026,8 +4043,9 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       return toolCall;
     },
     async listToolCalls(context, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       return [...toolCalls.values()]
-        .filter((toolCall) => includeAllUsers || toolCall.userId === context.userId)
+        .filter((toolCall) => includeAll || toolCall.userId === context.userId)
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, 200);
     },
@@ -4185,9 +4203,10 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       });
       return message;
     },
-    async listOutboundMessages(context, statuses) {
+    async listOutboundMessages(context, statuses, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       return [...outboundMessages.values()].filter((message) => {
-        if (message.userId !== context.userId) {
+        if (!includeAll && message.userId !== context.userId) {
           return false;
         }
         return !statuses || statuses.length === 0 || statuses.includes(message.status);
@@ -4274,9 +4293,10 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       });
       return approval;
     },
-    async listApprovals(context, statuses) {
+    async listApprovals(context, statuses, includeAllUsers = false) {
+      const includeAll = includeAllUsers && context.permissions.includes("admin");
       return [...approvals.values()]
-        .filter((approval) => approval.userId === context.userId)
+        .filter((approval) => includeAll || approval.userId === context.userId)
         .filter((approval) => !statuses || statuses.length === 0 || statuses.includes(approval.status))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
     },

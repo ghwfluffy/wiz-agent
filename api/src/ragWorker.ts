@@ -8,6 +8,33 @@ import { processRagIndexJobs } from "./rag/indexer.js";
 import { HttpQdrantClient } from "./rag/qdrant.js";
 
 const RAG_WORKER_INTERVAL_MS = 30_000;
+const MAX_RAG_WORKER_LOG_STRING_LENGTH = 500;
+const SENSITIVE_RAG_WORKER_LOG_KEY_PATTERN = /(?:password|passwd|pwd|secret|token|api[_\s-]?key|access[_\s-]?key|private[_\s-]?key|credential|authorization|bearer|cookie|session)/i;
+
+function compactRagWorkerLogText(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s"'<>),]+/gi, "[url]")
+    .replace(
+      /\b(password|passwd|pwd|secret|token|api[_\s-]?key|access[_\s-]?key|private[_\s-]?key|credential|authorization|bearer|cookie|session)\b(\s*(?:=|:|is|was)\s*)([^\s,;]+)/gi,
+      "$1$2[redacted]"
+    )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_RAG_WORKER_LOG_STRING_LENGTH);
+}
+
+function sanitizeRagWorkerDetails(details: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(details).map(([key, value]) => {
+    if (SENSITIVE_RAG_WORKER_LOG_KEY_PATTERN.test(key)) {
+      return [key, "[redacted]"];
+    }
+    if (typeof value === "string") {
+      return [key, compactRagWorkerLogText(value)];
+    }
+    return [key, value];
+  }));
+}
 
 function logRagWorker(event: string, details: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({
@@ -15,7 +42,7 @@ function logRagWorker(event: string, details: Record<string, unknown> = {}): voi
     app: "ai-assistant",
     component: "rag-worker",
     timestamp: new Date().toISOString(),
-    ...details
+    ...sanitizeRagWorkerDetails(details)
   }));
 }
 

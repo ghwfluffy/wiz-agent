@@ -133,11 +133,30 @@ describe("personal dashboard API", () => {
       limit: 10,
       reason: "owner-visible outbound cap"
     });
+    await store.recordAudit(owner, "worker.imap_error", "connector", "imap", {
+      message: "Bearer dashboard-secret-token https://private.example/path password=topsecret"
+    });
+    const failedApproval = await store.createApproval(owner, {
+      actionType: "cross_app_write_action",
+      proposedPayload: { action_id: "goals.create_goal", body: { title: "Dashboard goal" } },
+      riskLevel: "high",
+      summary: "Create a dashboard goal.",
+      expiresAt: new Date(Date.now() + 3_600_000).toISOString()
+    });
+    await store.updateApprovalStatus(owner, failedApproval.id, "approved", owner.userId);
+    await store.claimApprovalExecution(owner, failedApproval.id);
+    await store.failApprovalExecution(
+      owner,
+      failedApproval.id,
+      "missing_user_integration_token password=topsecret https://private.example/path"
+    );
     await store.upsertConnector(owner, {
       kind: "smtp",
       status: "enabled",
       config: { username: "owner", smtp: { host: "smtp.example.test", password: "super-secret-token" } }
     });
+    const [ragJob] = await store.claimRagIndexJobs(1, new Date());
+    await store.markRagIndexJobDead(ragJob.id, "embedding failed password=topsecret https://private.example/path");
 
     await store.createTask(other, {
       title: "Other private task",
@@ -165,7 +184,15 @@ describe("personal dashboard API", () => {
       activeThreads: Array<{ title: string; attention: string }>;
       contactCadence: { failedOutbound: number; recentOutbound: Array<{ toAddr?: string; failureMessage: string | null }> };
       personalLists: Array<{ path: string; active: number; archived: number }>;
-      safety: { failedRuns: unknown[]; failedToolCalls: unknown[]; guardrails: unknown[]; failedOutbound: Array<{ toAddr?: string }> };
+      safety: {
+        failedRuns: unknown[];
+        failedToolCalls: unknown[];
+        guardrails: unknown[];
+        workerProblems: unknown[];
+        ragFailures: Array<{ lastError: string | null }>;
+        approvalExecutionFailures: Array<{ executionError: string | null }>;
+        failedOutbound: Array<{ toAddr?: string }>;
+      };
     };
 
     expect(payload.metrics.pendingApprovals).toBe(1);
@@ -198,8 +225,16 @@ describe("personal dashboard API", () => {
     expect(payload.safety.failedRuns).toHaveLength(1);
     expect(payload.safety.failedToolCalls).toHaveLength(1);
     expect(payload.safety.guardrails).toHaveLength(1);
+    expect(payload.safety.workerProblems).toHaveLength(1);
+    expect(payload.safety.ragFailures).toHaveLength(1);
+    expect(payload.safety.ragFailures[0]?.lastError).toContain("password=[redacted]");
+    expect(payload.safety.approvalExecutionFailures).toHaveLength(1);
+    expect(payload.safety.approvalExecutionFailures[0]?.executionError).toContain("missing_user_integration_token");
     expect(payload.safety.failedOutbound[0]).not.toHaveProperty("toAddr");
     expect(JSON.stringify(payload)).not.toContain("Other private task");
     expect(JSON.stringify(payload)).not.toContain("super-secret-token");
+    expect(JSON.stringify(payload)).not.toContain("dashboard-secret-token");
+    expect(JSON.stringify(payload)).not.toContain("topsecret");
+    expect(JSON.stringify(payload)).not.toContain("private.example");
   });
 });

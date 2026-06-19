@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import { buildApp } from "../src/http/app.js";
@@ -77,6 +77,113 @@ describe("domain and user ownership APIs", () => {
       }
     });
     expect(otherRead.status).toBe(404);
+  });
+
+  it("fails closed for non-admin aggregate observability store reads", async () => {
+    const store = createMemoryStore();
+    const ownerSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "owner",
+      DEV_USER_EMAIL: "owner@example.test",
+      DEV_USER_IS_ADMIN: "false"
+    });
+    const otherSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "other",
+      DEV_USER_EMAIL: "other@example.test",
+      DEV_USER_IS_ADMIN: "false"
+    });
+    const adminSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "admin",
+      DEV_USER_EMAIL: "admin@example.test",
+      DEV_USER_IS_ADMIN: "true"
+    });
+    const ownerSession = await store.createDevelopmentSession(ownerSettings, "owner-observability-login");
+    const otherSession = await store.createDevelopmentSession(otherSettings, "other-observability-login");
+    const adminSession = await store.createDevelopmentSession(adminSettings, "admin-observability-login");
+    const owner = {
+      userId: ownerSession.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "owner-observability",
+      session: ownerSession
+    };
+    const other = {
+      userId: otherSession.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "other-observability",
+      session: otherSession
+    };
+    const admin = {
+      userId: adminSession.user.id,
+      actorType: "admin" as const,
+      permissions: ["user", "admin"],
+      requestId: "admin-observability",
+      session: adminSession
+    };
+
+    await store.createTask(owner, { title: "Owner task", prompt: "Owner only." });
+    await store.createTask(other, { title: "Other task", prompt: "Other only." });
+    await store.upsertConnector(owner, { kind: "owner-contact", status: "enabled", config: { email: "owner@example.test" } });
+    await store.upsertConnector(other, { kind: "owner-contact", status: "enabled", config: { email: "other@example.test" } });
+    await store.queueOutboundMessage(owner, { channel: "email", status: "failed", toAddr: "owner@example.test", bodyText: "Owner failed." });
+    await store.queueOutboundMessage(other, { channel: "email", status: "failed", toAddr: "other@example.test", bodyText: "Other failed." });
+    await store.createApproval(owner, {
+      actionType: "send_outbound_message",
+      proposedPayload: { body_text: "Owner approval." },
+      riskLevel: "low",
+      summary: "Owner approval",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    await store.createApproval(other, {
+      actionType: "send_outbound_message",
+      proposedPayload: { body_text: "Other approval." },
+      riskLevel: "low",
+      summary: "Other approval",
+      expiresAt: new Date(Date.now() + 60_000).toISOString()
+    });
+    const ownerRun = await store.createAgentRun(owner, { status: "running", modelTier: "fast", modelId: "mock-fast" });
+    const otherRun = await store.createAgentRun(other, { status: "running", modelTier: "fast", modelId: "mock-fast" });
+    await store.recordToolCall(owner, { runId: ownerRun.id, toolName: "list_tasks", status: "accepted", arguments: {} });
+    await store.recordToolCall(other, { runId: otherRun.id, toolName: "list_tasks", status: "accepted", arguments: {} });
+    await store.writeMarkdownDocument(owner, { path: "/assistant/owner.md", markdown: "# Owner" });
+    await store.writeMarkdownDocument(other, { path: "/assistant/other.md", markdown: "# Other" });
+    await store.recordAudit(owner, "owner.audit", "test", "owner");
+    await store.recordAudit(other, "other.audit", "test", "other");
+
+    await expect(store.listTasks(owner, true)).resolves.toEqual([
+      expect.objectContaining({ userId: "owner" })
+    ]);
+    await expect(store.listConnectors(owner, true)).resolves.toEqual([
+      expect.objectContaining({ userId: "owner" })
+    ]);
+    await expect(store.listOutboundMessages(owner, undefined, true)).resolves.toEqual([
+      expect.objectContaining({ userId: "owner" })
+    ]);
+    await expect(store.listApprovals(owner, undefined, true)).resolves.toEqual([
+      expect.objectContaining({ userId: "owner" })
+    ]);
+    await expect(store.listAgentRuns(owner, true)).resolves.toEqual([
+      expect.objectContaining({ userId: "owner" })
+    ]);
+    await expect(store.listToolCalls(owner, true)).resolves.toEqual([
+      expect.objectContaining({ userId: "owner" })
+    ]);
+    await expect(store.listRagIndexJobs(owner, true)).resolves.toEqual([
+      expect.objectContaining({ userId: "owner" })
+    ]);
+    const ownerAudit = await store.listAudit(owner, true);
+    expect(ownerAudit.some((event) => event.userId === "other")).toBe(false);
+    const adminRuns = await store.listAgentRuns(admin, true);
+    expect(adminRuns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ userId: "owner" }),
+      expect.objectContaining({ userId: "other" })
+    ]));
   });
 
   it("records task events and accepts follow-up prompts for the current user", async () => {
@@ -281,6 +388,22 @@ describe("domain and user ownership APIs", () => {
         prompt: "Visible in admin audit."
       })
     });
+    await store.recordAudit(
+      {
+        userId: normalSession.user.id,
+        actorType: "system",
+        requestId: "normal-secret-audit"
+      },
+      "worker.imap_error",
+      "connector",
+      "imap",
+      {
+        message: "Bearer raw-secret-token https://private.example/path password=topsecret",
+        nested: {
+          token: "raw-secret-token"
+        }
+      }
+    );
 
     const auditResponse = await app.request("/api/v1/admin/audit", {
       headers: {
@@ -288,15 +411,24 @@ describe("domain and user ownership APIs", () => {
       }
     });
     expect(auditResponse.status).toBe(200);
-    const auditPayload = await auditResponse.json() as { events: Array<{ action: string; userId: string | null }> };
+    const auditPayload = await auditResponse.json() as { events: Array<{ action: string; userId: string | null; details: Record<string, unknown> }> };
     expect(auditPayload.events).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           action: "task.create",
           userId: "normal"
+        }),
+        expect.objectContaining({
+          action: "worker.imap_error",
+          details: expect.objectContaining({
+            message: expect.stringContaining("Bearer [redacted]")
+          })
         })
       ])
     );
+    expect(JSON.stringify(auditPayload)).not.toContain("topsecret");
+    expect(JSON.stringify(auditPayload)).not.toContain("raw-secret-token");
+    expect(JSON.stringify(auditPayload)).not.toContain("private.example");
   });
 
   it("allows administrators to manage AI backend config", async () => {
@@ -1062,6 +1194,155 @@ describe("domain and user ownership APIs", () => {
         })
       ])
     });
+  });
+
+  it("summarizes admin-wide stale worker state and redacted operational failures", async () => {
+    const store = createMemoryStore();
+    const adminSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "admin-user",
+      DEV_USER_EMAIL: "admin@example.test",
+      DEV_USER_IS_ADMIN: "true"
+    });
+    const otherSettings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "other-user",
+      DEV_USER_EMAIL: "other@example.test",
+      DEV_USER_IS_ADMIN: "false"
+    });
+    const app = buildApp({ settings: adminSettings, store });
+    const start = new Date("2026-06-13T10:00:00.000Z");
+    vi.useFakeTimers();
+    vi.setSystemTime(start);
+    try {
+      const adminSession = await store.createDevelopmentSession(adminSettings, "admin-jobs-login");
+      const otherSession = await store.createDevelopmentSession(otherSettings, "other-jobs-login");
+      const adminContext = {
+        userId: adminSession.user.id,
+        actorType: "admin" as const,
+        permissions: ["user", "admin"],
+        requestId: "admin-jobs-seed",
+        session: adminSession
+      };
+      const otherContext = {
+        userId: otherSession.user.id,
+        actorType: "user" as const,
+        permissions: ["user"],
+        requestId: "other-jobs-seed",
+        session: otherSession
+      };
+
+      await store.createTask(otherContext, {
+        title: "Other user's due task",
+        prompt: "Visible only as an admin aggregate.",
+        dueAt: new Date(start.getTime() - 60_000).toISOString()
+      });
+      const claimedTask = await store.createTask(adminContext, {
+        title: "Stale claimed task",
+        prompt: "Worker should recover this eventually."
+      });
+      await store.updateTask(adminContext, claimedTask.id, { status: "claimed" });
+      const outbound = await store.queueOutboundMessage(adminContext, {
+        channel: "sms",
+        status: "pending",
+        toAddr: "owner-sms@example.test",
+        bodyText: "Queued message",
+        subject: null
+      });
+      await store.claimOutboundMessageForSending(adminContext, outbound.id);
+
+      const failedApproval = await store.createApproval(otherContext, {
+        actionType: "cross_app_write_action",
+        proposedPayload: { action_id: "goals.create_goal", body: { title: "Goal" } },
+        riskLevel: "high",
+        summary: "Create a goal from owner instruction.",
+        expiresAt: new Date(start.getTime() + 60 * 60_000).toISOString()
+      });
+      await store.updateApprovalStatus(otherContext, failedApproval.id, "approved", otherContext.userId);
+      await store.claimApprovalExecution(otherContext, failedApproval.id);
+      await store.failApprovalExecution(
+        otherContext,
+        failedApproval.id,
+        "missing_user_integration_token password=topsecret https://private.example/path",
+        { token: "topsecret", url: "https://private.example/path" }
+      );
+
+      const runningApproval = await store.createApproval(adminContext, {
+        actionType: "cross_app_write_action",
+        proposedPayload: { action_id: "goals.create_goal", body: { title: "Another goal" } },
+        riskLevel: "high",
+        summary: "Create another goal.",
+        expiresAt: new Date(start.getTime() + 60 * 60_000).toISOString()
+      });
+      await store.updateApprovalStatus(adminContext, runningApproval.id, "approved", adminContext.userId);
+      await store.claimApprovalExecution(adminContext, runningApproval.id);
+      await store.upsertConnector(adminContext, {
+        kind: "imap",
+        status: "enabled",
+        config: {
+          username: "owner",
+          imap: {
+            host: "imap.private.example",
+            mailbox: "INBOX"
+          }
+        }
+      });
+      await store.recordAudit(adminContext, "worker.imap_error", "connector", "imap", {
+        message: "Bearer super-secret-token https://private.example/path password=topsecret",
+        command: "LOGIN password=topsecret"
+      });
+
+      vi.setSystemTime(new Date(start.getTime() + 31 * 60_000));
+      const response = await app.request("/api/v1/admin/jobs", {
+        headers: {
+          cookie: cookieHeader(adminSession.id)
+        }
+      });
+
+      expect(response.status).toBe(200);
+      const payload = await response.json() as {
+        scope: string;
+        staleState: Record<string, number>;
+        connectorHealth: Array<{ kind: string; status: string; incompleteUsers: number }>;
+        recentFailures: {
+          connectorFailures: Array<{ details: Record<string, unknown> }>;
+          approvalExecutions: Array<{ executionError: string | null }>;
+        };
+        jobs: Array<Record<string, unknown>>;
+      };
+      expect(payload.scope).toBe("admin_all_users");
+      expect(payload.staleState.staleClaimedTasks).toBe(1);
+      expect(payload.staleState.staleSendingMessages).toBe(1);
+      expect(payload.staleState.staleRunningApprovalExecutions).toBe(1);
+      expect(payload.connectorHealth).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          kind: "imap",
+          status: "incomplete",
+          incompleteUsers: 1
+        })
+      ]));
+      expect(payload.jobs).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: "task-runner",
+          dueTasks: 1,
+          staleClaimedTasks: 1
+        }),
+        expect.objectContaining({
+          name: "approvals",
+          failedExecutions: 1,
+          staleRunningExecutions: 1
+        })
+      ]));
+      expect(payload.recentFailures.approvalExecutions[0]?.executionError).toContain("missing_user_integration_token");
+      expect(JSON.stringify(payload)).not.toContain("topsecret");
+      expect(JSON.stringify(payload)).not.toContain("private.example");
+      expect(JSON.stringify(payload)).not.toContain("imap.private.example");
+      expect(JSON.stringify(payload)).not.toContain("super-secret-token");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("exposes scoped jobs and lets administrators retry failed RAG jobs", async () => {

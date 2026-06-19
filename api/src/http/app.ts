@@ -16,9 +16,12 @@ import { createPool } from "../db/pool.js";
 import { createMemoryStore, createPostgresStore } from "../domain/store.js";
 import type {
   AgentStore,
+  AgentRunRecord,
   AuditRecord,
+  ApprovalRecord,
   ApprovalStatus,
   ConnectorKind,
+  ConnectorRecord,
   ConnectorStatus,
   ConversationThreadRecord,
   MarkdownConflict,
@@ -26,6 +29,8 @@ import type {
   MarkdownDocumentRecord,
   MemoryChangeRecord,
   OutboundMessageRecord,
+  RagIndexJobRecord,
+  RagUserIndexHealthRecord,
   RequestContext,
   SenderStatus,
   TaskRecord,
@@ -81,6 +86,12 @@ const allowedVoiceAudioTypes = new Set([
   "application/octet-stream"
 ]);
 const allowedVoiceAudioExtensions = new Set(["m4a", "mp4", "mp3", "mpeg", "mpga", "wav", "webm"]);
+const operationalStaleAfterMs = 30 * 60 * 1000;
+const maxOperationalTextLength = 500;
+const maxOperationalFailureLength = 240;
+const maxOperationalArrayItems = 20;
+const maxOperationalDepth = 4;
+const sensitiveOperationalKeyPattern = /(?:password|passwd|pwd|secret|token|api[_\s-]?key|access[_\s-]?key|private[_\s-]?key|credential|authorization|bearer|cookie|session)/i;
 const webMcpSessionTools = [
   "list_dir",
   "tree",
@@ -325,6 +336,117 @@ function countByStatus<T extends { status: string }>(records: T[], status: strin
   return records.filter((record) => record.status === status).length;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function compactOperationalText(value: string, maxLength = maxOperationalTextLength): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s"'<>),]+/gi, "[url]")
+    .replace(
+      /\b(password|passwd|pwd|secret|token|api[_\s-]?key|access[_\s-]?key|private[_\s-]?key|credential|authorization|bearer|cookie|session)\b(\s*(?:=|:|is|was)\s*)([^\s,;]+)/gi,
+      "$1$2[redacted]"
+    )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+function sanitizeOperationalValue(value: unknown, depth = 0): unknown {
+  if (depth >= maxOperationalDepth) {
+    return "[redacted]";
+  }
+  if (typeof value === "string") {
+    return compactOperationalText(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, maxOperationalArrayItems)
+      .map((item) => sanitizeOperationalValue(item, depth + 1));
+  }
+  if (isRecord(value)) {
+    return Object.fromEntries(Object.entries(value).map(([key, nested]) => [
+      key,
+      sensitiveOperationalKeyPattern.test(key) ? "[redacted]" : sanitizeOperationalValue(nested, depth + 1)
+    ]));
+  }
+  return null;
+}
+
+function sanitizeOperationalDetails(details: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = sanitizeOperationalValue(details);
+  return isRecord(sanitized) ? sanitized : {};
+}
+
+function operationalFailure(value: string | null | undefined): string | null {
+  return value ? compactOperationalText(value, maxOperationalFailureLength) || null : null;
+}
+
+function publicAuditRecord(event: AuditRecord): AuditRecord {
+  return {
+    ...event,
+    details: sanitizeOperationalDetails(event.details)
+  };
+}
+
+function publicRagIndexJob(job: RagIndexJobRecord) {
+  return {
+    ...job,
+    lastError: operationalFailure(job.lastError)
+  };
+}
+
+function publicRagIndexHealth(entry: RagUserIndexHealthRecord) {
+  return {
+    ...entry,
+    lastError: operationalFailure(entry.lastError)
+  };
+}
+
+function publicFailedAgentRun(run: AgentRunRecord) {
+  return {
+    id: run.id,
+    userId: run.userId,
+    taskId: run.taskId,
+    status: run.status,
+    modelTier: run.modelTier,
+    modelId: run.modelId,
+    promptVersion: run.promptVersion,
+    failureMessage: operationalFailure(run.failureMessage),
+    startedAt: run.startedAt,
+    finishedAt: run.finishedAt
+  };
+}
+
+function publicApprovalExecutionFailure(approval: ApprovalRecord) {
+  return {
+    id: approval.id,
+    userId: approval.userId,
+    actionType: approval.actionType,
+    summary: approval.summary,
+    status: approval.status,
+    executionStatus: approval.executionStatus,
+    executionError: operationalFailure(approval.executionError),
+    sourceRunId: approval.sourceRunId,
+    sourceRef: approval.sourceRef,
+    executedAt: approval.executedAt,
+    updatedAt: approval.updatedAt,
+    createdAt: approval.createdAt
+  };
+}
+
+function staleSince(value: string | null | undefined, staleBeforeMs: number): boolean {
+  if (!value) {
+    return false;
+  }
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && parsed < staleBeforeMs;
+}
+
 function isActiveTask(task: TaskRecord): boolean {
   return !["completed", "cancelled", "failed"].includes(task.status);
 }
@@ -441,7 +563,7 @@ function publicOutbound(message: OutboundMessageRecord) {
     createdAt: message.createdAt,
     updatedAt: message.updatedAt,
     sentAt: message.sentAt ?? null,
-    failureMessage: message.failureMessage ?? null
+    failureMessage: operationalFailure(message.failureMessage)
   };
 }
 
@@ -456,13 +578,14 @@ function threadAttention(thread: ConversationThreadRecord): string {
 }
 
 function auditSummary(event: AuditRecord): string {
-  const message = event.details.message;
-  const reason = event.details.reason;
-  const guardrail = event.details.guardrail;
-  const failure = event.details.failure_message;
+  const details = sanitizeOperationalDetails(event.details);
+  const message = details.message;
+  const reason = details.reason;
+  const guardrail = details.guardrail;
+  const failure = details.failure_message;
   return [guardrail, reason, failure, message]
     .filter((value): value is string | number | boolean => ["string", "number", "boolean"].includes(typeof value))
-    .map(String)
+    .map((value) => compactOperationalText(String(value), maxOperationalFailureLength))
     .join(" - ") || event.action;
 }
 
@@ -476,6 +599,143 @@ function publicFailedToolCall(toolCall: ToolCallRecord) {
     createdAt: toolCall.createdAt,
     completedAt: toolCall.completedAt
   };
+}
+
+function optionalIntegrationStatus(configured: boolean, tokenSecretConfigured: boolean): string {
+  if (!configured) {
+    return "missing_optional";
+  }
+  return tokenSecretConfigured ? "configured" : "misconfigured_missing_token_secret";
+}
+
+function productionSafetyIssues(settings: Settings): string[] {
+  const issues: string[] = [];
+  if (settings.appEnv !== "production") {
+    return issues;
+  }
+  if (settings.authMode === "standalone") {
+    issues.push("auth_mode_standalone");
+  }
+  if (!settings.oauthServerBaseUrl) {
+    issues.push("oauth_server_base_url_missing");
+  }
+  if (settings.postgresPassword === "agent_dev_password") {
+    issues.push("postgres_password_is_development_default");
+  }
+  if (settings.appBasePath && settings.sessionCookiePath === "/") {
+    issues.push("session_cookie_path_not_scoped");
+  }
+  if (settings.agentOwnerEmails.includes("dev@example.test")) {
+    issues.push("development_owner_email_configured");
+  }
+  if (
+    (settings.goalsApiBaseUrl || settings.budgetApiBaseUrl || settings.apartmentGateApiBaseUrl) &&
+    !settings.agentIntegrationTokenSecret
+  ) {
+    issues.push("integration_token_secret_missing");
+  }
+  return issues;
+}
+
+function operationalConfiguration(settings: Settings) {
+  const tokenSecretConfigured = Boolean(settings.agentIntegrationTokenSecret);
+  const integrations = [
+    {
+      name: "openai",
+      status: settings.agentOpenaiApiKey ? "configured" : "missing_optional",
+      requiredFor: ["live_model_runs", "voice_transcription"]
+    },
+    {
+      name: "goals",
+      status: optionalIntegrationStatus(Boolean(settings.goalsApiBaseUrl), tokenSecretConfigured),
+      requiredFor: ["goals_app_actions"]
+    },
+    {
+      name: "budget",
+      status: optionalIntegrationStatus(Boolean(settings.budgetApiBaseUrl), tokenSecretConfigured),
+      requiredFor: ["budget_app_actions"]
+    },
+    {
+      name: "apartment_gate",
+      status: optionalIntegrationStatus(Boolean(settings.apartmentGateApiBaseUrl), tokenSecretConfigured),
+      requiredFor: ["apartment_gate_actions"]
+    },
+    {
+      name: "qdrant",
+      status: settings.qdrantUrl ? "configured" : "missing_optional",
+      requiredFor: ["rag_semantic_search"]
+    }
+  ];
+  const productionIssues = productionSafetyIssues(settings);
+  const integrationIssues = integrations.filter((entry) => entry.status.startsWith("misconfigured"));
+  return {
+    environment: settings.appEnv,
+    authMode: settings.authMode,
+    deployment: {
+      appBasePathConfigured: Boolean(settings.appBasePath),
+      publicUrlConfigured: Boolean(settings.publicUrl),
+      sessionCookieScoped: !settings.appBasePath || settings.sessionCookiePath !== "/"
+    },
+    outboundDelivery: {
+      status: settings.agentOutboundEnabled ? "enabled" : "disabled"
+    },
+    integrations,
+    productionSafety: {
+      status: productionIssues.length > 0 ? "attention" : "ok",
+      issues: productionIssues
+    },
+    status: productionIssues.length > 0 || integrationIssues.length > 0 ? "degraded" : "ok"
+  };
+}
+
+function nestedRecord(value: unknown): Record<string, unknown> {
+  return isRecord(value) ? value : {};
+}
+
+function nonBlankConfig(value: unknown): boolean {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function connectorIsComplete(connector: ConnectorRecord): boolean {
+  const config = connector.config;
+  if (connector.kind === "owner-contact") {
+    return ["email", "sms_gateway", "mms_gateway"].some((key) => nonBlankConfig(config[key]));
+  }
+  if (connector.kind === "imap") {
+    const imap = nestedRecord(config.imap);
+    return nonBlankConfig(config.username) && nonBlankConfig(imap.host) && nonBlankConfig(imap.password);
+  }
+  if (connector.kind === "smtp") {
+    const smtp = nestedRecord(config.smtp);
+    return nonBlankConfig(config.username) && nonBlankConfig(smtp.host) && nonBlankConfig(smtp.password);
+  }
+  if (connector.kind === "openai") {
+    return nonBlankConfig(config.base_url);
+  }
+  return false;
+}
+
+function connectorSummaries(connectors: ConnectorRecord[]) {
+  const kinds: ConnectorKind[] = ["owner-contact", "imap", "smtp", "openai"];
+  return kinds.map((kind) => {
+    const rows = connectors.filter((connector) => connector.kind === kind);
+    const enabled = rows.filter((connector) => connector.status === "enabled");
+    const incomplete = enabled.filter((connector) => !connectorIsComplete(connector));
+    const configured = enabled.length - incomplete.length;
+    const status = enabled.length === 0
+      ? "disabled"
+      : incomplete.length > 0
+        ? "incomplete"
+        : "configured";
+    return {
+      kind,
+      status,
+      users: rows.length,
+      enabledUsers: enabled.length,
+      configuredUsers: configured,
+      incompleteUsers: incomplete.length
+    };
+  });
 }
 
 export function buildApp(options: AppOptions = {}): Hono {
@@ -544,30 +804,66 @@ export function buildApp(options: AppOptions = {}): Hono {
 
   async function buildJobsPayload(authContext: RequestContext, includeAllUsers: boolean) {
     const [tasks, outbox, audit, connectors, approvals, ragJobs, ragHealth, runs, toolCalls, aiConfig] = await Promise.all([
-      store.listTasks(authContext),
-      store.listOutboundMessages(authContext),
+      store.listTasks(authContext, includeAllUsers),
+      store.listOutboundMessages(authContext, undefined, includeAllUsers),
       store.listAudit(authContext, includeAllUsers),
-      store.listConnectors(authContext),
-      store.listApprovals(authContext, ["pending"]),
+      store.listConnectors(authContext, includeAllUsers),
+      store.listApprovals(authContext, undefined, includeAllUsers),
       store.listRagIndexJobs(authContext, includeAllUsers),
       store.listRagUserIndexHealth(authContext, includeAllUsers),
       store.listAgentRuns(authContext, includeAllUsers),
       store.listToolCalls(authContext, includeAllUsers),
       store.getAiConfig()
     ]);
+    const now = Date.now();
+    const staleBeforeMs = now - operationalStaleAfterMs;
     const dueTasks = tasks.filter((task) => {
       if (task.status !== "pending" || !task.dueAt) {
         return false;
       }
-      return new Date(task.dueAt).getTime() <= Date.now();
+      return new Date(task.dueAt).getTime() <= now;
     });
+    const claimedTasks = tasks.filter((task) => task.status === "claimed");
+    const runningTasks = tasks.filter((task) => task.status === "running");
+    const staleClaimedTasks = claimedTasks.filter((task) => staleSince(task.updatedAt, staleBeforeMs));
+    const staleRunningTasks = runningTasks.filter((task) => staleSince(task.updatedAt, staleBeforeMs));
+    const pendingApprovals = approvals.filter((approval) => approval.status === "pending");
+    const expiredPendingApprovals = pendingApprovals.filter((approval) => {
+      const expiresAt = Date.parse(approval.expiresAt);
+      return Number.isFinite(expiresAt) && expiresAt <= now;
+    });
+    const runningApprovalExecutions = approvals.filter((approval) => approval.executionStatus === "running");
+    const staleRunningApprovalExecutions = runningApprovalExecutions.filter((approval) => staleSince(approval.updatedAt, staleBeforeMs));
+    const failedApprovalExecutions = approvals.filter((approval) => approval.executionStatus === "failed");
+    const sendingMessages = outbox.filter((message) => message.status === "sending");
+    const staleSendingMessages = sendingMessages.filter((message) => staleSince(message.updatedAt, staleBeforeMs));
     const failedRuns = runs.filter((run) => run.status === "failed");
+    const runningRuns = runs.filter((run) => run.status === "running");
+    const staleRunningRuns = runningRuns.filter((run) => staleSince(run.startedAt, staleBeforeMs));
     const failedToolCalls = toolCalls.filter((toolCall) => toolCall.status === "failed" || toolCall.status === "rejected");
     const qdrantProblemCount = ragHealth.filter((entry) => !["ok", "healthy"].includes(entry.healthStatus)).length;
     const safety = runtimeSafetyPolicy(settings, aiConfig);
     const recentGuardrails = audit.filter((event) => event.action === "guardrail.exceeded");
+    const workerErrors = audit.filter((event) => event.action === "worker.imap_error");
+    const workerRecoveries = audit.filter((event) => [
+      "worker.recovered_task_claim",
+      "worker.recovered_outbound_send",
+      "worker.recovered_approval_execution",
+      "worker.expired_approval"
+    ].includes(event.action));
+    const staleOperationalCount = staleClaimedTasks.length +
+      staleRunningTasks.length +
+      staleRunningRuns.length +
+      staleSendingMessages.length +
+      staleRunningApprovalExecutions.length +
+      expiredPendingApprovals.length;
+    const configuration = operationalConfiguration(settings);
+    const connectorHealth = connectorSummaries(connectors);
     return {
       generatedAt: new Date().toISOString(),
+      scope: includeAllUsers ? "admin_all_users" : "current_user",
+      configuration,
+      connectorHealth,
       budgets: {
         maxAgentRunsPerUserPerBurstWindow: safety.maxAgentRunsPerUserPerBurstWindow,
         agentRunBurstWindowSeconds: safety.agentRunBurstWindowSeconds,
@@ -585,29 +881,59 @@ export function buildApp(options: AppOptions = {}): Hono {
         maxRagSearchResultsPerCall: 25,
         browserMcpSessionTtlSeconds: 900
       },
-      ragIndexHealth: ragHealth,
-      recentFailures: {
-        agentRuns: failedRuns.slice(0, 20),
-        toolCalls: failedToolCalls.slice(0, 20).map(publicFailedToolCall),
-        ragJobs: ragJobs.filter((job) => job.status === "failed" || job.status === "dead").slice(0, 20),
-        guardrails: recentGuardrails.slice(0, 20)
+      staleState: {
+        staleAfterSeconds: Math.trunc(operationalStaleAfterMs / 1000),
+        claimedTasks: claimedTasks.length,
+        runningTasks: runningTasks.length,
+        staleClaimedTasks: staleClaimedTasks.length,
+        staleRunningTasks: staleRunningTasks.length,
+        runningAgentRuns: runningRuns.length,
+        staleRunningAgentRuns: staleRunningRuns.length,
+        sendingMessages: sendingMessages.length,
+        staleSendingMessages: staleSendingMessages.length,
+        expiredPendingApprovals: expiredPendingApprovals.length,
+        runningApprovalExecutions: runningApprovalExecutions.length,
+        staleRunningApprovalExecutions: staleRunningApprovalExecutions.length
       },
+      ragIndexHealth: ragHealth.map(publicRagIndexHealth),
+      recentFailures: {
+        agentRuns: failedRuns.slice(0, 20).map(publicFailedAgentRun),
+        toolCalls: failedToolCalls.slice(0, 20).map(publicFailedToolCall),
+        ragJobs: ragJobs.filter((job) => job.status === "failed" || job.status === "dead").slice(0, 20).map(publicRagIndexJob),
+        guardrails: recentGuardrails.slice(0, 20).map(publicAuditRecord),
+        connectorFailures: workerErrors.slice(0, 20).map(publicAuditRecord),
+        approvalExecutions: failedApprovalExecutions.slice(0, 20).map(publicApprovalExecutionFailure)
+      },
+      recentRecoveries: workerRecoveries.slice(0, 20).map(publicAuditRecord),
       jobs: [
         {
           name: "api-health",
-          status: "ok",
+          status: configuration.status === "ok" ? "ok" : "degraded",
           lastAuditAt: audit[0]?.createdAt ?? null
         },
         {
           name: "worker-tick",
-          status: audit.some((event) => event.action === "worker.imap_error") ? "degraded" : "unknown",
+          status: staleOperationalCount > 0 || workerErrors.length > 0
+            ? "degraded"
+            : audit.find((event) => event.action.startsWith("worker."))
+              ? "ok"
+              : "unknown",
+          staleStates: staleOperationalCount,
+          recentErrors: workerErrors.length,
+          recentRecoveries: workerRecoveries.length,
           lastAuditAt: audit.find((event) => event.action.startsWith("worker."))?.createdAt ?? null
         },
         {
           name: "task-runner",
-          status: failedRuns.length > 0 ? "degraded" : "configured",
+          status: failedRuns.length > 0 || staleClaimedTasks.length > 0 || staleRunningTasks.length > 0 || staleRunningRuns.length > 0 ? "degraded" : "configured",
           pendingTasks: tasks.filter((task) => task.status === "pending").length,
           dueTasks: dueTasks.length,
+          claimedTasks: claimedTasks.length,
+          runningTasks: runningTasks.length,
+          staleClaimedTasks: staleClaimedTasks.length,
+          staleRunningTasks: staleRunningTasks.length,
+          runningAgentRuns: runningRuns.length,
+          staleRunningAgentRuns: staleRunningRuns.length,
           failedTasks: tasks.filter((task) => task.status === "failed").length,
           failedRuns: failedRuns.length,
           lastAuditAt: audit.find((event) => event.action.startsWith("agent_run."))?.createdAt ?? null
@@ -620,10 +946,11 @@ export function buildApp(options: AppOptions = {}): Hono {
         },
         {
           name: "outbox",
-          status: recentGuardrails.some((event) => event.details.guardrail === "maxOwnerVisibleOutboundMessagesPerUserPerDay") || countByStatus(outbox, "failed") > 0 ? "degraded" : "configured",
+          status: recentGuardrails.some((event) => event.details.guardrail === "maxOwnerVisibleOutboundMessagesPerUserPerDay") || countByStatus(outbox, "failed") > 0 || staleSendingMessages.length > 0 ? "degraded" : "configured",
           pendingMessages: countByStatus(outbox, "pending"),
           approvedMessages: countByStatus(outbox, "approved"),
           sendingMessages: countByStatus(outbox, "sending"),
+          staleSendingMessages: staleSendingMessages.length,
           failedMessages: countByStatus(outbox, "failed"),
           lastAuditAt: audit.find((event) => event.action.startsWith("outbound."))?.createdAt ?? null
         },
@@ -635,15 +962,19 @@ export function buildApp(options: AppOptions = {}): Hono {
         },
         {
           name: "inbound-mailbox",
-          status: connectors.find((connector) => connector.kind === "imap" && connector.status === "enabled")
-            ? "configured"
-            : "disabled",
+          status: connectorHealth.find((connector) => connector.kind === "imap")?.status === "incomplete" || workerErrors.length > 0
+            ? "degraded"
+            : connectorHealth.find((connector) => connector.kind === "imap")?.status ?? "disabled",
           lastAuditAt: audit.find((event) => event.action.startsWith("message.inbound") || event.action === "worker.imap_error")?.createdAt ?? null
         },
         {
           name: "approvals",
-          status: approvals.length > 0 ? "attention" : "ok",
-          pendingApprovals: approvals.length,
+          status: pendingApprovals.length > 0 || expiredPendingApprovals.length > 0 || failedApprovalExecutions.length > 0 || staleRunningApprovalExecutions.length > 0 ? "attention" : "ok",
+          pendingApprovals: pendingApprovals.length,
+          expiredPendingApprovals: expiredPendingApprovals.length,
+          runningExecutions: runningApprovalExecutions.length,
+          staleRunningExecutions: staleRunningApprovalExecutions.length,
+          failedExecutions: failedApprovalExecutions.length,
           lastAuditAt: audit.find((event) => event.action.startsWith("approval."))?.createdAt ?? null
         },
         {
@@ -676,6 +1007,7 @@ export function buildApp(options: AppOptions = {}): Hono {
       audit,
       runs,
       toolCalls,
+      ragJobs,
       decisionEntries,
       feedbackEntries,
       listEntries
@@ -688,11 +1020,13 @@ export function buildApp(options: AppOptions = {}): Hono {
       store.listAudit(authContext, false),
       store.listAgentRuns(authContext, false),
       store.listToolCalls(authContext, false),
+      store.listRagIndexJobs(authContext, false),
       store.listMarkdownDirectory(authContext, "/assistant/decisions").catch(() => [] as MarkdownDirectoryEntry[]),
       store.listMarkdownDirectory(authContext, "/assistant/feedback").catch(() => [] as MarkdownDirectoryEntry[]),
       store.listMarkdownDirectory(authContext, "/personal/lists").catch(() => [] as MarkdownDirectoryEntry[])
     ]);
     const nowMs = Date.now();
+    const staleBeforeMs = nowMs - operationalStaleAfterMs;
     const dayAgoMs = nowMs - 24 * 60 * 60 * 1000;
     const weekAgoMs = nowMs - 7 * 24 * 60 * 60 * 1000;
     const ownerVisibleStatuses = new Set(["requires_approval", "approved", "pending", "sending", "sent"]);
@@ -704,6 +1038,13 @@ export function buildApp(options: AppOptions = {}): Hono {
     const failedToolCalls = toolCalls.filter((toolCall) => toolCall.status === "failed" || toolCall.status === "rejected");
     const failedOutbox = outbox.filter((message) => message.status === "failed");
     const guardrails = audit.filter((event) => event.action === "guardrail.exceeded");
+    const workerProblems = audit.filter((event) => event.action === "worker.imap_error" || event.action.startsWith("worker.recovered_") || event.action === "worker.expired_approval");
+    const ragFailures = ragJobs.filter((job) => job.status === "failed" || job.status === "dead");
+    const approvalExecutionFailures = approvals.filter((approval) => approval.executionStatus === "failed");
+    const staleClaimedTasks = tasks.filter((task) => task.status === "claimed" && staleSince(task.updatedAt, staleBeforeMs));
+    const staleRunningTasks = tasks.filter((task) => task.status === "running" && staleSince(task.updatedAt, staleBeforeMs));
+    const staleSendingMessages = outbox.filter((message) => message.status === "sending" && staleSince(message.updatedAt, staleBeforeMs));
+    const staleApprovalExecutions = approvals.filter((approval) => approval.executionStatus === "running" && staleSince(approval.updatedAt, staleBeforeMs));
     const recentDecisionDocs = await Promise.all(
       decisionEntries
         .filter((entry) => entry.type === "file")
@@ -767,6 +1108,30 @@ export function buildApp(options: AppOptions = {}): Hono {
         title: auditSummary(event),
         status: event.action,
         createdAt: event.createdAt
+      })),
+      ...workerProblems.slice(0, 5).map((event) => ({
+        id: event.id,
+        kind: "worker_problem",
+        severity: event.action === "worker.imap_error" ? "high" : "medium",
+        title: auditSummary(event),
+        status: event.action,
+        createdAt: event.createdAt
+      })),
+      ...ragFailures.slice(0, 5).map((job) => ({
+        id: job.id,
+        kind: "rag_failure",
+        severity: job.status === "dead" ? "high" : "medium",
+        title: operationalFailure(job.lastError) ?? "RAG index job failed.",
+        status: job.status,
+        createdAt: job.createdAt
+      })),
+      ...approvalExecutionFailures.slice(0, 5).map((approval) => ({
+        id: approval.id,
+        kind: "approval_execution",
+        severity: "high",
+        title: operationalFailure(approval.executionError) ?? approval.summary,
+        status: approval.executionStatus,
+        createdAt: approval.updatedAt
       }))
     ].sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 16);
     const cadenceStatus = outboundLast24h >= 5 || pendingApprovals.length >= 3
@@ -789,6 +1154,9 @@ export function buildApp(options: AppOptions = {}): Hono {
         recentMemoryChanges: memoryChanges.length,
         failedRuns: failedRuns.length,
         guardrailTrips: guardrails.length,
+        workerProblems: workerProblems.length,
+        ragFailures: ragFailures.length,
+        approvalExecutionFailures: approvalExecutionFailures.length,
         outboundLast24h,
         outboundLast7d
       },
@@ -891,15 +1259,15 @@ export function buildApp(options: AppOptions = {}): Hono {
           summary: auditSummary(event),
           createdAt: event.createdAt
         })),
-        failedRuns: failedRuns.slice(0, 10).map((run) => ({
-          id: run.id,
-          taskId: run.taskId,
-          modelTier: run.modelTier,
-          modelId: run.modelId,
-          failureMessage: run.failureMessage,
-          startedAt: run.startedAt,
-          finishedAt: run.finishedAt
-        })),
+        workerProblems: workerProblems.slice(0, 10).map(publicAuditRecord),
+        staleState: {
+          staleAfterSeconds: Math.trunc(operationalStaleAfterMs / 1000),
+          claimedTasks: staleClaimedTasks.length,
+          runningTasks: staleRunningTasks.length,
+          sendingMessages: staleSendingMessages.length,
+          runningApprovalExecutions: staleApprovalExecutions.length
+        },
+        failedRuns: failedRuns.slice(0, 10).map(publicFailedAgentRun),
         failedToolCalls: failedToolCalls.slice(0, 10).map((toolCall) => ({
           id: toolCall.id,
           runId: toolCall.runId,
@@ -909,20 +1277,24 @@ export function buildApp(options: AppOptions = {}): Hono {
           createdAt: toolCall.createdAt,
           completedAt: toolCall.completedAt
         })),
-        failedOutbound: failedOutbox.slice(0, 10).map(publicOutbound)
+        failedOutbound: failedOutbox.slice(0, 10).map(publicOutbound),
+        ragFailures: ragFailures.slice(0, 10).map(publicRagIndexJob),
+        approvalExecutionFailures: approvalExecutionFailures.slice(0, 10).map(publicApprovalExecutionFailure)
       }
     };
   }
 
   app.get("/healthz", (context) => context.json({ status: "ok" }));
 
-  app.get("/api/v1/status", (context) => context.json({
-    status: "ok",
-    app: "ai-assistant",
-    version: settings.appVersion,
-    auth_mode: settings.authMode,
-    base_path: settings.appBasePath
-  }));
+  app.get("/api/v1/status", (context) => {
+    const configuration = operationalConfiguration(settings);
+    return context.json({
+      status: configuration.status,
+      app: "ai-assistant",
+      version: settings.appVersion,
+      configuration
+    });
+  });
 
   app.get("/api/v1/jobs", async (context) => {
     const authContext = await requireContext(context);
@@ -1687,7 +2059,8 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (authContext instanceof Response) {
       return authContext;
     }
-    return context.json({ events: await store.listAudit(authContext, false) });
+    const events = await store.listAudit(authContext, false);
+    return context.json({ events: events.map(publicAuditRecord) });
   });
 
   app.get("/api/v1/outbox", async (context) => {
@@ -1790,7 +2163,8 @@ export function buildApp(options: AppOptions = {}): Hono {
     if (authContext instanceof Response) {
       return authContext;
     }
-    return context.json({ events: await store.listAudit(authContext, true) });
+    const events = await store.listAudit(authContext, true);
+    return context.json({ events: events.map(publicAuditRecord) });
   });
 
   app.get("/api/v1/admin/ai-config", async (context) => {

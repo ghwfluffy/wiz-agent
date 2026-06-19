@@ -16,6 +16,10 @@ import { runtimeSafetyPolicy } from "./security/safetyPolicy.js";
 const WORKER_INTERVAL_MS = 20_000;
 const INBOUND_BATCH_LIMIT = 10;
 const INBOUND_TIMEOUT_MS = 15_000;
+const MAX_WORKER_LOG_STRING_LENGTH = 500;
+const MAX_WORKER_LOG_ARRAY_ITEMS = 20;
+const MAX_WORKER_LOG_DEPTH = 4;
+const SENSITIVE_WORKER_LOG_KEY_PATTERN = /(?:password|passwd|pwd|secret|token|api[_\s-]?key|access[_\s-]?key|private[_\s-]?key|credential|authorization|bearer|cookie|session)/i;
 let inboundRateLimiter: SlidingWindowRateLimiter | undefined;
 let inboundRateLimiterLimit = 0;
 
@@ -145,7 +149,7 @@ export async function workerTick(options: {
         continue;
       } else {
         totals.inboundFailed += 1;
-        const details = imapErrorDetails(error);
+        const details = sanitizeWorkerDetails(imapErrorDetails(error));
         await options.store.recordAudit(context, "worker.imap_error", "connector", "imap", details);
         logWorker("worker_imap_error", {
           user_id: user.id,
@@ -169,12 +173,56 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   });
 }
 
+function compactWorkerLogText(value: string): string {
+  return value
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/https?:\/\/[^\s"'<>),]+/gi, "[url]")
+    .replace(
+      /\b(password|passwd|pwd|secret|token|api[_\s-]?key|access[_\s-]?key|private[_\s-]?key|credential|authorization|bearer|cookie|session)\b(\s*(?:=|:|is|was)\s*)([^\s,;]+)/gi,
+      "$1$2[redacted]"
+    )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, MAX_WORKER_LOG_STRING_LENGTH);
+}
+
+function sanitizeWorkerValue(value: unknown, depth = 0): unknown {
+  if (depth >= MAX_WORKER_LOG_DEPTH) {
+    return "[redacted]";
+  }
+  if (typeof value === "string") {
+    return compactWorkerLogText(value);
+  }
+  if (typeof value === "number" || typeof value === "boolean" || value === null) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value
+      .slice(0, MAX_WORKER_LOG_ARRAY_ITEMS)
+      .map((item) => sanitizeWorkerValue(item, depth + 1));
+  }
+  if (typeof value === "object" && value !== null) {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, nested]) => [
+      key,
+      SENSITIVE_WORKER_LOG_KEY_PATTERN.test(key) ? "[redacted]" : sanitizeWorkerValue(nested, depth + 1)
+    ]));
+  }
+  return null;
+}
+
+function sanitizeWorkerDetails(details: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = sanitizeWorkerValue(details);
+  return typeof sanitized === "object" && sanitized !== null && !Array.isArray(sanitized)
+    ? sanitized as Record<string, unknown>
+    : {};
+}
+
 function logWorker(event: string, details: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({
     event,
     app: "ai-assistant",
     timestamp: new Date().toISOString(),
-    ...details
+    ...sanitizeWorkerDetails(details)
   }));
 }
 

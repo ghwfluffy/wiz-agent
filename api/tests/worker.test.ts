@@ -1807,8 +1807,8 @@ describe("worker loop", () => {
       store,
       settings,
       imapProcessor: async () => {
-        throw Object.assign(new Error("Command failed"), {
-          response: "NO IMAP disabled"
+        throw Object.assign(new Error("Command failed password=topsecret https://private.example/path"), {
+          response: "NO IMAP disabled token=raw-secret-token"
         });
       }
     });
@@ -1820,9 +1820,12 @@ describe("worker loop", () => {
       entityType: "connector",
       entityId: "imap",
       details: expect.objectContaining({
-        message: "Command failed",
-        response: "NO IMAP disabled"
+        message: "Command failed password=[redacted] [url]",
+        response: "NO IMAP disabled token=[redacted]"
       })
     });
+    expect(JSON.stringify(audit[0])).not.toContain("topsecret");
+    expect(JSON.stringify(audit[0])).not.toContain("private.example");
+    expect(JSON.stringify(audit[0])).not.toContain("raw-secret-token");
   });
 });
