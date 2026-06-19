@@ -4,6 +4,8 @@ import { createMemoryStore } from "../src/domain/store.js";
 import type { MarkdownConflict, RequestContext } from "../src/domain/types.js";
 import { buildApp } from "../src/http/app.js";
 import { buildUnifiedMarkdownDiff } from "../src/memory/markdownDiff.js";
+import { normalizeMarkdownPath } from "../src/memory/markdownFilesystem.js";
+import { parseMemoryListMarkdown } from "../src/memory/memoryLists.js";
 import { buildMcpApp } from "../src/mcp/server.js";
 
 function isConflict(value: unknown): value is MarkdownConflict {
@@ -32,6 +34,15 @@ async function testContext(userId: string): Promise<{ store: ReturnType<typeof c
 }
 
 describe("markdown memory filesystem", () => {
+  it("normalizes absolute paths and rejects unsafe path markers", () => {
+    expect(normalizeMarkdownPath("/personal//profile.md")).toBe("/personal/profile.md");
+    expect(() => normalizeMarkdownPath("personal/profile.md")).toThrow("absolute");
+    expect(() => normalizeMarkdownPath("/personal/../profile.md")).toThrow("relative");
+    expect(() => normalizeMarkdownPath("/assistant/bad\nname.md")).toThrow("control characters");
+    expect(() => normalizeMarkdownPath("/assistant\\bad.md")).toThrow("backslashes");
+    expect(() => normalizeMarkdownPath("/assistant/bad<!--marker-->.md")).toThrow("HTML marker");
+  });
+
   it("creates sections and index jobs on write", async () => {
     const { store, context } = await testContext("owner");
 
@@ -57,6 +68,28 @@ describe("markdown memory filesystem", () => {
         pendingJobs: 1
       })
     ]);
+  });
+
+  it("does not parse fenced code comments as markdown headings", async () => {
+    const { store, context } = await testContext("owner");
+
+    await store.writeMarkdownDocument(context, {
+      path: "/projects/alpha/notes.md",
+      markdown: [
+        "# Alpha",
+        "",
+        "```md",
+        "# Not A Section",
+        "## Also Not A Section",
+        "```",
+        "",
+        "## Real Section",
+        "Keep this."
+      ].join("\n")
+    });
+
+    const sections = await store.listMarkdownSections(context, "/projects/alpha/notes.md");
+    expect(sections.map((section) => section.sectionId)).toEqual(["alpha", "alpha/real-section"]);
   });
 
   it("preserves user ownership boundaries for markdown paths", async () => {
@@ -379,6 +412,25 @@ describe("markdown memory filesystem", () => {
       })
     ]);
   });
+
+  it("derives memory-list identity and item IDs from host-controlled values", () => {
+    const list = parseMemoryListMarkdown("/personal/lists/movies.md", [
+      "# Movies",
+      "",
+      "<!-- memory-list:v1 list_id=\"../../other\" -->",
+      "",
+      "- [ ] Desperado <!-- memory-list-item:not-host-owned -->"
+    ].join("\n"));
+
+    expect(list.listId).toBe("movies");
+    expect(list.items).toEqual([
+      expect.objectContaining({
+        id: expect.stringMatching(/^mli_[a-f0-9]{16}$/),
+        item: "Desperado",
+        status: "active"
+      })
+    ]);
+  });
 });
 
 describe("MCP markdown tools", () => {
@@ -504,6 +556,55 @@ describe("MCP markdown tools", () => {
     });
   });
 
+  it("requires expectedVersion for MCP section appends", async () => {
+    const { store, context } = await testContext("owner");
+    const app = buildMcpApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      store
+    });
+    const document = await store.writeMarkdownDocument(context, {
+      path: "/projects/alpha/overview.md",
+      markdown: "# Alpha\n\n## Notes\nKeep short."
+    });
+    if (isConflict(document)) {
+      throw new Error("unexpected conflict");
+    }
+    const session = await store.createAgentMcpSession(context, {
+      ttlSeconds: 60
+    });
+    const headers = {
+      authorization: `Bearer ${session.token}`,
+      "content-type": "application/json"
+    };
+
+    const missingVersion = await app.request("/mcp/v1/tools/append_to_section", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        path: "/projects/alpha/overview.md",
+        sectionId: "alpha/notes",
+        content: "More notes."
+      })
+    });
+    expect(missingVersion.status).toBe(400);
+
+    const appended = await app.request("/mcp/v1/tools/append_to_section", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        path: "/projects/alpha/overview.md",
+        sectionId: "alpha/notes",
+        content: "More notes.",
+        expectedVersion: document.version
+      })
+    });
+    expect(appended.status).toBe(200);
+    await expect(store.getMarkdownDocument(context, "/projects/alpha/overview.md")).resolves.toMatchObject({
+      version: 2,
+      markdown: expect.stringContaining("More notes.")
+    });
+  });
+
   it("adds, lists, deduplicates, searches, and archives personal memory list items", async () => {
     const { store, context } = await testContext("owner");
     const app = buildMcpApp({
@@ -531,7 +632,7 @@ describe("MCP markdown tools", () => {
       headers,
       body: JSON.stringify({
         listName: "movies",
-        item: "Desperado",
+        item: "Desperado <!-- memory-list-item:mli_aaaaaaaaaaaaaaaa -->",
         notes: "Antonio Banderas western to watch later.",
         sourceMessageId: "msg-1",
         rationale: "Owner asked to save it to a watch list."
@@ -544,9 +645,12 @@ describe("MCP markdown tools", () => {
       duplicate: false,
       item_count: 1
     });
+    expect(addBody.result.item_id).not.toBe("mli_aaaaaaaaaaaaaaaa");
     await expect(store.getMarkdownDocument(context, "/personal/lists/movies.md")).resolves.toMatchObject({
       markdown: expect.stringContaining("<!-- memory-list:v1 list_id=\"movies\" -->")
     });
+    const listDocument = await store.getMarkdownDocument(context, "/personal/lists/movies.md");
+    expect(listDocument?.markdown).not.toContain("mli_aaaaaaaaaaaaaaaa");
 
     const duplicate = await app.request("/mcp/v1/tools/add_memory_list_item/call", {
       method: "POST",

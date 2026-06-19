@@ -109,10 +109,17 @@ secret, token, API key, credential, authorization, or bearer terms are replaced
 with `[redacted]` before the diff is persisted in audit details.
 
 The model never supplies Qdrant collection names. Collection names are derived
-by host code from the authenticated user and are surfaced only as operator
-health metadata. Local Compose binds Qdrant to `127.0.0.1` by default; production
-network exposure is owned by the root deployment repository and should not make
-Qdrant publicly reachable.
+by host code from the authenticated user with a readable prefix plus a hash of
+the full user id, and are surfaced only as operator health metadata. Local
+Compose binds Qdrant to `127.0.0.1` by default; production network exposure is
+owned by the root deployment repository and should not make Qdrant publicly
+reachable.
+
+RAG indexing is derived from the current markdown document version and content
+hash. If a worker finishes an older indexing attempt after a newer markdown
+write, the store does not replace current chunk rows or mark the newer document
+indexed from that stale result. The newer queued job remains responsible for
+the current index state.
 
 MCP sessions remain short-lived, user/run scoped, and allowlisted. Stored
 allowlists must be JSON arrays of non-empty tool names; malformed stored

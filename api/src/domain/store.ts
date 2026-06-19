@@ -1665,7 +1665,7 @@ export function createPostgresStore(pool: Pool): AgentStore {
       if (!document) {
         return undefined;
       }
-      if (expectedVersion !== undefined && document.version !== expectedVersion) {
+      if (document.version !== expectedVersion) {
         return conflict(document.path, expectedVersion, document.version);
       }
       const section = parseMarkdownSections(document.markdown).find((entry) => entry.sectionId === sectionId);
@@ -1890,7 +1890,10 @@ export function createPostgresStore(pool: Pool): AgentStore {
       await pool.query(
         `INSERT INTO rag_user_indexes (user_id, qdrant_collection)
          VALUES ($1, $2)
-         ON CONFLICT (user_id) DO NOTHING`,
+         ON CONFLICT (user_id) DO UPDATE
+           SET qdrant_collection = EXCLUDED.qdrant_collection,
+               updated_at = now()
+           WHERE rag_user_indexes.qdrant_collection <> EXCLUDED.qdrant_collection`,
         [context.userId, collection]
       );
       return collection;
@@ -2033,6 +2036,20 @@ export function createPostgresStore(pool: Pool): AgentStore {
       const client = await pool.connect();
       try {
         await client.query("BEGIN");
+        if (indexedDocument) {
+          const current = await client.query(
+            `SELECT version, content_hash
+             FROM markdown_documents
+             WHERE user_id = $1 AND id = $2 AND deleted_at IS NULL
+             FOR UPDATE`,
+            [context.userId, documentId]
+          );
+          const row = current.rows[0] as Record<string, unknown> | undefined;
+          if (!row || Number(row.version) !== indexedDocument.version || String(row.content_hash) !== indexedDocument.contentHash) {
+            await client.query("COMMIT");
+            return this.listChunksForDocument(context, documentId);
+          }
+        }
         await client.query(
           `DELETE FROM markdown_document_chunks
            WHERE user_id = $1 AND document_id = $2`,
@@ -2123,7 +2140,8 @@ export function createPostgresStore(pool: Pool): AgentStore {
            (SELECT count(*) FROM markdown_document_chunks WHERE user_id = $1)
          )
          ON CONFLICT (user_id) DO UPDATE
-           SET collection_exists = COALESCE($3, rag_user_indexes.collection_exists),
+           SET qdrant_collection = EXCLUDED.qdrant_collection,
+               collection_exists = COALESCE($3, rag_user_indexes.collection_exists),
                qdrant_point_count = COALESCE($4, rag_user_indexes.qdrant_point_count),
                health_status = COALESCE($5, rag_user_indexes.health_status),
                last_error = $6,
@@ -3459,7 +3477,7 @@ export function createMemoryStore(): AgentStore {
       if (!document) {
         return undefined;
       }
-      if (expectedVersion !== undefined && document.version !== expectedVersion) {
+      if (document.version !== expectedVersion) {
         return conflict(document.path, expectedVersion, document.version);
       }
       const section = parseMarkdownSections(document.markdown).find((entry) => entry.sectionId === sectionId);
@@ -3710,7 +3728,15 @@ export function createMemoryStore(): AgentStore {
         job.completedAt = nowIso();
       }
     },
-    async replaceDocumentChunks(context, documentId, chunks, _indexedDocument) {
+    async replaceDocumentChunks(context, documentId, chunks, indexedDocument) {
+      if (indexedDocument) {
+        const current = [...markdownDocuments.values()].find((entry) => {
+          return entry.userId === context.userId && entry.id === documentId;
+        });
+        if (!current || current.version !== indexedDocument.version || current.contentHash !== indexedDocument.contentHash) {
+          return markdownChunks.get(`${context.userId}:${documentId}`) ?? [];
+        }
+      }
       const now = nowIso();
       const records = chunks.map((chunk): RagDocumentChunkRecord => ({
         ...chunk,
@@ -3745,7 +3771,7 @@ export function createMemoryStore(): AgentStore {
       const chunks = [...markdownChunks.values()].flat().filter((chunk) => chunk.userId === userId);
       const record: RagUserIndexHealthRecord = {
         userId,
-        qdrantCollection: existing?.qdrantCollection ?? qdrantCollectionForUser(userId),
+        qdrantCollection: qdrantCollectionForUser(userId),
         collectionExists: input.collectionExists ?? existing?.collectionExists ?? false,
         qdrantPointCount: input.qdrantPointCount ?? existing?.qdrantPointCount ?? null,
         healthStatus: input.healthStatus ?? existing?.healthStatus ?? "unknown",

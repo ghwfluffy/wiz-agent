@@ -92,7 +92,7 @@ const memoryToolSchemas = {
     path: McpMarkdownPathSchema,
     sectionId: McpSectionIdSchema,
     content: z.string().min(1),
-    expectedVersion: z.number().int().positive().optional()
+    expectedVersion: z.number().int().positive()
   }).strict(),
   search_headings: z.object({
     query: z.string().min(1).max(500).optional(),
@@ -383,7 +383,7 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
             stringArg(args, "path"),
             stringArg(args, "sectionId"),
             stringArg(args, "content"),
-            numberArg(args, "expectedVersion")
+            numberArg(args, "expectedVersion") ?? -1
           );
         } else if (tool === "search_headings") {
           result = {

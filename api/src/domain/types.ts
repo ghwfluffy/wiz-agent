@@ -623,7 +623,7 @@ export type AgentStore = {
     path: string,
     sectionId: string,
     markdown: string,
-    expectedVersion?: number
+    expectedVersion: number
   ): Promise<MarkdownDocumentRecord | MarkdownConflict | undefined>;
   listMemoryChanges(context: RequestContext, filter?: MemoryChangeFilter): Promise<MemoryChangeRecord[]>;
   searchMarkdownExact(context: RequestContext, query: string): Promise<MarkdownDirectoryEntry[]>;

@@ -20,6 +20,12 @@ export function normalizeMarkdownPath(path: string): string {
   if (!trimmed.startsWith("/")) {
     throw new Error("Markdown paths must be absolute.");
   }
+  if (/[\0-\x1f\x7f]/.test(trimmed)) {
+    throw new Error("Markdown paths may not contain control characters.");
+  }
+  if (/[\\?#<>]/.test(trimmed)) {
+    throw new Error("Markdown paths may not contain backslashes, URL delimiters, or HTML marker characters.");
+  }
   const parts = trimmed.split("/").filter(Boolean);
   if (parts.some((part) => part === "." || part === "..")) {
     throw new Error("Markdown paths may not contain relative segments.");
@@ -61,9 +67,26 @@ export function parseMarkdownSections(markdown: string): ParsedMarkdownSection[]
   const lines = markdown.split("\n");
   const headings: Array<{ line: number; level: number; heading: string; path: string[] }> = [];
   const stack: string[] = [];
+  let activeFence: { marker: "`" | "~"; length: number } | null = null;
 
   lines.forEach((line, index) => {
-    const match = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    const fenceMatch = /^(?: {0,3})(`{3,}|~{3,})/.exec(line);
+    if (activeFence) {
+      const marker = fenceMatch?.[1] ?? "";
+      if (marker.startsWith(activeFence.marker) && marker.length >= activeFence.length) {
+        activeFence = null;
+      }
+      return;
+    }
+    if (fenceMatch?.[1]) {
+      const marker = fenceMatch[1];
+      activeFence = {
+        marker: marker[0] as "`" | "~",
+        length: marker.length
+      };
+      return;
+    }
+    const match = /^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$/.exec(line);
     if (!match) {
       return;
     }

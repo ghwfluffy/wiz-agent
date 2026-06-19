@@ -91,7 +91,17 @@ function itemId(listId: string, item: string): string {
 }
 
 function escapeLine(value: string): string {
-  return value.replace(/\r?\n/g, " ").trim();
+  return value
+    .replace(/\r?\n/g, " ")
+    .replace(/<!--.*?-->/g, " ")
+    .replace(/<!--|-->/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function safeItemId(listId: string, item: string, parsedId: string | undefined): string {
+  const normalized = parsedId?.trim();
+  return normalized && /^mli_[a-f0-9]{16}$/.test(normalized) ? normalized : itemId(listId, item);
 }
 
 function renderItem(item: MemoryListItem): string[] {
@@ -137,15 +147,15 @@ export function parseMemoryListMarkdown(path: string, markdown: string): ParsedM
   const normalized = validateMemoryListPath(path);
   const fallbackListId = listIdFromPath(normalized);
   const title = markdown.match(/^#\s+(.+)$/m)?.[1]?.trim() || titleize(fallbackListId);
-  const listId = markdown.match(/<!--\s*memory-list:v1\s+list_id="([^"]+)"\s*-->/)?.[1]?.trim() || fallbackListId;
+  const listId = fallbackListId;
   const items: MemoryListItem[] = [];
   let current: MemoryListItem | null = null;
   for (const line of markdown.split("\n")) {
     const itemMatch = /^-\s+\[([ xX])\]\s+(.+?)\s*(?:<!--\s*memory-list-item:([^>\s]+)\s*-->)?\s*$/.exec(line);
     if (itemMatch) {
-      const itemText = (itemMatch[2] ?? "").trim();
+      const itemText = escapeLine(itemMatch[2] ?? "");
       current = {
-        id: itemMatch[3]?.trim() || itemId(listId, itemText),
+        id: safeItemId(listId, itemText, itemMatch[3]),
         item: itemText,
         status: (itemMatch[1] ?? " ") === " " ? "active" : "archived",
         addedAt: null,

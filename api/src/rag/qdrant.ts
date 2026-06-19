@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import type { Settings } from "../config/settings.js";
+import { normalizeMarkdownDirectory } from "../memory/markdownFilesystem.js";
 
 export type QdrantPoint = {
   id: string;
@@ -22,7 +24,13 @@ export type QdrantClient = {
 };
 
 export function qdrantCollectionForUser(userId: string): string {
-  return `user_${userId.replace(/[^a-zA-Z0-9_-]/g, "_")}_rag`;
+  const readable = userId
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 32) || "user";
+  const digest = createHash("sha256").update(userId).digest("hex").slice(0, 24);
+  return `user_${readable}_${digest}_rag`;
 }
 
 export async function qdrantHealth(settings: Settings, fetchImpl: typeof fetch = fetch): Promise<{
@@ -41,10 +49,13 @@ function baseUrl(settings: Settings): string {
 }
 
 function pathPrefixFilter(pathPrefix?: string): Record<string, unknown> | undefined {
-  if (!pathPrefix || pathPrefix === "/") {
+  if (!pathPrefix) {
     return undefined;
   }
-  const normalized = pathPrefix.startsWith("/") ? pathPrefix.replace(/\/$/, "") : `/${pathPrefix.replace(/\/$/, "")}`;
+  const normalized = normalizeMarkdownDirectory(pathPrefix);
+  if (normalized === "/") {
+    return undefined;
+  }
   return {
     must: [
       { key: "path_prefixes", match: { value: normalized || "/" } }

@@ -5,9 +5,9 @@ import type { RequestContext } from "../src/domain/types.js";
 import { buildMcpApp } from "../src/mcp/server.js";
 import { chunkMarkdownDocument, deterministicPointId } from "../src/rag/chunking.js";
 import { MockEmbeddingClient } from "../src/rag/embeddings.js";
-import { processRagIndexJobs } from "../src/rag/indexer.js";
+import { indexMarkdownDocument, processRagIndexJobs } from "../src/rag/indexer.js";
 import type { QdrantClient, QdrantPoint, QdrantSearchHit } from "../src/rag/qdrant.js";
-import { HttpQdrantClient, qdrantDocumentFilter } from "../src/rag/qdrant.js";
+import { HttpQdrantClient, qdrantCollectionForUser, qdrantDocumentFilter } from "../src/rag/qdrant.js";
 
 class FakeQdrantClient implements QdrantClient {
   collections = new Map<string, Map<string, QdrantPoint>>();
@@ -120,6 +120,11 @@ describe("RAG chunking", () => {
     });
   });
 
+  it("derives collision-resistant Qdrant collection names from user ids", () => {
+    expect(qdrantCollectionForUser("owner")).toMatch(/^user_owner_[a-f0-9]{24}_rag$/);
+    expect(qdrantCollectionForUser("a:b")).not.toBe(qdrantCollectionForUser("a/b"));
+  });
+
   it("sends path-prefix filters against indexed prefix payloads", async () => {
     let requestBody: Record<string, unknown> | undefined;
     const fetchImpl: typeof fetch = async (_url, init) => {
@@ -138,6 +143,10 @@ describe("RAG chunking", () => {
         ]
       }
     });
+    await expect(client.search("collection", [0, 1, 0, 1], {
+      pathPrefix: "/projects/../secrets",
+      limit: 3
+    })).rejects.toThrow("relative");
   });
 });
 
@@ -224,6 +233,53 @@ describe("RAG worker", () => {
     const point = [...([...(qdrant.collections.values())][0]?.values() ?? [])][0];
     expect(point?.payload.document_version).toBe(2);
     expect(point?.payload.excerpt).toContain("Current version.");
+  });
+
+  it("does not let stale indexing results mark a newer document indexed", async () => {
+    const { store, context } = await testContext("owner");
+    const first = await store.writeMarkdownDocument(context, {
+      path: "/personal/profile.md",
+      markdown: "# Profile\nOld version."
+    });
+    if ("code" in first) {
+      throw new Error("unexpected conflict");
+    }
+    const second = await store.writeMarkdownDocument(context, {
+      path: "/personal/profile.md",
+      markdown: "# Profile\nCurrent version.",
+      expectedVersion: first.version
+    });
+    if ("code" in second) {
+      throw new Error("unexpected conflict");
+    }
+    const qdrant = new FakeQdrantClient();
+    const settings = loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone", RAG_EMBEDDING_DIMENSIONS: "4" });
+
+    await indexMarkdownDocument({
+      store,
+      qdrant,
+      embeddings: new MockEmbeddingClient(),
+      settings,
+      document: first
+    });
+
+    await expect(store.getMarkdownIndexStatus(context, "/personal")).resolves.toEqual([
+      expect.objectContaining({ path: "/personal/profile.md", version: 2, indexStatus: "pending" })
+    ]);
+    await expect(store.listChunksForDocument(context, first.id)).resolves.toEqual([]);
+
+    await expect(processRagIndexJobs({
+      store,
+      qdrant,
+      embeddings: new MockEmbeddingClient(),
+      settings
+    })).resolves.toMatchObject({ claimed: 2, indexed: 1, failed: 0 });
+    await expect(store.listChunksForDocument(context, second.id)).resolves.toEqual([
+      expect.objectContaining({ documentVersion: 2, content: expect.stringContaining("Current version.") })
+    ]);
+    await expect(store.getMarkdownIndexStatus(context, "/personal")).resolves.toEqual([
+      expect.objectContaining({ path: "/personal/profile.md", version: 2, indexStatus: "indexed" })
+    ]);
   });
 
   it("retries transient failures and marks jobs dead after the attempt limit", async () => {

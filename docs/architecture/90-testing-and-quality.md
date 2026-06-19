@@ -131,9 +131,15 @@ Current tests cover:
   polling.
 - markdown RAG chunking determinism, section metadata preservation, and
   deterministic point IDs.
+- markdown path normalization, fenced-code-aware section parsing,
+  optimistic-concurrency enforcement for section appends, and host-owned
+  personal-list marker/id handling.
 - RAG job claiming, stale-claim recovery, indexing, transient retry,
   dead-letter behavior, and delete-job point removal with mock Qdrant and mock
   embeddings.
+- collision-resistant user-derived Qdrant collection names, normalized path
+  prefix filters, and stale indexing results not marking newer markdown
+  versions indexed.
 - MCP semantic search source-handle resolution under authenticated user scope.
 
 ## Agent Simulation Harness

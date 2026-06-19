@@ -228,6 +228,12 @@ Markdown paths are user-owned and scoped by `users.id`, for example
 views over those path strings. Deleted markdown rows are omitted from directory
 and tree reads.
 
+Markdown path normalization is host-owned. Paths must be absolute, collapse
+duplicate separators, and reject relative segments, control characters,
+backslashes, URL query/fragment delimiters, and HTML marker characters. This
+keeps audit markers, hidden list markers, and route-decoded paths from being
+smuggled through path strings.
+
 Personal offload lists are ordinary markdown documents with deterministic list
 semantics. Canonical collection files live under `/personal/lists/`, including
 `/personal/lists/movies.md`, `/personal/lists/project-ideas.md`,
@@ -247,11 +253,20 @@ session, reject paths outside `/personal/lists/`, audit mutations, enqueue the
 normal markdown/RAG indexing path through `writeMarkdownDocument`, and archive
 items by default instead of deleting history.
 
+List identity is derived from the normalized `/personal/lists/*.md` path, not
+from the editable marker in the markdown body. Host tools own item identifiers
+and strip markdown HTML comments from list item text and metadata before
+rendering so owner/model-provided text cannot spoof hidden list markers.
+
 Markdown writes parse headings levels 1 through 6 into stable section IDs based
 on heading path, such as `goals/mvp`; pre-heading content is `_preamble`.
 Full-file and section writes use optimistic concurrency. A stale
 `expectedVersion` returns a structured conflict instead of overwriting newer
 state.
+
+Markdown section parsing ignores headings inside fenced code blocks. Section
+replace and append operations require the caller's current document version so
+code examples and stale edits cannot silently reshape a newer document.
 
 Markdown write audit entries also carry a bounded, redacted before/after
 snapshot and unified line diff. `GET /api/v1/memory/changes/recent` exposes
