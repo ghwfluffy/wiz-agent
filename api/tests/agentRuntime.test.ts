@@ -1288,8 +1288,7 @@ describe("agent task execution", () => {
         amountCents: 19900,
         organization: "OpenAI",
         linkedAccountId: "acct-chase",
-        paymentPeriod: "monthly",
-        paymentDay: 9,
+        paymentPeriod: '{"kind":"monthly_day","day":9}',
         billingDay: 9,
         userIntentSummary: "Add Codex as a monthly Chase card bill."
       })
@@ -1350,8 +1349,7 @@ describe("agent task execution", () => {
             name: "Codex",
             amount_cents: 19900,
             linked_account_id: "acct-chase",
-            payment_period: "monthly",
-            payment_day: 9
+            payment_period: '{"kind":"monthly_day","day":9}'
           })
         })
       }),

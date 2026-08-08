@@ -197,7 +197,6 @@ const BudgetContractFieldsSchema = z.object({
   lastPaymentDate: z.string().date().nullable().optional(),
   nextPaymentDate: z.string().date().nullable().optional(),
   paymentPeriod: z.string().min(1).nullable().optional(),
-  paymentDay: z.number().int().min(1).max(31).nullable().optional(),
   expirationDate: z.string().date().nullable().optional(),
   notes: z.string().nullable().optional(),
   category: z.string().nullable().optional(),
@@ -211,6 +210,7 @@ export const CreateBudgetContractToolSchema = BudgetContractFieldsSchema.extend(
   type: z.enum(["income", "payment", "transfer"]),
   amountCents: z.number().int().min(0),
   organization: z.string().min(1),
+  paymentPeriod: z.string().min(1),
   userIntentSummary: z.string().min(1)
 });
 

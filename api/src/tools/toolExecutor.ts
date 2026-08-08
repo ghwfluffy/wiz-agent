@@ -62,7 +62,6 @@ function budgetContractPayload(args: Record<string, unknown>, options: { include
     last_payment_date: args.lastPaymentDate,
     next_payment_date: args.nextPaymentDate,
     payment_period: args.paymentPeriod,
-    payment_day: args.paymentDay,
     expiration_date: args.expirationDate,
     notes: args.notes,
     category: args.category,

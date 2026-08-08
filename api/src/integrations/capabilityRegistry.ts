@@ -369,7 +369,7 @@ const budgetActions: readonly IntegrationActionCapability[] = [
     risk: "high",
     method: "POST",
     pathTemplate: "/contracts",
-    bodySummary: "Contract name, type, organization, amount_cents, linked account or wallet, recurrence, dates, category, and notes.",
+    bodySummary: "Contract name, type, organization, amount_cents, linked account or wallet, structured payment_period recurrence JSON, dates, category, and notes.",
     purpose: "Create a recurring income, payment, or transfer contract used by budgeting projections.",
     whenToUse: ["The owner explicitly asks to add a recurring bill, subscription, income, or transfer."],
     safety: [
@@ -388,7 +388,7 @@ const budgetActions: readonly IntegrationActionCapability[] = [
     method: "PUT",
     pathTemplate: "/contracts/:contract_id",
     pathParams: ["contract_id"],
-    bodySummary: "Patchable contract fields such as amount_cents, organization, linked account, recurrence, dates, category, notes, URL, and billing day.",
+    bodySummary: "Patchable contract fields such as amount_cents, organization, linked account, structured payment_period recurrence JSON, dates, category, notes, URL, and billing day.",
     purpose: "Update a recurring contract used by budgeting projections.",
     whenToUse: ["The owner explicitly asks to change an existing recurring bill, subscription, income, or transfer."],
     safety: [
