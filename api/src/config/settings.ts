@@ -131,6 +131,9 @@ const SettingsSchema = z.object({
   agentOpenaiTranscriptionModel: AiModelIdSchema.default("gpt-4o-transcribe"),
   agentOpenaiApiKey: z.string().trim().default(""),
   agentOpenaiBaseUrl: RequiredServiceUrlSchema.default("https://api.openai.com/v1"),
+  agentModelApiKey: z.string().trim().default(""),
+  agentModelBaseUrl: RequiredServiceUrlSchema.default("https://api.openai.com/v1"),
+  modelGatewayAlertToken: z.string().trim().default(""),
   agentSecretDir: FilesystemPathSchema.default("secrets"),
   agentVoiceMaxAudioBytes: boundedInteger(1, 50 * 1024 * 1024).default(25 * 1024 * 1024),
   agentOutboundEnabled: EnvBooleanSchema.default(false),
@@ -345,6 +348,7 @@ function validateProductionSettings(settings: Settings): void {
 
 export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
   const openAiKeyFromFile = readSecretFile(env.AGENT_OPENAI_API_KEY_FILE);
+  const modelKeyFromFile = readSecretFile(env.AGENT_MODEL_API_KEY_FILE);
   const ownerEmailEnvProvided = env.AGENT_OWNER_EMAILS !== undefined;
   const parsed = SettingsSchema.parse({
     appEnv: nonBlank(env.APP_ENV),
@@ -375,6 +379,10 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     agentOpenaiTranscriptionModel: nonBlank(env.AGENT_OPENAI_TRANSCRIPTION_MODEL),
     agentOpenaiApiKey: nonBlank(env.AGENT_OPENAI_API_KEY) ?? nonBlank(env.OPENAI_API_KEY) ?? openAiKeyFromFile,
     agentOpenaiBaseUrl: nonBlank(env.AGENT_OPENAI_BASE_URL),
+    agentModelApiKey: nonBlank(env.AGENT_MODEL_API_KEY) ?? modelKeyFromFile
+      ?? nonBlank(env.AGENT_OPENAI_API_KEY) ?? nonBlank(env.OPENAI_API_KEY) ?? openAiKeyFromFile,
+    agentModelBaseUrl: nonBlank(env.AGENT_MODEL_BASE_URL) ?? nonBlank(env.AGENT_OPENAI_BASE_URL),
+    modelGatewayAlertToken: nonBlank(env.MODEL_GATEWAY_ALERT_TOKEN) ?? readSecretFile(env.MODEL_GATEWAY_ALERT_TOKEN_FILE),
     agentSecretDir: nonBlank(env.AGENT_SECRET_DIR),
     agentVoiceMaxAudioBytes: nonBlank(env.AGENT_VOICE_MAX_AUDIO_BYTES),
     agentOutboundEnabled: nonBlank(env.AGENT_OUTBOUND_ENABLED),

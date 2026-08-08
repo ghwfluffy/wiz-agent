@@ -579,3 +579,8 @@ task records/events and existing markdown APIs, so user scope, audit events,
 markdown section parsing, and RAG indexing remain deterministic host behavior.
 Each entry has a deterministic task/status marker to avoid duplicates when a
 worker tick or status update is retried.
+Production may route language generation through an internal OpenAI-compatible model gateway using
+`AGENT_MODEL_BASE_URL` and `AGENT_MODEL_API_KEY_FILE`. These settings are deliberately separate
+from `AGENT_OPENAI_BASE_URL` and `AGENT_OPENAI_API_KEY_FILE`, which remain responsible for audio
+transcription and other auxiliary OpenAI API workloads. Tool results are returned to the Responses
+API with `previous_response_id`, allowing the model to produce a context-aware final answer.

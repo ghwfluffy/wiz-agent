@@ -15,7 +15,18 @@ export type ToolModelRequest = {
   tier: ModelTier;
   prompt: string;
   tools: unknown[];
+  previousResponseId?: string;
+  toolOutputs?: Array<{ callId: string; output: unknown }>;
   signal?: AbortSignal;
+};
+
+export type ToolModelTurn = {
+  responseId?: string;
+  calls: Array<{ callId: string; toolName: string; arguments: unknown }>;
+  responseText?: string;
+  toolName?: string;
+  arguments?: unknown;
+  callId?: string;
 };
 
 export type TextModelRequest = {
@@ -46,7 +57,7 @@ export type RepairToolArgumentsRequest = {
 
 export type AgentModelClient = {
   runStructured(request: StructuredModelRequest): Promise<unknown>;
-  runWithTools(request: ToolModelRequest): Promise<unknown>;
+  runWithTools(request: ToolModelRequest): Promise<unknown | ToolModelTurn>;
   runText(request: TextModelRequest): Promise<string>;
   transcribeAudio(request: TranscribeAudioRequest): Promise<string>;
   repairToolArguments(request: RepairToolArgumentsRequest): Promise<unknown>;
@@ -87,16 +98,22 @@ export class MockModelClient implements AgentModelClient {
 }
 
 export class OpenAIModelClient implements AgentModelClient {
-  private readonly apiKey: string;
-  private readonly baseUrl: string;
+  private readonly modelApiKey: string;
+  private readonly modelBaseUrl: string;
+  private readonly auxiliaryApiKey: string;
+  private readonly auxiliaryBaseUrl: string;
 
   constructor(options: {
     apiKey?: string;
     baseUrl?: string;
+    auxiliaryApiKey?: string;
+    auxiliaryBaseUrl?: string;
     fetchImpl?: typeof fetch;
   } = {}) {
-    this.apiKey = options.apiKey ?? process.env.AGENT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
-    this.baseUrl = (options.baseUrl ?? process.env.AGENT_OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
+    this.modelApiKey = options.apiKey ?? process.env.AGENT_MODEL_API_KEY ?? process.env.AGENT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
+    this.modelBaseUrl = (options.baseUrl ?? process.env.AGENT_MODEL_BASE_URL ?? process.env.AGENT_OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
+    this.auxiliaryApiKey = options.auxiliaryApiKey ?? process.env.AGENT_OPENAI_API_KEY ?? process.env.OPENAI_API_KEY ?? this.modelApiKey;
+    this.auxiliaryBaseUrl = (options.auxiliaryBaseUrl ?? process.env.AGENT_OPENAI_BASE_URL ?? "https://api.openai.com/v1").replace(/\/$/, "");
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -104,8 +121,10 @@ export class OpenAIModelClient implements AgentModelClient {
 
   static fromSettings(settings: Settings, options: { fetchImpl?: typeof fetch } = {}): OpenAIModelClient {
     return new OpenAIModelClient({
-      apiKey: settings.agentOpenaiApiKey,
-      baseUrl: settings.agentOpenaiBaseUrl,
+      apiKey: settings.agentModelApiKey,
+      baseUrl: settings.agentModelBaseUrl,
+      auxiliaryApiKey: settings.agentOpenaiApiKey,
+      auxiliaryBaseUrl: settings.agentOpenaiBaseUrl,
       fetchImpl: options.fetchImpl
     });
   }
@@ -132,24 +151,43 @@ export class OpenAIModelClient implements AgentModelClient {
   }
 
   async runWithTools(request: ToolModelRequest): Promise<unknown> {
+    const input = request.toolOutputs?.length
+      ? request.toolOutputs.map((item) => ({
+          type: "function_call_output",
+          call_id: item.callId,
+          output: typeof item.output === "string" ? item.output : JSON.stringify(item.output)
+        }))
+      : request.prompt;
     const response = await this.createResponse(
       {
         model: request.model,
-        input: request.prompt,
-        tools: request.tools.map(toOpenAiTool)
+        input,
+        tools: request.tools.map(toOpenAiTool),
+        ...(request.previousResponseId ? { previous_response_id: request.previousResponseId } : {})
       },
       {
         signal: request.signal
       }
     );
-    const functionCall = findFunctionCall(response);
-    if (functionCall) {
-      return {
-        toolName: functionCall.name,
-        arguments: parseJson(functionCall.arguments)
-      };
+    const calls = findFunctionCalls(response);
+    const firstCall = calls[0];
+    if (typeof response.id !== "string" && firstCall) {
+      return { toolName: firstCall.name, arguments: parseJson(firstCall.arguments) };
     }
-    return parseJsonOrTextOutput(response);
+    return {
+      responseId: typeof response.id === "string" ? response.id : undefined,
+      calls: calls.map((call) => ({
+        callId: call.callId,
+        toolName: call.name,
+        arguments: parseJson(call.arguments)
+      })),
+      responseText: parseTextOutput(response) || undefined,
+      ...(firstCall ? {
+        toolName: firstCall.name,
+        arguments: parseJson(firstCall.arguments),
+        callId: firstCall.callId
+      } : {})
+    } satisfies ToolModelTurn;
   }
 
   async runText(request: TextModelRequest): Promise<string> {
@@ -166,7 +204,7 @@ export class OpenAIModelClient implements AgentModelClient {
   }
 
   async transcribeAudio(request: TranscribeAudioRequest): Promise<string> {
-    if (!this.apiKey) {
+    if (!this.auxiliaryApiKey) {
       throw new Error("OpenAI API key is not configured. Set AGENT_OPENAI_API_KEY in secrets.");
     }
     const form = new FormData();
@@ -176,10 +214,10 @@ export class OpenAIModelClient implements AgentModelClient {
       form.set("prompt", request.prompt.trim());
     }
     form.set("file", request.file, request.filename);
-    const response = await this.fetchImpl(`${this.baseUrl}/audio/transcriptions`, {
+    const response = await this.fetchImpl(`${this.auxiliaryBaseUrl}/audio/transcriptions`, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${this.apiKey}`
+        authorization: `Bearer ${this.auxiliaryApiKey}`
       },
       body: form,
       signal: request.signal
@@ -224,13 +262,13 @@ export class OpenAIModelClient implements AgentModelClient {
     body: Record<string, unknown>,
     options: { signal?: AbortSignal } = {}
   ): Promise<Record<string, unknown>> {
-    if (!this.apiKey) {
+    if (!this.modelApiKey) {
       throw new Error("OpenAI API key is not configured. Set AGENT_OPENAI_API_KEY in secrets.");
     }
-    const response = await this.fetchImpl(`${this.baseUrl}/responses`, {
+    const response = await this.fetchImpl(`${this.modelBaseUrl}/responses`, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${this.apiKey}`,
+        authorization: `Bearer ${this.modelApiKey}`,
         "content-type": "application/json"
       },
       body: JSON.stringify(body),
@@ -262,24 +300,26 @@ function toOpenAiTool(tool: unknown): Record<string, unknown> {
   };
 }
 
-function findFunctionCall(response: Record<string, unknown>): { name: string; arguments: unknown } | undefined {
+function findFunctionCalls(response: Record<string, unknown>): Array<{ callId: string; name: string; arguments: unknown }> {
   const output = response.output;
   if (!Array.isArray(output)) {
-    return undefined;
+    return [];
   }
+  const calls: Array<{ callId: string; name: string; arguments: unknown }> = [];
   for (const item of output) {
     if (!item || typeof item !== "object") {
       continue;
     }
     const maybe = item as Record<string, unknown>;
     if (maybe.type === "function_call" && typeof maybe.name === "string") {
-      return {
+      calls.push({
+        callId: typeof maybe.call_id === "string" ? maybe.call_id : typeof maybe.id === "string" ? maybe.id : maybe.name,
         name: maybe.name,
         arguments: maybe.arguments
-      };
+      });
     }
   }
-  return undefined;
+  return calls;
 }
 
 function parseJsonOutput(response: Record<string, unknown>): unknown {

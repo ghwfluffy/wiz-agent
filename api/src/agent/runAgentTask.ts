@@ -300,7 +300,19 @@ export async function runAgentTask(options: {
     });
     let responseText: string | undefined;
     try {
-      responseText = ToolRegistry[validated.toolName].access === "read"
+      const continuation = toolContinuation(modelOutput);
+      if (continuation) {
+        const finalTurn = await runtimeModelClient.runWithTools({
+          model: modelId,
+          tier,
+          prompt: "",
+          tools: modelToolDescriptors(),
+          previousResponseId: continuation.responseId,
+          toolOutputs: [{ callId: continuation.callId, output: execution.result }]
+        });
+        responseText = modelText(finalTurn);
+      }
+      responseText ??= ToolRegistry[validated.toolName].access === "read"
         ? await synthesizeToolResponse({
             modelClient: runtimeModelClient,
             modelId,
@@ -442,13 +454,24 @@ function modelText(output: unknown): string | undefined {
     return undefined;
   }
   const record = output as Record<string, unknown>;
-  for (const key of ["response", "message", "summary", "text"]) {
+  for (const key of ["responseText", "response", "message", "summary", "text"]) {
     const value = record[key];
     if (typeof value === "string" && value.trim()) {
       return value.trim();
     }
   }
   return undefined;
+}
+
+function toolContinuation(output: unknown): { responseId: string; callId: string } | undefined {
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
+    return undefined;
+  }
+  const record = output as Record<string, unknown>;
+  if (typeof record.responseId !== "string" || typeof record.callId !== "string") {
+    return undefined;
+  }
+  return { responseId: record.responseId, callId: record.callId };
 }
 
 async function synthesizeToolResponse(options: {

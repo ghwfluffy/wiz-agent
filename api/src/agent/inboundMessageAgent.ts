@@ -93,7 +93,10 @@ function titleFromMessage(message: InboundMessageRecord): string {
 
 function isLikelyFollowup(message: InboundMessageRecord): boolean {
   const body = message.bodyText.toLowerCase();
-  return /\b(that|this|it|they|them|those|yesterday|earlier|before|again|follow up|what happened|any update|status)\b/.test(body);
+  const subject = (message.subject ?? "").trim();
+  return /^(re|fwd?):/i.test(subject)
+    || (!subject && body.trim().length <= 320)
+    || /\b(that|this|it|they|them|those|yes|no|ok(?:ay)?|sure|do it|go ahead|yesterday|earlier|before|again|follow up|what happened|any update|status)\b/.test(body);
 }
 
 async function ensureThreadForOwnerMessage(options: {

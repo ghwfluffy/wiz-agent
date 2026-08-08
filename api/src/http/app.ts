@@ -39,6 +39,7 @@ import type {
 import { SignedIntegrationTokenProvider } from "../integrations/tokenProvider.js";
 import { decideApproval, editApproval } from "../security/approvalPolicy.js";
 import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
+import { queueOwnerVisibleMessage } from "../tools/ownerMessaging.js";
 import { recordGuardrailExceeded, runtimeSafetyPolicy } from "../security/safetyPolicy.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 
@@ -1327,6 +1328,37 @@ export function buildApp(options: AppOptions = {}): Hono {
       user: session.user,
       expiresAt: session.expiresAt
     });
+  });
+
+  app.post("/api/v1/integrations/model-gateway/alerts", async (context) => {
+    const authorization = context.req.header("authorization") ?? "";
+    if (!settings.modelGatewayAlertToken || authorization !== `Bearer ${settings.modelGatewayAlertToken}`) {
+      return context.json({ error: { code: "unauthorized", message: "Invalid integration token." } }, 401);
+    }
+    const payload: Record<string, unknown> = await context.req.json<Record<string, unknown>>().catch(() => ({}));
+    const message = typeof payload.message === "string" ? payload.message.trim() : "Model capacity warning.";
+    const users = await store.listUsersWithWork();
+    const queued: string[] = [];
+    for (const user of users.filter((candidate) => candidate.isAdmin)) {
+      const now = new Date().toISOString();
+      const requestContext: RequestContext = {
+        userId: user.id,
+        actorType: "system",
+        permissions: ["user", "admin"],
+        requestId: context.req.header("idempotency-key") ?? randomUUID(),
+        session: { id: "model-gateway-alert", user, createdAt: now, expiresAt: now }
+      };
+      const result = await queueOwnerVisibleMessage({
+        context: requestContext,
+        store,
+        settings,
+        source: "model_gateway_alert",
+        ownerInitiated: true,
+        body: message
+      });
+      if (result.message) queued.push(result.message.id);
+    }
+    return context.json({ queued: queued.length, message_ids: queued }, 202);
   });
 
   app.post("/api/v1/auth/dev-login", async (context) => {

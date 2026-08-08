@@ -28,7 +28,7 @@ export const IntegrationActionIds = [
 ] as const;
 
 export type IntegrationActionId = typeof IntegrationActionIds[number];
-export const IntegrationAppIds = ["goals", "budget", "federated_services", "android_client", "apartment_gate"] as const;
+export const IntegrationAppIds = ["goals", "budget", "federated_services", "android_client", "apartment_gate", "model_gateway"] as const;
 export type IntegrationAppId = typeof IntegrationAppIds[number];
 export type IntegrationAccess = "read" | "write";
 export type IntegrationRisk = "low" | "medium" | "high";
@@ -585,6 +585,21 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
       "Do not request, store, summarize, or expose provider credentials, refresh tokens, API keys, or generated page source."
     ],
     actions: apartmentGateActions
+  },
+  {
+    id: "model_gateway",
+    displayName: "Model Gateway",
+    appPurpose: "OpenAI-compatible language-model routing with per-key budgets, rate limits, subscription quota protection, and metadata-only usage reporting.",
+    userValue: "Provides stronger language models to the assistant while keeping transcription and embeddings on their existing provider.",
+    dataSensitivity: "highly_private",
+    baseUrlSetting: "none",
+    authRequirement: "The assistant uses a server-managed bearer key. Humans manage keys and account connections through central OAuth; raw keys and account credentials must never enter model context.",
+    modelGuidance: [
+      "Treat the gateway as model infrastructure, not as a general-purpose user data integration.",
+      "Subscription-backed service keys are restricted to administrators and explicitly configured services.",
+      "A quota warning means reduce nonessential model work; a reserve rejection must not be bypassed or retried in a tight loop."
+    ],
+    actions: []
   }
 ] as const;
 
