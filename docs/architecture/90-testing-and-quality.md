@@ -1,5 +1,8 @@
 # Testing And Quality
 
+The API build and test runtime is Node.js 22. Native image sanitization uses
+Sharp/libvips and is intentionally kept on a currently supported Node release.
+
 Validation is part of the baseline scaffold.
 
 ## Commands

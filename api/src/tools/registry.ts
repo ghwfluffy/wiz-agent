@@ -17,7 +17,8 @@ export type ToolExecutionContext = {
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
+  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  now?: Date;
 };
 
 export type ToolDefinition = {
@@ -84,7 +85,10 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   propose_outbound_message: { access: "write", risk: "high", sideEffect: "local_persistence" },
   ask_owner_clarification: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   record_observation: { access: "write", risk: "low", sideEffect: "none" },
-  integration_action: { access: "write", risk: "high", sideEffect: "cross_app_api" }
+  integration_action: { access: "write", risk: "high", sideEffect: "cross_app_api" },
+  delegate_development_task: { access: "write", risk: "high", sideEffect: "cross_app_api" },
+  get_development_job: { access: "read", risk: "low", sideEffect: "cross_app_api" },
+  cancel_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" }
 };
 
 export const ToolRegistry = Object.fromEntries(

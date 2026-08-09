@@ -23,6 +23,7 @@ import { PERSONAL_PROFILE_SLUG } from "../src/memory/personalMemory.js";
 import { buildMcpApp } from "../src/mcp/server.js";
 import { validateOrRepairToolCall } from "../src/tools/validator.js";
 import { OWNER_SCHEDULED_MESSAGE_RECURRENCE } from "../src/tools/ownerMessaging.js";
+import { executeToolCall } from "../src/tools/toolExecutor.js";
 
 async function testContext(isAdmin = true): Promise<{ context: RequestContext; store: ReturnType<typeof createMemoryStore> }> {
   const settings = loadSettings({
@@ -169,7 +170,7 @@ describe("app capability registry", () => {
     const apps = listAppCapabilities();
     const context = buildCapabilityContext();
 
-    expect(apps.map((app) => app.id)).toEqual(["goals", "budget", "federated_services", "android_client", "apartment_gate", "model_gateway"]);
+    expect(apps.map((app) => app.id)).toEqual(["goals", "budget", "federated_services", "android_client", "apartment_gate", "model_gateway", "omni_dev"]);
     expect(listIntegrationActions().map((action) => action.id).sort()).toEqual([...IntegrationActionIds].sort());
     expect(apps.find((app) => app.id === "federated_services")?.actions).toEqual([]);
     expect(apps.find((app) => app.id === "android_client")?.actions).toEqual([]);
@@ -182,6 +183,7 @@ describe("app capability registry", () => {
     expect(context).toContain("goals.record_metric_entry");
     expect(context).toContain("budget.get_net_worth_forecast");
     expect(context).toContain("direct owner command only");
+    expect(context).toContain("Private development control plane");
     expect(getIntegrationAction("budget.update_account_value")).toMatchObject({
       app: "budget",
       access: "write",
@@ -214,6 +216,9 @@ describe("app capability registry", () => {
         expect.objectContaining({ name: "create_budget_contract", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "create_budget_expense", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "integration_action" }),
+        expect.objectContaining({ name: "delegate_development_task", access: "write", sideEffect: "cross_app_api" }),
+        expect.objectContaining({ name: "get_development_job", access: "read", sideEffect: "cross_app_api" }),
+        expect.objectContaining({ name: "cancel_development_job", access: "write", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "list_conversation_threads", access: "read", sideEffect: "none" }),
         expect.objectContaining({ name: "update_conversation_thread", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "link_conversation_thread", access: "write", sideEffect: "local_persistence" }),
@@ -224,6 +229,75 @@ describe("app capability registry", () => {
 });
 
 describe("agent task execution", () => {
+  it("delegates a development objective with the complete linked conversation thread", async () => {
+    const { context, store } = await testContext();
+    const inbound = await store.recordInboundMessage(context, {
+      providerMessageId: "dev-context-1",
+      fromAddr: "owner@example.test",
+      toAddr: "assistant@example.test",
+      subject: "Improve the site",
+      bodyText: "Please improve the goals screen.",
+      receivedAt: "2026-08-08T12:00:00.000Z",
+      source: "sms"
+    }, "owner");
+    const thread = await store.createConversationThread(context, {
+      title: "Improve the goals screen",
+      linkedMessageIds: [inbound.id],
+      linkedTaskIds: ["task-1"],
+      linkedMemoryPaths: ["/projects/goals.md"]
+    });
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "sent",
+      toAddr: "owner@example.test",
+      bodyText: "Which part should change?",
+      conversationId: thread.id
+    });
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ job: { id: "job-1", status: "queued" } })
+    });
+
+    const result = await executeToolCall({
+      context,
+      store,
+      toolName: "delegate_development_task",
+      args: {
+        objective: "Improve the goals screen",
+        acceptanceCriteria: ["The layout is clearer."],
+        targetComponents: ["apps/goals"],
+        conversationThreadId: thread.id,
+        rationale: "The owner explicitly requested the change."
+      },
+      ownerInitiated: true,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "oauth",
+        OMNI_DEV_API_BASE_URL: "https://omni.example.test/api/agent/v1"
+      }),
+      integrationTokenProvider: { tokenFor: async () => "signed-token" },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    expect(result).toMatchObject({ executed: true, sideEffect: "cross_app_api" });
+    const request = fetchImpl.mock.calls[0]?.[1] as RequestInit;
+    const body = JSON.parse(String(request.body));
+    expect(body).toMatchObject({
+      objective: "Improve the goals screen",
+      origin: "owner_command",
+      context: {
+        threadId: thread.id,
+        taskIds: ["task-1"],
+        memoryPaths: ["/projects/goals.md"]
+      }
+    });
+    expect(body.context.entries).toEqual([
+      expect.objectContaining({ direction: "owner", body: "Please improve the goals screen." }),
+      expect.objectContaining({ direction: "assistant", body: "Which part should change?" })
+    ]);
+  });
+
   it("classifies owner message intent conservatively with confidence and evidence", () => {
     expect(classifyOwnerMessageIntent("add Desperado to my movies list")).toMatchObject({
       intent: "memory_list_offload",
@@ -863,7 +937,8 @@ describe("agent task execution", () => {
       }),
       request: {
         prompt: "Create a goal."
-      }
+      },
+      now: new Date("2026-06-13T12:00:00.000Z")
     });
 
     expect(result).toMatchObject({

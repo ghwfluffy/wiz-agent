@@ -42,6 +42,7 @@ import type {
   ConnectorStatus,
   AuditRecord,
   InboundAttachmentMetadata,
+  InboundAttachmentInput,
   InboundMessageInput,
   InboundMessageRecord,
   MarkdownConflict,
@@ -162,15 +163,18 @@ function normalizeInboundAttachments(value: unknown): InboundAttachmentMetadata[
     const filename = typeof entry.filename === "string" && entry.filename.trim()
       ? entry.filename.replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, 180)
       : null;
-    const reason = entry.reason === "inbound_image_processing_not_enabled" || entry.reason === "inbound_attachment_storage_not_enabled"
-      ? entry.reason
-      : attachmentReason(contentType);
+    const sanitized = entry.handling === "sanitized_image" && entry.reason === "owner_image_sanitized_for_development";
+    const reason = sanitized
+      ? "owner_image_sanitized_for_development" as const
+      : entry.reason === "inbound_image_processing_not_enabled" || entry.reason === "inbound_attachment_storage_not_enabled"
+        ? entry.reason
+        : attachmentReason(contentType);
     return [{
       filename,
       contentType,
       byteSize,
       sha256: sha,
-      handling: "metadata_only" as const,
+      handling: sanitized ? "sanitized_image" as const : "metadata_only" as const,
       reason
     }];
   });
@@ -2583,10 +2587,28 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
           input.receivedAt ?? new Date().toISOString()
         ]
       );
+      if (classification === "owner") {
+        for (const attachment of (input.attachments ?? []) as InboundAttachmentInput[]) {
+          if (attachment.handling !== "sanitized_image" || !attachment.sanitizedDataBase64) continue;
+          const content = Buffer.from(attachment.sanitizedDataBase64, "base64");
+          if (content.length !== attachment.byteSize || content.length > 5 * 1024 * 1024 || sha256(content) !== attachment.sha256) continue;
+          await pool.query(
+            `INSERT INTO attachments
+              (id,user_id,object_key,content_type,byte_size,sha256,metadata_json,message_id,filename,content)
+             VALUES($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10)`,
+            [
+              randomUUID(), context.userId, `inbound/${id}/${attachment.sha256}`, attachment.contentType,
+              attachment.byteSize, attachment.sha256, JSON.stringify({ handling: attachment.handling, reason: attachment.reason }),
+              id, attachment.filename, content
+            ]
+          );
+        }
+      }
       await recordAudit(pool, context, "message.inbound.record", "message", id, {
         classification,
         attachment_count: attachments.length,
-        image_attachment_count: attachments.filter((attachment) => attachment.reason === "inbound_image_processing_not_enabled").length
+        image_attachment_count: attachments.filter((attachment) => attachment.contentType.startsWith("image/")).length,
+        sanitized_image_count: attachments.filter((attachment) => attachment.handling === "sanitized_image").length
       });
       const inserted = await pool.query("SELECT * FROM messages WHERE id = $1 AND user_id = $2", [id, context.userId]);
       return { ...inboundFromRow(inserted.rows[0] ?? result.rows[0]), duplicate: false };
@@ -2611,6 +2633,27 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
         [messageId, context.userId]
       );
       return result.rows[0] ? inboundFromRow(result.rows[0]) : undefined;
+    },
+
+    async listSanitizedInboundImages(context, messageIds) {
+      if (messageIds.length === 0) return [];
+      const result = await pool.query(
+        `SELECT a.message_id,a.filename,a.content_type,a.byte_size,a.sha256,a.content
+         FROM attachments a JOIN messages m ON m.id=a.message_id AND m.user_id=a.user_id
+         WHERE a.user_id=$1 AND a.message_id=ANY($2::text[]) AND m.auth_status='owner' AND a.content IS NOT NULL
+         ORDER BY a.created_at ASC LIMIT 10`,
+        [context.userId, messageIds]
+      );
+      return result.rows.map((row) => ({
+        messageId: String(row.message_id),
+        filename: row.filename ? String(row.filename) : null,
+        contentType: String(row.content_type),
+        byteSize: Number(row.byte_size),
+        sha256: String(row.sha256),
+        handling: "sanitized_image" as const,
+        reason: "owner_image_sanitized_for_development" as const,
+        dataBase64: Buffer.from(row.content as Buffer).toString("base64")
+      }));
     },
 
     async updateInboundMessageHandling(context, messageId, handling) {
@@ -4140,7 +4183,8 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       pushAudit(context, "message.inbound.record", "message", id, {
         classification,
         attachment_count: attachments.length,
-        image_attachment_count: attachments.filter((attachment) => attachment.reason === "inbound_image_processing_not_enabled").length
+        image_attachment_count: attachments.filter((attachment) => attachment.contentType.startsWith("image/")).length,
+        sanitized_image_count: attachments.filter((attachment) => attachment.handling === "sanitized_image").length
       });
       return { ...message, duplicate: false };
     },
@@ -4156,6 +4200,9 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
     async getInboundMessage(context, messageId) {
       const message = inboundMessages.get(messageId);
       return message && message.userId === context.userId ? message : undefined;
+    },
+    async listSanitizedInboundImages() {
+      return [];
     },
     async updateInboundMessageHandling(context, messageId, handling) {
       const message = inboundMessages.get(messageId);

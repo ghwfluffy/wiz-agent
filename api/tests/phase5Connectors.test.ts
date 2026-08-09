@@ -6,7 +6,7 @@ import { simpleParser } from "mailparser";
 import { loadSettings } from "../src/config/settings.js";
 import { MockModelClient } from "../src/agent/modelClient.js";
 import { buildOwnerInboundPrompt } from "../src/agent/inboundMessageAgent.js";
-import { buildImapSearchCriteria, isNewerThanLastReceived, metadataForParsedAttachments } from "../src/connectors/imapPoller.js";
+import { buildImapSearchCriteria, isNewerThanLastReceived, metadataForParsedAttachments, sanitizedOwnerAttachments } from "../src/connectors/imapPoller.js";
 import { processInboundMessage } from "../src/connectors/inboundProcessor.js";
 import { processOutboundQueue, resolveSmtpSecure, sendOutboundMessage } from "../src/connectors/smtpSender.js";
 import { createMemoryStore } from "../src/domain/store.js";
@@ -98,6 +98,34 @@ describe("inbound sender policy", () => {
     ]);
     expect(attachments[0]?.sha256).toMatch(/^[a-f0-9]{64}$/);
     expect(JSON.stringify(attachments)).not.toContain(Buffer.from([1, 2, 3, 4]).toString("base64"));
+  });
+
+  it("decodes and re-encodes supported owner images without exposing raw bytes", async () => {
+    const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
+    const raw = [
+      "From: Owner <owner@example.test>",
+      "To: agent@example.test",
+      "Subject: Screenshot",
+      "MIME-Version: 1.0",
+      "Content-Type: image/png; name=\"screen.png\"",
+      "Content-Disposition: attachment; filename=\"screen.png\"",
+      "Content-Transfer-Encoding: base64",
+      "",
+      png.toString("base64"),
+      ""
+    ].join("\r\n");
+    const parsed = await simpleParser(Buffer.from(raw));
+
+    const [attachment] = await sanitizedOwnerAttachments(parsed);
+
+    expect(attachment).toMatchObject({
+      filename: "screen.png",
+      contentType: "image/png",
+      handling: "sanitized_image",
+      reason: "owner_image_sanitized_for_development"
+    });
+    expect(attachment?.sanitizedDataBase64).toBeTruthy();
+    expect(attachment?.sha256).toMatch(/^[a-f0-9]{64}$/);
   });
 
   it("routes owner messages to the agent path", async () => {
@@ -1194,6 +1222,17 @@ describe("cross-app integration gateway", () => {
       ok: true,
       app: "goals",
       path: "/notifications?timezone=America%2FChicago&include_completed=true",
+      method: "GET",
+      body: undefined
+    });
+
+    expect(resolveIntegrationActionRequest({
+      actionId: "omni_dev.get_job",
+      pathParams: { job_id: "job-123" }
+    })).toEqual({
+      ok: true,
+      app: "omni_dev",
+      path: "/jobs/job-123",
       method: "GET",
       body: undefined
     });

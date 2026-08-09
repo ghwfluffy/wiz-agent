@@ -261,7 +261,8 @@ export async function createAgentSimulation(options: {
         store,
         settings,
         modelClient: model,
-        request: { prompt }
+        request: { prompt },
+        now: currentTime
       });
     },
     async buildScheduledPrompt(title: string): Promise<string> {

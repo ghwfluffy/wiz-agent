@@ -15,7 +15,9 @@ import {
   APPROVAL_EXECUTION_MIGRATION_ID,
   APPROVAL_EXECUTION_SQL,
   CONVERSATION_THREADING_MIGRATION_ID,
-  CONVERSATION_THREADING_SQL
+  CONVERSATION_THREADING_SQL,
+  SANITIZED_INBOUND_IMAGES_MIGRATION_ID,
+  SANITIZED_INBOUND_IMAGES_SQL
 } from "./migrations.js";
 
 export async function runMigrations(): Promise<void> {
@@ -184,6 +186,26 @@ export async function runMigrations(): Promise<void> {
         await client.query(CONVERSATION_THREADING_SQL);
         await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
           CONVERSATION_THREADING_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const sanitizedImagesApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      SANITIZED_INBOUND_IMAGES_MIGRATION_ID
+    ]);
+    if (sanitizedImagesApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(SANITIZED_INBOUND_IMAGES_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          SANITIZED_INBOUND_IMAGES_MIGRATION_ID
         ]);
         await client.query("COMMIT");
       } catch (error) {

@@ -36,7 +36,8 @@ export async function processInboundMessage(options: {
       modelClient: options.modelClient,
       settings: options.settings,
       integrationTokenProvider: options.integrationTokenProvider,
-      fetchImpl: options.fetchImpl
+      fetchImpl: options.fetchImpl,
+      now: recorded.receivedAt ? new Date(recorded.receivedAt) : undefined
     })
   });
 }

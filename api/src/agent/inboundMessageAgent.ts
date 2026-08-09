@@ -273,7 +273,7 @@ export async function buildOwnerInboundPrompt(options: {
     `subject: ${options.message.subject ?? "(none)"}`,
     "attachments:",
     attachmentSummary(options.message),
-    "attachment_boundary: Attachment bytes are not available in this prompt. Image/MMS attachments are metadata-only unless a future host-owned sanitizer/storage flow accepts them.",
+    "attachment_boundary: Attachment bytes are never placed in this prompt. Owner PNG/JPEG/WebP files may be decoded, resized, metadata-stripped, and re-encoded by host code for a later explicitly authorized Omni Dev handoff; all other files remain metadata-only.",
     "body:",
     options.message.bodyText
   ].join("\n");
@@ -334,16 +334,18 @@ export async function runOwnerInboundAgent(options: {
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
+  now?: Date;
 }): Promise<OwnerInboundAgentResult> {
   const thread = await ensureThreadForOwnerMessage({
     store: options.store,
     context: options.context,
     message: options.message
   });
+  const threadedMessage = { ...options.message, conversationThreadId: thread.id };
   const prompt = await buildOwnerInboundPrompt({
     store: options.store,
     context: options.context,
-    message: options.message,
+    message: threadedMessage,
     currentThread: thread,
     ownerIntent: options.ownerIntent
   });
@@ -355,11 +357,12 @@ export async function runOwnerInboundAgent(options: {
       prompt,
       complexity: { ambiguous: true },
       ownerInitiated: true,
-      replyToMessage: options.message
+      replyToMessage: threadedMessage
     },
     settings: options.settings,
     integrationTokenProvider: options.integrationTokenProvider,
-    fetchImpl: options.fetchImpl
+    fetchImpl: options.fetchImpl,
+    now: options.now
   });
 
   const taskId = stringFromResult(result.executionResult, "task_id");
@@ -397,6 +400,7 @@ export async function runOwnerWebPromptAgent(options: {
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
+  now?: Date;
 }): Promise<AgentTaskResult> {
   const prompt = await buildOwnerWebPrompt({
     store: options.store,
@@ -420,6 +424,7 @@ export async function runOwnerWebPromptAgent(options: {
     },
     settings: options.settings,
     integrationTokenProvider: options.integrationTokenProvider,
-    fetchImpl: options.fetchImpl
+    fetchImpl: options.fetchImpl,
+    now: options.now
   });
 }

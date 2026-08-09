@@ -5,6 +5,7 @@ export const TASK_SCHEDULE_CONTEXT_MIGRATION_ID = "0005_task_schedule_context";
 export const APPROVAL_POLICY_MIGRATION_ID = "0006_approval_policy";
 export const APPROVAL_EXECUTION_MIGRATION_ID = "0007_approval_execution";
 export const CONVERSATION_THREADING_MIGRATION_ID = "0008_conversation_threading";
+export const SANITIZED_INBOUND_IMAGES_MIGRATION_ID = "0009_sanitized_inbound_images";
 
 const tenantOwnedTables = [
   "identities",
@@ -204,4 +205,15 @@ CREATE TABLE IF NOT EXISTS conversation_threads (
 
 CREATE INDEX IF NOT EXISTS idx_conversation_threads_user_status_updated
   ON conversation_threads(user_id, status, updated_at DESC);
+`;
+
+export const SANITIZED_INBOUND_IMAGES_SQL = `
+ALTER TABLE attachments
+  ADD COLUMN IF NOT EXISTS message_id TEXT REFERENCES messages(id) ON DELETE CASCADE,
+  ADD COLUMN IF NOT EXISTS filename TEXT,
+  ADD COLUMN IF NOT EXISTS content BYTEA;
+
+CREATE INDEX IF NOT EXISTS idx_attachments_message
+  ON attachments(user_id, message_id, created_at)
+  WHERE message_id IS NOT NULL;
 `;

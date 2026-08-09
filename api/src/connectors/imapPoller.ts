@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { ImapFlow, type SearchObject } from "imapflow";
 import { simpleParser } from "mailparser";
+import sharp from "sharp";
 import type { AgentModelClient } from "../agent/modelClient.js";
 import type { Settings } from "../config/settings.js";
-import type { AgentStore, InboundAttachmentMetadata, InboundMessageInput, RequestContext } from "../domain/types.js";
+import type { AgentStore, InboundAttachmentInput, InboundAttachmentMetadata, InboundMessageInput, RequestContext } from "../domain/types.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { processInboundMessage } from "./inboundProcessor.js";
 import { loadEmailSecret } from "./smtpSender.js";
-import { handleInboundMessage, type InboundRateLimiter } from "../security/senderPolicy.js";
+import { classifySender, handleInboundMessage, type InboundRateLimiter } from "../security/senderPolicy.js";
 
 type ImapConfig = {
   username?: string;
@@ -281,6 +282,52 @@ export function metadataForParsedAttachments(
   });
 }
 
+export async function sanitizedOwnerAttachments(
+  parsed: Awaited<ReturnType<typeof simpleParser>>
+): Promise<InboundAttachmentInput[]> {
+  const metadata = metadataForParsedAttachments(parsed);
+  const output: InboundAttachmentInput[] = [];
+  let acceptedImages = 0;
+  let acceptedInputBytes = 0;
+  for (const [index, attachment] of parsed.attachments.slice(0, 20).entries()) {
+    const fallback = metadata[index];
+    if (!fallback) continue;
+    if (!["image/png", "image/jpeg", "image/webp"].includes(fallback.contentType)
+      || fallback.byteSize <= 0
+      || fallback.byteSize > 10 * 1024 * 1024
+      || acceptedImages >= 5
+      || acceptedInputBytes + fallback.byteSize > 25 * 1024 * 1024) {
+      output.push(fallback);
+      continue;
+    }
+    try {
+      const content = await sharp(attachment.content, { failOn: "warning", limitInputPixels: 20_000_000 })
+        .rotate()
+        .resize({ width: 2048, height: 2048, fit: "inside", withoutEnlargement: true })
+        .png({ compressionLevel: 9 })
+        .toBuffer();
+      if (content.length === 0 || content.length > 5 * 1024 * 1024) {
+        output.push(fallback);
+        continue;
+      }
+      acceptedImages += 1;
+      acceptedInputBytes += fallback.byteSize;
+      output.push({
+        filename: fallback.filename,
+        contentType: "image/png",
+        byteSize: content.length,
+        sha256: hashAttachment(content, "sanitized-owner-image"),
+        handling: "sanitized_image",
+        reason: "owner_image_sanitized_for_development",
+        sanitizedDataBase64: content.toString("base64")
+      });
+    } catch {
+      output.push(fallback);
+    }
+  }
+  return output;
+}
+
 function sourceForAddress(address: string): string {
   const normalized = address.toLowerCase();
   if (normalized.includes("mms") || normalized.includes("mypixmessages")) {
@@ -351,6 +398,12 @@ export async function processImapInbox(options: {
         try {
           const parsed = await simpleParser(message.source ?? Buffer.from(""));
           const fromAddr = firstAddress(parsed.from);
+          const classification = await classifySender({
+            context: options.context,
+            settings: options.settings,
+            store: options.store,
+            fromAddr
+          });
           const inbound: InboundMessageInput = {
             providerMessageId: firstNonBlank(parsed.messageId, message.envelope?.messageId) ?? `${config.mailbox}:${message.uid}`,
             fromAddr,
@@ -359,7 +412,9 @@ export async function processImapInbox(options: {
             bodyText: textBody(parsed),
             receivedAt: parsed.date?.toISOString() ?? new Date().toISOString(),
             source: sourceForAddress(fromAddr),
-            attachments: metadataForParsedAttachments(parsed)
+            attachments: classification === "owner"
+              ? await sanitizedOwnerAttachments(parsed)
+              : metadataForParsedAttachments(parsed)
           };
           if (!isNewerThanLastReceived(inbound.receivedAt ?? "", config.lastReceivedAt)) {
             await updateImapProgress({

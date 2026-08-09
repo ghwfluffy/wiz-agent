@@ -29,7 +29,7 @@ export type AgentTaskRequest = {
   taskId?: string | null;
   complexity?: AgentTaskComplexity;
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
+  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
 };
 
 export type AgentTaskResult = {
@@ -53,10 +53,12 @@ export async function runAgentTask(options: {
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
   toolClient?: AgentToolClient;
+  now?: Date;
 }): Promise<AgentTaskResult> {
+  const now = options.now ?? new Date();
   const aiConfig = await options.store.getAiConfig();
   const safety = runtimeSafetyPolicy(options.settings, aiConfig);
-  const runWindowStart = new Date(Date.now() - safety.agentRunBurstWindowSeconds * 1000);
+  const runWindowStart = new Date(now.getTime() - safety.agentRunBurstWindowSeconds * 1000);
   const recentRuns = await options.store.countAgentRunsSince(options.context, runWindowStart);
   if (recentRuns >= safety.maxAgentRunsPerUserPerBurstWindow) {
     const message = "Agent run burst guardrail exceeded.";
@@ -233,7 +235,8 @@ export async function runAgentTask(options: {
         fetchImpl: options.fetchImpl,
         ownerInitiated: options.request.ownerInitiated === true,
         replyToMessage: options.request.replyToMessage,
-        signal
+        signal,
+        now
       }));
     } catch (error) {
       const message = error instanceof GuardrailExceededError
@@ -296,7 +299,8 @@ export async function runAgentTask(options: {
     await recordDecisionLedgerForToolCall({
       store: options.store,
       context: options.context,
-      toolCall
+      toolCall,
+      now
     });
     let responseText: string | undefined;
     try {

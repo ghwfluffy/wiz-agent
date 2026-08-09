@@ -83,7 +83,7 @@ export async function assertOwnerVisibleOutboundBudget(options: {
 export async function resolveOwnerMessageDestination(options: {
   context: RequestContext;
   store: AgentStore;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
+  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
 }): Promise<OwnerMessageDestination | undefined> {
   const fromAddr = options.replyToMessage?.fromAddr?.trim();
   if (fromAddr && fromAddr.includes("@")) {
@@ -117,7 +117,7 @@ export async function queueOwnerVisibleMessage(options: {
   context: RequestContext;
   store: AgentStore;
   settings?: Settings;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
+  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
   source: string;
   ownerInitiated?: boolean;
   subject?: string | null;
@@ -143,7 +143,8 @@ export async function queueOwnerVisibleMessage(options: {
     status: "pending",
     toAddr: destination.toAddr,
     subject: options.subject ?? null,
-    bodyText: options.body
+    bodyText: options.body,
+    conversationId: options.replyToMessage?.conversationThreadId ?? null
   });
   return { message, destination };
 }

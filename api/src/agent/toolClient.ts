@@ -20,8 +20,9 @@ export type AgentToolClientExecuteInput = {
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
+  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
   signal?: AbortSignal;
+  now?: Date;
 };
 
 export type AgentToolClient = {
@@ -46,7 +47,8 @@ export class LocalToolClient implements AgentToolClient {
       integrationTokenProvider: input.integrationTokenProvider,
       fetchImpl: input.fetchImpl,
       ownerInitiated: input.ownerInitiated,
-      replyToMessage: input.replyToMessage
+      replyToMessage: input.replyToMessage,
+      now: input.now
     });
   }
 }
@@ -113,7 +115,8 @@ export class McpToolClient implements AgentToolClient {
       integrationTokenProvider: input.integrationTokenProvider,
       fetchImpl: input.fetchImpl,
       ownerInitiated: input.ownerInitiated,
-      replyToMessage: input.replyToMessage
+      replyToMessage: input.replyToMessage,
+      now: input.now
     });
     return app.request(path, init);
   }

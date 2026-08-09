@@ -88,7 +88,7 @@ export type InboundMessageInput = {
   bodyText: string;
   receivedAt?: string | null;
   source?: string;
-  attachments?: InboundAttachmentMetadata[];
+  attachments?: InboundAttachmentInput[];
 };
 
 export type InboundAttachmentMetadata = {
@@ -96,8 +96,17 @@ export type InboundAttachmentMetadata = {
   contentType: string;
   byteSize: number;
   sha256: string;
-  handling: "metadata_only";
-  reason: "inbound_attachment_storage_not_enabled" | "inbound_image_processing_not_enabled";
+  handling: "metadata_only" | "sanitized_image";
+  reason: "inbound_attachment_storage_not_enabled" | "inbound_image_processing_not_enabled" | "owner_image_sanitized_for_development";
+};
+
+export type InboundAttachmentInput = InboundAttachmentMetadata & {
+  sanitizedDataBase64?: string;
+};
+
+export type SanitizedInboundImage = InboundAttachmentMetadata & {
+  messageId: string;
+  dataBase64: string;
 };
 
 export type InboundMessageRecord = InboundMessageInput & {
@@ -727,6 +736,7 @@ export type AgentStore = {
   ): Promise<InboundMessageRecord & { duplicate: boolean }>;
   listInboundMessages(context: RequestContext): Promise<InboundMessageRecord[]>;
   getInboundMessage(context: RequestContext, messageId: string): Promise<InboundMessageRecord | undefined>;
+  listSanitizedInboundImages(context: RequestContext, messageIds: string[]): Promise<SanitizedInboundImage[]>;
   updateInboundMessageHandling(
     context: RequestContext,
     messageId: string,

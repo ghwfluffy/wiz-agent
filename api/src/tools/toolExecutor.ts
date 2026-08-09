@@ -97,7 +97,8 @@ export async function executeToolCall(options: {
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
+  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  now?: Date;
 }): Promise<ToolExecutionResult> {
   const callReadIntegration = async (
     actionId: IntegrationActionId,
@@ -132,6 +133,57 @@ export async function executeToolCall(options: {
   };
 
   const ownerInitiated = options.ownerInitiated === true || Boolean(options.replyToMessage);
+
+  const developmentContext = async (requestedThreadId?: string): Promise<Record<string, unknown>> => {
+    const thread = requestedThreadId
+      ? await options.store.getConversationThread(options.context, requestedThreadId)
+      : (await options.store.listConversationThreads(options.context, ["active", "waiting"], 1))[0];
+    if (requestedThreadId && !thread) {
+      throw new Error("conversation_thread_not_found_for_user");
+    }
+    const inbound = thread
+      ? (await Promise.all(thread.linkedMessageIds.slice(-100).map((id) => options.store.getInboundMessage(options.context, id))))
+          .filter((message): message is InboundMessageRecord => Boolean(message))
+          .map((message) => ({
+            id: message.id,
+            direction: "owner",
+            timestamp: message.receivedAt ?? message.createdAt,
+            subject: message.subject ?? null,
+            body: message.bodyText.slice(0, 50_000)
+          }))
+      : [];
+    const outbound = thread
+      ? (await options.store.listOutboundMessages(options.context))
+          .filter((message) => message.conversationId === thread.id)
+          .slice(-100)
+          .map((message) => ({
+            id: message.id,
+            direction: "assistant",
+            timestamp: message.sentAt ?? message.createdAt,
+            subject: message.subject ?? null,
+            body: message.bodyText.slice(0, 50_000)
+          }))
+      : [];
+    const attachments = thread
+      ? (await options.store.listSanitizedInboundImages(options.context, thread.linkedMessageIds)).map((attachment) => ({
+          filename: attachment.filename ?? `${attachment.sha256}.png`,
+          contentType: attachment.contentType,
+          byteSize: attachment.byteSize,
+          sha256: attachment.sha256,
+          dataBase64: attachment.dataBase64
+        }))
+      : [];
+    return {
+      threadId: thread?.id ?? null,
+      title: thread?.title ?? null,
+      entries: [...inbound, ...outbound]
+        .sort((left, right) => left.timestamp.localeCompare(right.timestamp))
+        .slice(-200),
+      taskIds: thread?.linkedTaskIds ?? [],
+      memoryPaths: thread?.linkedMemoryPaths ?? [],
+      attachments
+    };
+  };
 
   const executeOrQueueWriteIntegration = async (
     actionId: IntegrationActionId,
@@ -807,6 +859,7 @@ export async function executeToolCall(options: {
         store: options.store,
         context: options.context,
         runId: options.runId ?? null,
+        now: options.now,
         input: {
           feedbackType: options.args.feedbackType as OwnerFeedbackType,
           correctionText: String(options.args.correctionText),
@@ -1369,6 +1422,39 @@ export async function executeToolCall(options: {
           summary: options.args.summary
         }
       };
+    case "delegate_development_task": {
+      let context: Record<string, unknown>;
+      try {
+        context = await developmentContext(
+          typeof options.args.conversationThreadId === "string" ? options.args.conversationThreadId : undefined
+        );
+      } catch (error) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { reason: error instanceof Error ? error.message : "conversation_context_unavailable" }
+        };
+      }
+      return executeOrQueueWriteIntegration("omni_dev.create_job", {
+        body: {
+          objective: String(options.args.objective),
+          acceptanceCriteria: Array.isArray(options.args.acceptanceCriteria) ? options.args.acceptanceCriteria : [],
+          targetComponents: Array.isArray(options.args.targetComponents) ? options.args.targetComponents : [],
+          origin: ownerInitiated ? "owner_command" : "assistant_suggestion",
+          context
+        },
+        summary: `Delegate development objective: ${String(options.args.objective).slice(0, 500)}`
+      });
+    }
+    case "get_development_job":
+      return callReadIntegration("omni_dev.get_job", {
+        pathParams: { job_id: String(options.args.jobId) }
+      });
+    case "cancel_development_job":
+      return executeOrQueueWriteIntegration("omni_dev.cancel_job", {
+        pathParams: { job_id: String(options.args.jobId) },
+        summary: String(options.args.rationale)
+      });
     case "integration_action": {
       const actionId = String(options.args.actionId) as IntegrationActionId;
       const action = getIntegrationAction(actionId);

@@ -5,7 +5,7 @@ import {
   type IntegrationActionId
 } from "../integrations/capabilityRegistry.js";
 
-export type IntegrationApp = "goals" | "budget" | "apartment_gate";
+export type IntegrationApp = "goals" | "budget" | "apartment_gate" | "omni_dev";
 
 export type IntegrationTokenProvider = {
   tokenFor(context: RequestContext, app: IntegrationApp, scope: string): Promise<string | undefined>;
@@ -32,11 +32,14 @@ export function integrationBaseUrl(settings: Settings, app: IntegrationApp): str
   if (app === "budget") {
     return settings.budgetApiBaseUrl;
   }
-  return settings.apartmentGateApiBaseUrl;
+  if (app === "apartment_gate") {
+    return settings.apartmentGateApiBaseUrl;
+  }
+  return settings.omniDevApiBaseUrl;
 }
 
 function isApiBackedIntegrationApp(app: string): app is IntegrationApp {
-  return app === "goals" || app === "budget" || app === "apartment_gate";
+  return app === "goals" || app === "budget" || app === "apartment_gate" || app === "omni_dev";
 }
 
 const MAX_INTEGRATION_FAILURE_REASON_LENGTH = 240;

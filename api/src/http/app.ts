@@ -1361,6 +1361,43 @@ export function buildApp(options: AppOptions = {}): Hono {
     return context.json({ queued: queued.length, message_ids: queued }, 202);
   });
 
+  app.post("/api/v1/integrations/omni-dev/events", async (context) => {
+    const authorization = context.req.header("authorization") ?? "";
+    if (!settings.omniDevEventToken || authorization !== `Bearer ${settings.omniDevEventToken}`) {
+      return context.json({ error: { code: "unauthorized", message: "Invalid integration token." } }, 401);
+    }
+    const payload: Record<string, unknown> = await context.req.json<Record<string, unknown>>().catch(() => ({}));
+    const eventType = typeof payload.event_type === "string" ? payload.event_type.slice(0, 120) : "job.updated";
+    const jobId = typeof payload.job_id === "string" ? payload.job_id.slice(0, 80) : "unknown";
+    const ownerSubject = typeof payload.owner_subject === "string" ? payload.owner_subject.trim().slice(0, 200) : "";
+    if (!ownerSubject) {
+      return context.json({ error: { code: "validation_error", message: "Owner subject is required." } }, 400);
+    }
+    const detail = typeof payload.message === "string" ? payload.message.trim().slice(0, 1000) : "Development job updated.";
+    const users = await store.listUsersWithWork();
+    const queued: string[] = [];
+    for (const user of users.filter((candidate) => candidate.id === `oauth:central-oauth:${ownerSubject}`)) {
+      const now = new Date().toISOString();
+      const requestContext: RequestContext = {
+        userId: user.id,
+        actorType: "system",
+        permissions: ["user", "admin"],
+        requestId: context.req.header("idempotency-key") ?? `omni-dev:${eventType}:${jobId}`,
+        session: { id: "omni-dev-event", user, createdAt: now, expiresAt: now }
+      };
+      const result = await queueOwnerVisibleMessage({
+        context: requestContext,
+        store,
+        settings,
+        source: "omni_dev_event",
+        ownerInitiated: true,
+        body: `Omni Dev ${eventType} (${jobId.slice(0, 8)}): ${detail}`
+      });
+      if (result.message) queued.push(result.message.id);
+    }
+    return context.json({ queued: queued.length, message_ids: queued }, 202);
+  });
+
   app.post("/api/v1/auth/dev-login", async (context) => {
     if (settings.authMode !== "standalone" || settings.appEnv === "production") {
       return context.json({

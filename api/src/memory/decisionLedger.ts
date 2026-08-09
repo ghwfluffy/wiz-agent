@@ -47,6 +47,8 @@ const MEANINGFUL_TOOL_NAMES = new Set([
   "ask_owner_clarification",
   "record_observation",
   "integration_action",
+  "delegate_development_task",
+  "cancel_development_job",
   "create_goal",
   "update_goal",
   "complete_goal_checklist_item",

@@ -108,6 +108,20 @@ transcribed by the agent backend and then handled like authenticated web chat,
 using the same owner-command tools, approval policies, and integration
 boundaries.
 
+### Omni Dev
+
+Omni Dev is the private development-job control plane. Wrapper tools can create
+a scoped objective with the selected durable conversation thread, read job
+status, or request cancellation. An owner-command job executes through the
+scoped integration path; an assistant suggestion first becomes a cross-app
+approval. The downstream service independently classifies sensitive objectives,
+signs the runner intent, and requires another owner confirmation for protected
+changes. The agent never receives Git, SSH, Codex, or deploy credentials.
+Owner image attachments are never added to ordinary model context. Host code may
+decode, resize, metadata-strip, re-encode, and integrity-bind supported images
+to the signed development context; untrusted and non-image attachments remain
+metadata-only.
+
 ## Maintenance Rule
 
 Whenever a future agent request adds or changes an app, app API, or major

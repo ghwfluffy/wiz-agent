@@ -282,7 +282,8 @@ export async function daemonOnce(options: {
           request: {
             taskId: task.id,
             prompt
-          }
+          },
+          now: options.now
         });
         runFailed = result.status === "failed";
         await options.store.updateTask(options.context, task.id, {

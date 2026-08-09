@@ -26,7 +26,8 @@ export type McpAppOptions = {
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject">;
+  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  now?: Date;
 };
 
 const memoryToolNames = [
@@ -301,7 +302,8 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
           integrationTokenProvider: options.integrationTokenProvider,
           fetchImpl: options.fetchImpl,
           ownerInitiated,
-          replyToMessage: options.replyToMessage
+          replyToMessage: options.replyToMessage,
+          now: options.now
         }, parsed.arguments);
         result = execution.result;
         sideEffect = execution.sideEffect;

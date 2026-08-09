@@ -134,6 +134,7 @@ const SettingsSchema = z.object({
   agentModelApiKey: z.string().trim().default(""),
   agentModelBaseUrl: RequiredServiceUrlSchema.default("https://api.openai.com/v1"),
   modelGatewayAlertToken: z.string().trim().default(""),
+  omniDevEventToken: z.string().trim().default(""),
   agentSecretDir: FilesystemPathSchema.default("secrets"),
   agentVoiceMaxAudioBytes: boundedInteger(1, 50 * 1024 * 1024).default(25 * 1024 * 1024),
   agentOutboundEnabled: EnvBooleanSchema.default(false),
@@ -158,6 +159,7 @@ const SettingsSchema = z.object({
   goalsApiBaseUrl: OptionalServiceUrlSchema,
   budgetApiBaseUrl: OptionalServiceUrlSchema,
   apartmentGateApiBaseUrl: OptionalServiceUrlSchema,
+  omniDevApiBaseUrl: OptionalServiceUrlSchema,
   qdrantUrl: RequiredServiceUrlSchema.default("http://localhost:6333"),
   ragEmbeddingModel: AiModelIdSchema.default("text-embedding-3-small"),
   ragEmbeddingDimensions: boundedInteger(1, 4096).default(1536),
@@ -336,10 +338,13 @@ function validateProductionSettings(settings: Settings): void {
     unsafe.push("AGENT_OWNER_EMAILS");
   }
   if (
-    (settings.goalsApiBaseUrl || settings.budgetApiBaseUrl || settings.apartmentGateApiBaseUrl) &&
+    (settings.goalsApiBaseUrl || settings.budgetApiBaseUrl || settings.apartmentGateApiBaseUrl || settings.omniDevApiBaseUrl) &&
     !settings.agentIntegrationTokenSecret
   ) {
     unsafe.push("AGENT_INTEGRATION_TOKEN_SECRET");
+  }
+  if (settings.omniDevApiBaseUrl && settings.omniDevEventToken.length < 32) {
+    unsafe.push("OMNI_DEV_EVENT_TOKEN");
   }
   if (unsafe.length > 0) {
     throw new Error(`Unsafe production configuration values: ${unsafe.join(", ")}`);
@@ -383,6 +388,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
       ?? nonBlank(env.AGENT_OPENAI_API_KEY) ?? nonBlank(env.OPENAI_API_KEY) ?? openAiKeyFromFile,
     agentModelBaseUrl: nonBlank(env.AGENT_MODEL_BASE_URL) ?? nonBlank(env.AGENT_OPENAI_BASE_URL),
     modelGatewayAlertToken: nonBlank(env.MODEL_GATEWAY_ALERT_TOKEN) ?? readSecretFile(env.MODEL_GATEWAY_ALERT_TOKEN_FILE),
+    omniDevEventToken: nonBlank(env.OMNI_DEV_EVENT_TOKEN) ?? readSecretFile(env.OMNI_DEV_EVENT_TOKEN_FILE),
     agentSecretDir: nonBlank(env.AGENT_SECRET_DIR),
     agentVoiceMaxAudioBytes: nonBlank(env.AGENT_VOICE_MAX_AUDIO_BYTES),
     agentOutboundEnabled: nonBlank(env.AGENT_OUTBOUND_ENABLED),
@@ -407,6 +413,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     goalsApiBaseUrl: nonBlank(env.GOALS_API_BASE_URL),
     budgetApiBaseUrl: nonBlank(env.BUDGET_API_BASE_URL),
     apartmentGateApiBaseUrl: nonBlank(env.APARTMENT_GATE_API_BASE_URL),
+    omniDevApiBaseUrl: nonBlank(env.OMNI_DEV_API_BASE_URL),
     qdrantUrl: nonBlank(env.QDRANT_URL),
     ragEmbeddingModel: nonBlank(env.RAG_EMBEDDING_MODEL),
     ragEmbeddingDimensions: nonBlank(env.RAG_EMBEDDING_DIMENSIONS),

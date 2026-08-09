@@ -1,5 +1,10 @@
 # Development
 
+Production images compile TypeScript in a Node.js 22 build stage and install
+production dependencies only in the runtime stage. `npm run migrate` executes
+the compiled migration runner; local source-mode migration work can use
+`npm run migrate:dev`.
+
 ## Prerequisites
 
 - Docker and Docker Compose.

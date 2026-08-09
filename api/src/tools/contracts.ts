@@ -467,6 +467,24 @@ export const IntegrationActionToolSchema = z.object({
   userIntentSummary: z.string().min(1)
 });
 
+export const DelegateDevelopmentTaskToolSchema = z.object({
+  objective: z.string().min(1).max(12_000),
+  acceptanceCriteria: z.array(z.string().min(1).max(2000)).max(30).default([]),
+  targetComponents: z.array(z.string().min(1).max(240)).min(1).max(30),
+  conversationThreadId: z.string().min(1).max(200).optional(),
+  rationale: z.string().min(1).max(2000)
+}).strict();
+
+export const GetDevelopmentJobToolSchema = z.object({
+  jobId: z.string().uuid(),
+  reason: z.string().min(1).max(1000).optional()
+}).strict();
+
+export const CancelDevelopmentJobToolSchema = z.object({
+  jobId: z.string().uuid(),
+  rationale: z.string().min(1).max(2000)
+}).strict();
+
 export const ToolContracts = {
   create_task: CreateTaskToolSchema,
   list_ongoing_tasks: ListOngoingTasksToolSchema,
@@ -522,7 +540,10 @@ export const ToolContracts = {
   propose_outbound_message: ProposeOutboundMessageToolSchema,
   ask_owner_clarification: AskOwnerClarificationToolSchema,
   record_observation: RecordObservationToolSchema,
-  integration_action: IntegrationActionToolSchema
+  integration_action: IntegrationActionToolSchema,
+  delegate_development_task: DelegateDevelopmentTaskToolSchema,
+  get_development_job: GetDevelopmentJobToolSchema,
+  cancel_development_job: CancelDevelopmentJobToolSchema
 } as const;
 
 export type ToolName = keyof typeof ToolContracts;
