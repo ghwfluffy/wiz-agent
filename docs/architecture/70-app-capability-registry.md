@@ -123,6 +123,10 @@ scoped integration path; an assistant suggestion first becomes a cross-app
 approval. The downstream service independently classifies sensitive objectives,
 signs the runner intent, and requires another owner confirmation for protected
 changes. The agent never receives Git, SSH, Codex, or deploy credentials.
+Development targets are constrained by the tool schema to the desktop policy's
+exact repository component identifiers (`root` and the registered `apps/...`
+paths). Friendly product or UI labels fail validation and enter the normal tool
+repair loop before any job is submitted.
 Owner image attachments are never added to ordinary model context. Host code may
 decode, resize, metadata-strip, re-encode, and integrity-bind supported images
 to the signed development context; untrusted and non-image attachments remain

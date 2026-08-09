@@ -467,10 +467,24 @@ export const IntegrationActionToolSchema = z.object({
   userIntentSummary: z.string().min(1)
 });
 
+export const DevelopmentTargetComponents = [
+  "root",
+  "apps/agent",
+  "apps/apartment-gate",
+  "apps/auth",
+  "apps/codex-proxy",
+  "apps/file-share",
+  "apps/fluffynomics",
+  "apps/goals",
+  "apps/ingress",
+  "apps/main",
+  "apps/omni-dev"
+] as const;
+
 export const DelegateDevelopmentTaskToolSchema = z.object({
   objective: z.string().min(1).max(12_000),
   acceptanceCriteria: z.array(z.string().min(1).max(2000)).max(30).default([]),
-  targetComponents: z.array(z.string().min(1).max(240)).min(1).max(30),
+  targetComponents: z.array(z.enum(DevelopmentTargetComponents)).min(1).max(DevelopmentTargetComponents.length),
   conversationThreadId: z.string().min(1).max(200).optional(),
   rationale: z.string().min(1).max(2000)
 }).strict();

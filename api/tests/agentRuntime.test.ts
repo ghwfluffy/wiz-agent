@@ -21,7 +21,7 @@ import {
 import { recordDecisionLedgerForToolCall } from "../src/memory/decisionLedger.js";
 import { PERSONAL_PROFILE_SLUG } from "../src/memory/personalMemory.js";
 import { buildMcpApp } from "../src/mcp/server.js";
-import { validateOrRepairToolCall } from "../src/tools/validator.js";
+import { validateOrRepairToolCall, validateToolArguments } from "../src/tools/validator.js";
 import { OWNER_SCHEDULED_MESSAGE_RECURRENCE } from "../src/tools/ownerMessaging.js";
 import { executeToolCall } from "../src/tools/toolExecutor.js";
 
@@ -83,6 +83,24 @@ describe("model tiers", () => {
 });
 
 describe("tool validation and repair", () => {
+  it("rejects friendly development labels that the desktop runner cannot authorize", () => {
+    const invalid = validateToolArguments("delegate_development_task", {
+      objective: "Add shared navigation",
+      acceptanceCriteria: ["Navigation works."],
+      targetComponents: ["Omni Dev UI", "Codex Proxy UI"],
+      rationale: "The owner requested it."
+    });
+    const valid = validateToolArguments("delegate_development_task", {
+      objective: "Add shared navigation",
+      acceptanceCriteria: ["Navigation works."],
+      targetComponents: ["root", "apps/omni-dev", "apps/codex-proxy"],
+      rationale: "The owner requested it."
+    });
+
+    expect(invalid.ok).toBe(false);
+    expect(valid.ok).toBe(true);
+  });
+
   it("accepts valid tool arguments without repair", async () => {
     const result = await validateOrRepairToolCall(
       {
