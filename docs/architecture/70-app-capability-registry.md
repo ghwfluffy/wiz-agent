@@ -33,6 +33,12 @@ The production token provider mints short-lived HMAC-signed bearer tokens from
 subject, target app, and exact action id. Missing signing configuration or a
 non-OAuth local user fails closed without calling the target app.
 
+Every owner-command entry point must carry that provider into the tool runtime.
+This includes authenticated web and voice prompts as well as owner-classified
+IMAP/SMS/MMS messages processed by the worker. The worker constructs the signed
+provider from its loaded settings; it must never omit integration authorization
+merely because the owner command arrived through messaging.
+
 ## Current Apps
 
 ### Goals

@@ -7,6 +7,7 @@ import { loadSettings, type Settings } from "./config/settings.js";
 import { createPool } from "./db/pool.js";
 import { createPostgresStore } from "./domain/store.js";
 import type { AgentStore, RequestContext } from "./domain/types.js";
+import { SignedIntegrationTokenProvider } from "./integrations/tokenProvider.js";
 import { daemonOnce as runSchedulerOnce } from "./scheduler/taskQueue.js";
 import type { MailTransport } from "./connectors/smtpSender.js";
 import { imapErrorDetails, processImapInbox } from "./connectors/imapPoller.js";
@@ -105,6 +106,7 @@ export async function workerTick(options: {
     inboundFailed: 0
   };
   const safety = runtimeSafetyPolicy(options.settings);
+  const integrationTokenProvider = new SignedIntegrationTokenProvider(options.settings);
   let remainingOutbound = safety.outboundMessagesPerWorkerTick;
   for (const user of users) {
     const context = workerContext(user);
@@ -139,6 +141,7 @@ export async function workerTick(options: {
         settings: options.settings,
         rateLimiter: reviewNotificationRateLimiter(options.settings),
         modelClient: options.modelClient,
+        integrationTokenProvider,
         limit: INBOUND_BATCH_LIMIT
       }), INBOUND_TIMEOUT_MS, "IMAP processing timed out.");
       totals.inboundAttempted += inbound.attempted;

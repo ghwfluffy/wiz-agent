@@ -630,7 +630,7 @@ function productionSafetyIssues(settings: Settings): string[] {
     issues.push("development_owner_email_configured");
   }
   if (
-    (settings.goalsApiBaseUrl || settings.budgetApiBaseUrl || settings.apartmentGateApiBaseUrl) &&
+    (settings.goalsApiBaseUrl || settings.budgetApiBaseUrl || settings.apartmentGateApiBaseUrl || settings.omniDevApiBaseUrl) &&
     !settings.agentIntegrationTokenSecret
   ) {
     issues.push("integration_token_secret_missing");
@@ -660,6 +660,11 @@ function operationalConfiguration(settings: Settings) {
       name: "apartment_gate",
       status: optionalIntegrationStatus(Boolean(settings.apartmentGateApiBaseUrl), tokenSecretConfigured),
       requiredFor: ["apartment_gate_actions"]
+    },
+    {
+      name: "omni_dev",
+      status: optionalIntegrationStatus(Boolean(settings.omniDevApiBaseUrl), tokenSecretConfigured),
+      requiredFor: ["development_job_actions"]
     },
     {
       name: "qdrant",

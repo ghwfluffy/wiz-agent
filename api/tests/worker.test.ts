@@ -163,6 +163,52 @@ describe("worker loop", () => {
     ]));
   });
 
+  it("passes an owner-scoped signed integration provider to inbound IMAP agent work", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "oauth",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-worker-integration-secret",
+      OMNI_DEV_API_BASE_URL: "https://omni.example.test/api/agent/v1"
+    });
+    const session = await store.createOauthSession(settings, {
+      subject: "owner-subject",
+      email: "owner@example.test",
+      displayName: "Owner",
+      isAdmin: true,
+      identityProvider: "central-oauth",
+      requestId: "worker-integration-login"
+    });
+    let claims: Record<string, unknown> | undefined;
+
+    const result = await workerTick({
+      store,
+      settings,
+      modelClient: new MockModelClient(),
+      imapProcessor: async (options) => {
+        const token = await options.integrationTokenProvider?.tokenFor(
+          options.context,
+          "omni_dev",
+          "omni_dev.create_job"
+        );
+        const payload = token?.split(".")[1];
+        claims = payload
+          ? JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as Record<string, unknown>
+          : undefined;
+        return { configured: true, attempted: 0, recorded: 0, failed: 0 };
+      }
+    });
+
+    expect(result.users).toBe(1);
+    expect(session.user.id).toBe("oauth:central-oauth:owner-subject");
+    expect(claims).toMatchObject({
+      aud: "omni_dev",
+      iss: "agent-service",
+      scope: "omni_dev.create_job",
+      sub: "owner-subject"
+    });
+  });
+
   it("fails stale claimed recurring tasks visibly and schedules the next recurrence", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
