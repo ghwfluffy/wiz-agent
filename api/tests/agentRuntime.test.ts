@@ -99,6 +99,11 @@ describe("tool validation and repair", () => {
 
     expect(invalid.ok).toBe(false);
     expect(valid.ok).toBe(true);
+    expect(validateToolArguments("confirm_dangerous_development_job", {
+      jobId: "00000000-0000-4000-8000-000000000001",
+      confirmation: "confirm",
+      dangerousReason: "The owner confirmed the database restore."
+    }).ok).toBe(true);
   });
 
   it("accepts valid tool arguments without repair", async () => {
@@ -237,6 +242,7 @@ describe("app capability registry", () => {
         expect.objectContaining({ name: "delegate_development_task", access: "write", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "get_development_job", access: "read", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "cancel_development_job", access: "write", sideEffect: "cross_app_api" }),
+        expect.objectContaining({ name: "confirm_dangerous_development_job", access: "write", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "list_conversation_threads", access: "read", sideEffect: "none" }),
         expect.objectContaining({ name: "update_conversation_thread", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "link_conversation_thread", access: "write", sideEffect: "local_persistence" }),
@@ -314,6 +320,40 @@ describe("agent task execution", () => {
       expect.objectContaining({ direction: "owner", body: "Please improve the goals screen." }),
       expect.objectContaining({ direction: "assistant", body: "Which part should change?" })
     ]);
+  });
+
+  it("confirms a dangerous development job directly from an explicit owner reply", async () => {
+    const { context, store } = await testContext();
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ job: { id: "00000000-0000-4000-8000-000000000001", status: "queued" } })
+    });
+
+    const result = await executeToolCall({
+      context,
+      store,
+      toolName: "confirm_dangerous_development_job",
+      args: {
+        jobId: "00000000-0000-4000-8000-000000000001",
+        confirmation: "confirm",
+        dangerousReason: "The owner explicitly confirmed the protected operation."
+      },
+      ownerInitiated: true,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "oauth",
+        OMNI_DEV_API_BASE_URL: "https://omni.example.test/api/agent/v1"
+      }),
+      integrationTokenProvider: { tokenFor: async () => "signed-token" },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    expect(result).toMatchObject({ executed: true, sideEffect: "cross_app_api" });
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(
+      "https://omni.example.test/api/agent/v1/jobs/00000000-0000-4000-8000-000000000001/confirm-dangerous"
+    );
+    expect((fetchImpl.mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
   });
 
   it("classifies owner message intent conservatively with confidence and evidence", () => {

@@ -1455,6 +1455,11 @@ export async function executeToolCall(options: {
         pathParams: { job_id: String(options.args.jobId) },
         summary: String(options.args.rationale)
       });
+    case "confirm_dangerous_development_job":
+      return executeOrQueueWriteIntegration("omni_dev.confirm_dangerous_job", {
+        pathParams: { job_id: String(options.args.jobId) },
+        summary: `Owner explicitly confirmed dangerous development job: ${String(options.args.dangerousReason)}`
+      });
     case "integration_action": {
       const actionId = String(options.args.actionId) as IntegrationActionId;
       const action = getIntegrationAction(actionId);

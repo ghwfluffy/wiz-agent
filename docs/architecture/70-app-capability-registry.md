@@ -118,11 +118,14 @@ boundaries.
 
 Omni Dev is the private development-job control plane. Wrapper tools can create
 a scoped objective with the selected durable conversation thread, read job
-status, or request cancellation. An owner-command job executes through the
+status, request cancellation, or confirm a rare dangerous job after an explicit
+owner reply. An owner-command job executes through the
 scoped integration path; an assistant suggestion first becomes a cross-app
-approval. The downstream service independently classifies sensitive objectives,
-signs the runner intent, and requires another owner confirmation for protected
-changes. The agent never receives Git, SSH, Codex, or deploy credentials.
+approval. The downstream service independently classifies destructive and
+security-boundary objectives, signs the runner intent, and requires another
+owner confirmation only for dangerous concrete changes. That confirmation can
+travel through the current owner conversation; the dashboard is optional. The
+agent never receives Git, SSH, Codex, or deploy credentials.
 Development targets are constrained by the tool schema to the desktop policy's
 exact repository component identifiers (`root` and the registered `apps/...`
 paths). Friendly product or UI labels fail validation and enter the normal tool
