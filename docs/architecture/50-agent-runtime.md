@@ -165,6 +165,14 @@ Accepted tool calls execute through the server-owned MCP boundary by default:
 5. the runtime records the accepted or rejected tool-call result on the agent
    run.
 
+Tool execution is a bounded conversation rather than a one-shot terminal
+decision. When argument validation or MCP execution fails and the model response
+supports continuation, the host records the rejected call and returns a
+structured, non-secret failure result to the model. The model may correct the
+arguments, choose another allowed tool, or explain the failure to the owner.
+Every retry still consumes the same run's tool-call and runtime budgets. Runtime
+deadline exhaustion and tool-call budget exhaustion remain terminal guardrails.
+
 The local in-process executor remains only as `LocalToolClient`, a
 compatibility wrapper for deterministic tests and emergency fallback. It is not
 the default runtime path.
@@ -288,7 +296,12 @@ server-side, calls through the integration gateway, and stores only redacted
 response data. The model never receives bearer tokens.
 
 Reply tools receive any inbound owner-message context from host code, not from
-model arguments, so the model still cannot select recipients. Owner SMS/email
+model arguments, so the model still cannot select recipients. For an owner
+email/SMS/MMS turn, a final model text response that was not already queued by a
+reply or clarification tool is queued by deterministic host code to the verified
+inbound owner address. If the run terminates before a model can produce final
+text, host code queues a short failure acknowledgement so an accepted owner
+message never disappears silently. Owner SMS/email
 commands such as `YES`, `NO`, `EDIT <text>`, `LATER`, and `DETAILS` are parsed
 by host code against the most recent pending owner approval. `YES` approves
 only that current approval, `NO` rejects it, and `EDIT` updates the proposed

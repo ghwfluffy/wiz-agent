@@ -154,7 +154,7 @@ export async function executeToolCall(options: {
       : [];
     const outbound = thread
       ? (await options.store.listOutboundMessages(options.context))
-          .filter((message) => message.conversationId === thread.id)
+          .filter((message) => message.conversationThreadId === thread.id)
           .slice(-100)
           .map((message) => ({
             id: message.id,

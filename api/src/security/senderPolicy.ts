@@ -145,6 +145,7 @@ export async function handleInboundMessage(
       conversationThreadId?: string;
       taskId?: string;
       taskEventId?: string;
+      outboundMessageId?: string;
     }>;
     memoryIntegrator?: (message: InboundMessageRecord) => Promise<{
       integrated: boolean;
@@ -233,7 +234,8 @@ export async function handleInboundMessage(
       conversationThreadId: agentResult?.conversationThreadId ?? null,
       taskId: agentResult?.taskId ?? null,
       taskEventId: taskEventId ?? null,
-      agentRunId: agentResult?.runId ?? null
+      agentRunId: agentResult?.runId ?? null,
+      outboundMessageId: agentResult?.outboundMessageId ?? null
     });
     return {
       classification,
@@ -242,7 +244,8 @@ export async function handleInboundMessage(
       conversationThreadId: agentResult?.conversationThreadId,
       taskId: agentResult?.taskId,
       taskEventId,
-      agentRunId: agentResult?.runId
+      agentRunId: agentResult?.runId,
+      outboundMessageId: agentResult?.outboundMessageId
     };
   }
   if (classification === "trusted") {

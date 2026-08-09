@@ -457,6 +457,7 @@ function outboundFromRow(row: Record<string, unknown>): OutboundMessageRecord {
     id: String(row.id),
     userId: String(row.user_id),
     conversationId: row.conversation_id ? String(row.conversation_id) : null,
+    conversationThreadId: row.conversation_thread_id ? String(row.conversation_thread_id) : null,
     approvalId: row.approval_id ? String(row.approval_id) : null,
     channel: row.channel as OutboundMessageRecord["channel"],
     status: row.status as OutboundMessageRecord["status"],
@@ -2704,13 +2705,14 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
     async queueOutboundMessage(context, input) {
       const result = await pool.query(
         `INSERT INTO outbound_messages
-          (id, user_id, conversation_id, approval_id, channel, status, to_addr, subject, body_text)
-         VALUES ($1, $2, $3, $4, $5, $6, lower($7), $8, $9)
+          (id, user_id, conversation_id, conversation_thread_id, approval_id, channel, status, to_addr, subject, body_text)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, lower($8), $9, $10)
          RETURNING *`,
         [
           randomUUID(),
           context.userId,
           input.conversationId ?? null,
+          input.conversationThreadId ?? null,
           input.approvalId ?? null,
           input.channel,
           input.status,
@@ -4236,6 +4238,7 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
         id: randomUUID(),
         userId: context.userId,
         conversationId: input.conversationId ?? null,
+        conversationThreadId: input.conversationThreadId ?? null,
         approvalId: input.approvalId ?? null,
         subject: input.subject ?? null,
         createdAt: now,

@@ -10,6 +10,7 @@ import type {
 } from "../domain/types.js";
 import { PERSONAL_PROFILE_SLUG } from "../memory/personalMemory.js";
 import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
+import { queueOwnerVisibleMessage } from "../tools/ownerMessaging.js";
 import {
   classifyOwnerMessageIntent,
   formatOwnerIntentEnvelope,
@@ -20,6 +21,7 @@ export type OwnerInboundAgentResult = AgentTaskResult & {
   conversationThreadId?: string;
   taskId?: string;
   taskEventId?: string;
+  outboundMessageId?: string;
 };
 
 function activeTaskSummary(task: TaskRecord): string {
@@ -365,6 +367,25 @@ export async function runOwnerInboundAgent(options: {
     now: options.now
   });
 
+  let outboundMessageId = stringFromResult(result.executionResult, "outbound_message_id");
+  const replyBody = !outboundMessageId
+    ? result.responseText ?? (result.status === "failed"
+      ? "I received your message, but I couldn't finish the request because the assistant run failed. I logged the failure so it can be diagnosed."
+      : undefined)
+    : undefined;
+  if (replyBody) {
+    const queued = await queueOwnerVisibleMessage({
+      context: options.context,
+      store: options.store,
+      settings: options.settings,
+      replyToMessage: threadedMessage,
+      source: result.status === "failed" ? "owner_inbound_failure_reply" : "owner_inbound_final_reply",
+      ownerInitiated: true,
+      body: replyBody
+    });
+    outboundMessageId = queued.message?.id;
+  }
+
   const taskId = stringFromResult(result.executionResult, "task_id");
   if (taskId) {
     await options.store.linkConversationThread(options.context, thread.id, {
@@ -386,7 +407,8 @@ export async function runOwnerInboundAgent(options: {
     ...result,
     conversationThreadId: thread.id,
     taskId,
-    taskEventId: stringFromResult(result.executionResult, "task_event_id")
+    taskEventId: stringFromResult(result.executionResult, "task_event_id"),
+    outboundMessageId
   };
 }
 

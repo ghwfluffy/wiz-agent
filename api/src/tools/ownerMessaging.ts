@@ -144,7 +144,7 @@ export async function queueOwnerVisibleMessage(options: {
     toAddr: destination.toAddr,
     subject: options.subject ?? null,
     bodyText: options.body,
-    conversationId: options.replyToMessage?.conversationThreadId ?? null
+    conversationThreadId: options.replyToMessage?.conversationThreadId ?? null
   });
   return { message, destination };
 }

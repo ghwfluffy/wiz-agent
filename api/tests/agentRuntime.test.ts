@@ -251,7 +251,7 @@ describe("agent task execution", () => {
       status: "sent",
       toAddr: "owner@example.test",
       bodyText: "Which part should change?",
-      conversationId: thread.id
+      conversationThreadId: thread.id
     });
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
@@ -1535,6 +1535,140 @@ describe("agent task execution", () => {
     );
   });
 
+  it("returns recoverable tool failures to the model instead of killing the run", async () => {
+    const { context, store } = await testContext();
+    const modelClient = new MockModelClient({
+      tools: [
+        {
+          responseId: "response-1",
+          callId: "call-1",
+          toolName: "create_task",
+          arguments: {
+            title: "Unavailable task",
+            prompt: "This tool call fails."
+          },
+          calls: [{
+            callId: "call-1",
+            toolName: "create_task",
+            arguments: {
+              title: "Unavailable task",
+              prompt: "This tool call fails."
+            }
+          }]
+        },
+        {
+          responseText: "I tried to create the task, but the tool failed, so I did not claim it succeeded."
+        }
+      ]
+    });
+    const runWithTools = vi.spyOn(modelClient, "runWithTools");
+
+    const result = await runAgentTask({
+      context,
+      store,
+      toolClient: {
+        async execute() {
+          throw new Error("Task service is temporarily unavailable.");
+        }
+      },
+      modelClient,
+      request: {
+        prompt: "Create a task."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "rejected",
+      toolName: "create_task",
+      responseText: "I tried to create the task, but the tool failed, so I did not claim it succeeded."
+    });
+    expect(runWithTools).toHaveBeenCalledTimes(2);
+    expect(runWithTools.mock.calls[1]?.[0].toolOutputs).toEqual([
+      expect.objectContaining({
+        callId: "call-1",
+        output: expect.objectContaining({
+          ok: false,
+          recoverable: true,
+          reason: "tool_execution_failed",
+          tool_name: "create_task",
+          message: "Task service is temporarily unavailable."
+        })
+      })
+    ]);
+    await expect(store.listAudit(context, true)).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ action: "tool_call.failed" }),
+        expect.objectContaining({ action: "agent_run.completed" })
+      ])
+    );
+  });
+
+  it("allows the model to retry with another tool call after a recoverable failure", async () => {
+    const { context, store } = await testContext();
+    const localToolClient = new LocalToolClient();
+    let attempts = 0;
+
+    const result = await runAgentTask({
+      context,
+      store,
+      toolClient: {
+        async execute(input) {
+          attempts += 1;
+          if (attempts === 1) {
+            throw new Error("Transient MCP failure.");
+          }
+          return localToolClient.execute(input);
+        }
+      },
+      modelClient: new MockModelClient({
+        tools: [
+          {
+            responseId: "response-1",
+            callId: "call-1",
+            toolName: "create_task",
+            arguments: {
+              title: "First attempt",
+              prompt: "The first tool call fails."
+            },
+            calls: [{
+              callId: "call-1",
+              toolName: "create_task",
+              arguments: {
+                title: "First attempt",
+                prompt: "The first tool call fails."
+              }
+            }]
+          },
+          {
+            toolName: "create_task",
+            arguments: {
+              title: "Recovered task",
+              prompt: "The retry succeeds."
+            }
+          }
+        ]
+      }),
+      request: {
+        prompt: "Create a task."
+      }
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "accepted",
+      toolName: "create_task"
+    });
+    expect(attempts).toBe(2);
+    await expect(store.listTasks(context)).resolves.toEqual([
+      expect.objectContaining({ title: "Recovered task" })
+    ]);
+    await expect(store.listToolCalls(context)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ status: "failed", toolName: "create_task" }),
+      expect.objectContaining({ status: "accepted", toolName: "create_task" })
+    ]));
+  });
+
   it("lets owner inbound messages continue an existing task", async () => {
     const { context, store } = await testContext();
     const task = await store.createTask(context, {
@@ -2558,10 +2692,48 @@ describe("agent task execution", () => {
         channel: "sms",
         status: "pending",
         toAddr: "owner-sms@example.test",
-        bodyText: "Yes, I am online."
+        bodyText: "Yes, I am online.",
+        conversationThreadId: result.conversationThreadId
       })
     ]);
     await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
+  });
+
+  it("queues a final model response for an owner SMS even when no reply tool was called", async () => {
+    const { context, store } = await testContext();
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "owner-direct-text-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "What happened?",
+      source: "sms"
+    }, "owner");
+
+    const result = await runOwnerInboundAgent({
+      context,
+      store,
+      message,
+      modelClient: new MockModelClient({
+        tools: [{
+          responseText: "I tried the requested action, but its tool failed before making the change."
+        }]
+      })
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "none",
+      outboundMessageId: expect.any(String)
+    });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        channel: "sms",
+        status: "pending",
+        toAddr: "owner-sms@example.test",
+        bodyText: "I tried the requested action, but its tool failed before making the change.",
+        conversationThreadId: result.conversationThreadId
+      })
+    ]);
   });
 
   it("rejects model-selected outbound recipients", async () => {

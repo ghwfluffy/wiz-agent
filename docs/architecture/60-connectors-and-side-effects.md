@@ -324,7 +324,12 @@ status updates, and audit records.
 
 Owner replies are resolved by host code. For owner-classified inbound
 SMS/MMS/email, the reply goes back to the verified inbound owner address and
-uses the inbound source to select SMS, MMS, or email. For proactive messages
+uses the inbound source to select SMS, MMS, or email. Final assistant text
+produced after read tools, recoverable tool failures, or a plain answer follows
+this same host-owned queue path when no reply tool already created an outbox
+record. A terminal run failure queues a bounded generic acknowledgement rather
+than exposing internal failure details or leaving the owner without a response.
+For proactive messages
 without an inbound message context, the host uses the current user's
 owner-contact connector, preferring SMS gateway, then MMS gateway, then email.
 SMTP delivery fails closed unless the final recipient is a configured or

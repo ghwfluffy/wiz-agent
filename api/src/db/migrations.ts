@@ -6,6 +6,7 @@ export const APPROVAL_POLICY_MIGRATION_ID = "0006_approval_policy";
 export const APPROVAL_EXECUTION_MIGRATION_ID = "0007_approval_execution";
 export const CONVERSATION_THREADING_MIGRATION_ID = "0008_conversation_threading";
 export const SANITIZED_INBOUND_IMAGES_MIGRATION_ID = "0009_sanitized_inbound_images";
+export const OUTBOUND_CONVERSATION_THREAD_MIGRATION_ID = "0010_outbound_conversation_thread";
 
 const tenantOwnedTables = [
   "identities",
@@ -216,4 +217,13 @@ ALTER TABLE attachments
 CREATE INDEX IF NOT EXISTS idx_attachments_message
   ON attachments(user_id, message_id, created_at)
   WHERE message_id IS NOT NULL;
+`;
+
+export const OUTBOUND_CONVERSATION_THREAD_SQL = `
+ALTER TABLE outbound_messages
+  ADD COLUMN IF NOT EXISTS conversation_thread_id TEXT REFERENCES conversation_threads(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbound_messages_conversation_thread
+  ON outbound_messages(user_id, conversation_thread_id, created_at)
+  WHERE conversation_thread_id IS NOT NULL;
 `;

@@ -131,6 +131,7 @@ export type OutboundMessageInput = {
   bodyText: string;
   approvalId?: string | null;
   conversationId?: string | null;
+  conversationThreadId?: string | null;
 };
 
 export type OutboundMessageRecord = OutboundMessageInput & {

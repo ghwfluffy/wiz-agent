@@ -177,6 +177,13 @@ into `messages.auth_json` as `conversation_thread_id` when the message is routed
 to the agent. Existing unthreaded messages remain valid because this metadata is
 optional.
 
+Owner-visible outbox records use the dedicated
+`outbound_messages.conversation_thread_id` foreign key when they reply within a
+thread. The older `conversation_id` column remains reserved for legacy generic
+conversations; thread ids must never be written into that column. This keeps
+outbound transcript context linked without crossing the two conversation
+models.
+
 Model-facing thread mutations go through controlled tools. The host resolves
 user scope from the MCP session and validates linked tasks, messages, and
 markdown paths before adding them to a thread. A missing or foreign linked
