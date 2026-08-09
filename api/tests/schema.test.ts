@@ -75,7 +75,6 @@ describe("initial schema", () => {
     expect(INITIAL_SCHEMA_SQL).toContain("ADD COLUMN IF NOT EXISTS execution_status TEXT");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_conversation_threads_user_status_updated");
     expect(INITIAL_SCHEMA_SQL).toContain("conversation_thread_id TEXT REFERENCES conversation_threads(id)");
-    expect(INITIAL_SCHEMA_SQL).toContain("idx_outbound_messages_conversation_thread");
   });
 
   it("defines the tenant-collapse migration", () => {

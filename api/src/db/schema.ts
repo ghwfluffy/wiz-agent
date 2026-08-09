@@ -305,10 +305,6 @@ CREATE TABLE IF NOT EXISTS outbound_messages (
   failure_message TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_outbound_messages_conversation_thread
-  ON outbound_messages(user_id, conversation_thread_id, created_at)
-  WHERE conversation_thread_id IS NOT NULL;
-
 CREATE TABLE IF NOT EXISTS attachments (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
