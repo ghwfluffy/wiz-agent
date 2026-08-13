@@ -17,6 +17,7 @@ import {
   type IntegrationActionId,
   type IntegrationAppId
 } from "../integrations/capabilityRegistry.js";
+import { isWaitingOmniDevInputTask } from "../integrations/omniDevConversation.js";
 import { recordTaskOutcomeMemory } from "../memory/taskOutcomeMemory.js";
 import {
   addMemoryListItem,
@@ -1532,6 +1533,49 @@ export async function executeToolCall(options: {
         pathParams: { job_id: String(options.args.jobId) },
         summary: `Owner explicitly confirmed dangerous development job: ${String(options.args.dangerousReason)}`
       });
+    case "respond_to_development_job": {
+      const jobId = String(options.args.jobId);
+      const result = await executeOrQueueWriteIntegration("omni_dev.respond_to_job", {
+        pathParams: { job_id: jobId },
+        body: { response: String(options.args.response) },
+        summary: "Pass the owner's answer to the waiting Omni Dev planning job."
+      });
+      if (!result.executed || result.result.action_id !== "omni_dev.respond_to_job") {
+        return result;
+      }
+      const waitingTasks = (await options.store.listTasks(options.context))
+        .filter((task) => isWaitingOmniDevInputTask(task, jobId));
+      for (const task of waitingTasks) {
+        await options.store.updateTask(options.context, task.id, {
+          status: "completed",
+          waitingOn: null,
+          blockedReason: null,
+          ownerClarificationNeeded: false,
+          lastAgentReviewAt: (options.now ?? new Date()).toISOString()
+        });
+        await options.store.recordTaskEvent(options.context, task.id, "task.owner_clarification_received", {
+          summary: "Owner answered Omni Dev's planning question through the assistant.",
+          omni_dev_job_id: jobId
+        });
+      }
+      const threadId = options.replyToMessage?.conversationThreadId;
+      if (threadId) {
+        await options.store.updateConversationThread(options.context, threadId, {
+          status: "active",
+          unresolvedQuestion: null,
+          lastOwnerIntentSummary: String(options.args.response).slice(0, 1000)
+        });
+      }
+      return {
+        ...result,
+        result: {
+          ...result.result,
+          resumed_job_id: jobId,
+          resolved_task_ids: waitingTasks.map((task) => task.id),
+          conversation_thread_id: threadId ?? null
+        }
+      };
+    }
     case "integration_action": {
       const actionId = String(options.args.actionId) as IntegrationActionId;
       const action = getIntegrationAction(actionId);

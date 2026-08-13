@@ -37,6 +37,10 @@ import type {
   ToolCallRecord
 } from "../domain/types.js";
 import { SignedIntegrationTokenProvider } from "../integrations/tokenProvider.js";
+import {
+  isWaitingOmniDevInputTask,
+  omniDevOwnerInputTaskPrompt
+} from "../integrations/omniDevConversation.js";
 import { decideApproval, editApproval } from "../security/approvalPolicy.js";
 import { queueOwnerReviewNotification } from "../security/senderPolicy.js";
 import { queueOwnerVisibleMessage } from "../tools/ownerMessaging.js";
@@ -1375,10 +1379,23 @@ export function buildApp(options: AppOptions = {}): Hono {
     const eventType = typeof payload.event_type === "string" ? payload.event_type.slice(0, 120) : "job.updated";
     const jobId = typeof payload.job_id === "string" ? payload.job_id.slice(0, 80) : "unknown";
     const ownerSubject = typeof payload.owner_subject === "string" ? payload.owner_subject.trim().slice(0, 200) : "";
+    const conversationThreadId = typeof payload.conversation_thread_id === "string"
+      ? payload.conversation_thread_id.trim().slice(0, 200)
+      : "";
+    const requiresResponse = payload.requires_response === true;
     if (!ownerSubject) {
       return context.json({ error: { code: "validation_error", message: "Owner subject is required." } }, 400);
     }
     const detail = typeof payload.message === "string" ? payload.message.trim().slice(0, 1000) : "Development job updated.";
+    const ownerQuestion = typeof payload.question === "string" && payload.question.trim()
+      ? payload.question.trim().slice(0, 4000)
+      : detail;
+    const planningContext = typeof payload.planning_context === "string" && payload.planning_context.trim()
+      ? payload.planning_context.trim().slice(0, 4000)
+      : detail;
+    const recommendation = typeof payload.recommendation === "string" && payload.recommendation.trim()
+      ? payload.recommendation.trim().slice(0, 4000)
+      : "";
     const users = await store.listUsersWithWork();
     const queued: string[] = [];
     for (const user of users.filter((candidate) => candidate.id === `oauth:central-oauth:${ownerSubject}`)) {
@@ -1390,15 +1407,91 @@ export function buildApp(options: AppOptions = {}): Hono {
         requestId: context.req.header("idempotency-key") ?? `omni-dev:${eventType}:${jobId}`,
         session: { id: "omni-dev-event", user, createdAt: now, expiresAt: now }
       };
+      const thread = conversationThreadId
+        ? await store.getConversationThread(requestContext, conversationThreadId)
+        : undefined;
+      const replyToMessage = thread
+        ? (await Promise.all(
+            [...thread.linkedMessageIds]
+              .reverse()
+              .map((messageId) => store.getInboundMessage(requestContext, messageId))
+          )).find((message) => message?.classification === "owner")
+        : undefined;
+      let waitingTask: TaskRecord | undefined;
+      if (requiresResponse) {
+        waitingTask = (await store.listTasks(requestContext))
+          .find((task) => isWaitingOmniDevInputTask(task, jobId));
+        if (!waitingTask) {
+          const created = await store.createTask(requestContext, {
+            title: `Omni Dev question (${jobId.slice(0, 8)})`,
+            prompt: omniDevOwnerInputTaskPrompt({ jobId, question: ownerQuestion, context: planningContext }),
+            priority: 90
+          });
+          waitingTask = await store.updateTask(requestContext, created.id, {
+            status: "waiting",
+            waitingOn: "owner",
+            blockedReason: "Omni Dev needs owner input before implementation can begin.",
+            ownerClarificationNeeded: true
+          }) ?? created;
+          await store.recordTaskEvent(requestContext, created.id, "task.owner_clarification_requested", {
+            summary: "Omni Dev asked the owner a preflight question before changing code.",
+            omni_dev_job_id: jobId,
+            question: ownerQuestion
+          });
+        }
+        if (thread) {
+          await store.updateConversationThread(requestContext, thread.id, {
+            status: "waiting",
+            unresolvedQuestion: ownerQuestion.slice(0, 1000),
+            lastOwnerIntentSummary: `Omni Dev is waiting for owner input on job ${jobId}.`
+          });
+          await store.linkConversationThread(requestContext, thread.id, { taskIds: [waitingTask.id] });
+        }
+      } else if (["job.no_change", "job.succeeded", "job.failed", "job.rolled_back"].includes(eventType)) {
+        for (const task of (await store.listTasks(requestContext)).filter((candidate) => isWaitingOmniDevInputTask(candidate, jobId))) {
+          await store.updateTask(requestContext, task.id, {
+            status: eventType === "job.failed" || eventType === "job.rolled_back" ? "failed" : "completed",
+            waitingOn: null,
+            blockedReason: null,
+            ownerClarificationNeeded: false
+          });
+        }
+        if (thread) {
+          await store.updateConversationThread(requestContext, thread.id, {
+            status: "resolved",
+            unresolvedQuestion: null
+          });
+        }
+      }
+      const body = requiresResponse
+        ? [
+            `I had Omni Dev inspect this before making changes. ${planningContext}`,
+            ownerQuestion,
+            recommendation ? `My recommendation: ${recommendation}` : null,
+            "Reply here with your answer. I'll pass it back, and Omni Dev will plan again before touching code."
+          ].filter(Boolean).join("\n\n")
+        : eventType === "job.no_change"
+          ? detail
+          : `Omni Dev ${eventType} (${jobId.slice(0, 8)}): ${detail}`;
       const result = await queueOwnerVisibleMessage({
         context: requestContext,
         store,
         settings,
         source: "omni_dev_event",
         ownerInitiated: true,
-        body: `Omni Dev ${eventType} (${jobId.slice(0, 8)}): ${detail}`
+        replyToMessage,
+        body,
+        conversationThreadId: thread?.id ?? null
       });
-      if (result.message) queued.push(result.message.id);
+      if (result.message) {
+        queued.push(result.message.id);
+        if (thread) {
+          await store.linkConversationThread(requestContext, thread.id, {
+            taskIds: waitingTask ? [waitingTask.id] : [],
+            messageIds: [result.message.id]
+          });
+        }
+      }
     }
     return context.json({ queued: queued.length, message_ids: queued }, 202);
   });

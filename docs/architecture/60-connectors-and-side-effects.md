@@ -114,6 +114,16 @@ agent should append to that task and move it back to active work instead of
 creating a duplicate task, then link or update the relevant conversation
 thread.
 
+Omni Dev planning questions use this same continuity path. Its bearer-token
+callback includes the originating conversation-thread id and full development
+job id. Host code creates a high-priority waiting task, links the outbound
+question to the thread, and replies through the thread's existing SMS/MMS
+destination when available. The waiting-task prompt starts with
+`OMNI_DEV_OWNER_INPUT_V1`, allowing the model to route the owner's natural reply
+through `respond_to_development_job`. A successful response resolves the waiting
+task and reactivates the thread; it never creates a replacement development job
+or requires a dashboard approval.
+
 Owner messages can update durable memory through the controlled model tool/MCP
 path. The agent decides whether an owner message contains durable preferences,
 facts, schedule rationale, project context, or task-management guidance, then

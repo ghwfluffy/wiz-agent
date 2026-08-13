@@ -104,6 +104,10 @@ describe("tool validation and repair", () => {
       confirmation: "confirm",
       dangerousReason: "The owner confirmed the database restore."
     }).ok).toBe(true);
+    expect(validateToolArguments("respond_to_development_job", {
+      jobId: "00000000-0000-4000-8000-000000000001",
+      response: "Keep the existing behavior, but make the mobile layout clearer."
+    }).ok).toBe(true);
   });
 
   it("accepts valid tool arguments without repair", async () => {
@@ -220,6 +224,12 @@ describe("app capability registry", () => {
       risk: "high",
       approvalMode: "direct_owner_only"
     });
+    expect(getIntegrationAction("omni_dev.respond_to_job")).toMatchObject({
+      app: "omni_dev",
+      access: "write",
+      pathTemplate: "/jobs/:job_id/respond",
+      approvalMode: "direct_owner_only"
+    });
   });
 
   it("adds integration capability context and tool schemas to model requests", async () => {
@@ -243,6 +253,7 @@ describe("app capability registry", () => {
         expect.objectContaining({ name: "get_development_job", access: "read", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "cancel_development_job", access: "write", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "confirm_dangerous_development_job", access: "write", sideEffect: "cross_app_api" }),
+        expect.objectContaining({ name: "respond_to_development_job", access: "write", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "list_conversation_threads", access: "read", sideEffect: "none" }),
         expect.objectContaining({ name: "update_conversation_thread", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "link_conversation_thread", access: "write", sideEffect: "local_persistence" }),
@@ -354,6 +365,114 @@ describe("agent task execution", () => {
       "https://omni.example.test/api/agent/v1/jobs/00000000-0000-4000-8000-000000000001/confirm-dangerous"
     );
     expect((fetchImpl.mock.calls[0]?.[1] as RequestInit).method).toBe("POST");
+  });
+
+  it("routes an Omni Dev planning question and owner answer through the same MMS conversation", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "oauth",
+      OMNI_DEV_EVENT_TOKEN: "omni-dev-event-token-for-agent-runtime-test",
+      OMNI_DEV_API_BASE_URL: "https://omni.example.test/api/agent/v1"
+    });
+    const store = createMemoryStore();
+    const session = await store.createOauthSession(settings, {
+      subject: "owner-subject",
+      email: "owner@example.test",
+      displayName: "Owner",
+      isAdmin: true,
+      identityProvider: "central-oauth",
+      requestId: "omni-dev-conversation-login"
+    });
+    const context: RequestContext = {
+      userId: session.user.id,
+      actorType: "admin",
+      permissions: ["user", "admin"],
+      requestId: "omni-dev-conversation",
+      session
+    };
+    const inbound = await store.recordInboundMessage(context, {
+      providerMessageId: "omni-dev-owner-request",
+      fromAddr: "15551234567@mms.example.test",
+      toAddr: "assistant@example.test",
+      subject: null,
+      bodyText: "Make the goals screen easier to scan.",
+      receivedAt: "2026-08-12T15:00:00.000Z",
+      source: "mms"
+    }, "owner");
+    const thread = await store.createConversationThread(context, {
+      title: "Improve goals screen",
+      linkedMessageIds: [inbound.id]
+    });
+    const jobId = "00000000-0000-4000-8000-000000000009";
+    const app = buildApp({ settings, store });
+
+    const callback = await app.request("/api/v1/integrations/omni-dev/events", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${settings.omniDevEventToken}`,
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        job_id: jobId,
+        event_type: "job.owner_input_requested",
+        message: "Should the compact layout apply to desktop too? My recommendation: keep desktop unchanged.",
+        question: "Should the compact layout apply to desktop too?",
+        planning_context: "The mobile behavior is clear, but desktop scope is ambiguous.",
+        recommendation: "Keep desktop unchanged.",
+        owner_subject: "owner-subject",
+        conversation_thread_id: thread.id,
+        requires_response: true
+      })
+    });
+
+    expect(callback.status).toBe(202);
+    const waitingTask = (await store.listTasks(context)).find((task) => task.title.startsWith("Omni Dev question"));
+    expect(waitingTask).toMatchObject({
+      status: "waiting",
+      waitingOn: "owner",
+      ownerClarificationNeeded: true
+    });
+    expect(waitingTask?.prompt).toContain(`job_id: ${jobId}`);
+    expect(await store.getConversationThread(context, thread.id)).toMatchObject({
+      status: "waiting",
+      unresolvedQuestion: expect.stringContaining("desktop")
+    });
+    expect(await store.listOutboundMessages(context)).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        channel: "mms",
+        toAddr: "15551234567@mms.example.test",
+        conversationThreadId: thread.id,
+        bodyText: expect.stringContaining("Reply here with your answer")
+      })
+    ]));
+
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ job: { id: jobId, status: "queued" } })
+    });
+    const result = await executeToolCall({
+      context,
+      store,
+      toolName: "respond_to_development_job",
+      args: { jobId, response: "Keep desktop unchanged; compact only the mobile layout." },
+      ownerInitiated: true,
+      replyToMessage: { ...inbound, conversationThreadId: thread.id },
+      settings,
+      integrationTokenProvider: { tokenFor: async () => "signed-token" },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      executed: true,
+      result: { resumed_job_id: jobId, resolved_task_ids: [waitingTask?.id] }
+    });
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(`https://omni.example.test/api/agent/v1/jobs/${jobId}/respond`);
+    expect(JSON.parse(String((fetchImpl.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
+      response: "Keep desktop unchanged; compact only the mobile layout."
+    });
+    expect(await store.getTask(context, waitingTask!.id)).toMatchObject({ status: "completed", ownerClarificationNeeded: false });
+    expect(await store.getConversationThread(context, thread.id)).toMatchObject({ status: "active", unresolvedQuestion: null });
   });
 
   it("classifies owner message intent conservatively with confidence and evidence", () => {

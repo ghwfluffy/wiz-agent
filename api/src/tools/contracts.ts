@@ -507,6 +507,11 @@ export const ConfirmDangerousDevelopmentJobToolSchema = z.object({
   dangerousReason: z.string().min(1).max(2000)
 }).strict();
 
+export const RespondToDevelopmentJobToolSchema = z.object({
+  jobId: z.string().uuid(),
+  response: z.string().min(1).max(12_000)
+}).strict();
+
 export const ToolContracts = {
   create_task: CreateTaskToolSchema,
   list_ongoing_tasks: ListOngoingTasksToolSchema,
@@ -567,7 +572,8 @@ export const ToolContracts = {
   delegate_development_task: DelegateDevelopmentTaskToolSchema,
   get_development_job: GetDevelopmentJobToolSchema,
   cancel_development_job: CancelDevelopmentJobToolSchema,
-  confirm_dangerous_development_job: ConfirmDangerousDevelopmentJobToolSchema
+  confirm_dangerous_development_job: ConfirmDangerousDevelopmentJobToolSchema,
+  respond_to_development_job: RespondToDevelopmentJobToolSchema
 } as const;
 
 export type ToolName = keyof typeof ToolContracts;

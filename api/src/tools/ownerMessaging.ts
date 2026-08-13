@@ -156,6 +156,7 @@ export async function queueOwnerVisibleMessage(options: {
   ownerInitiated?: boolean;
   subject?: string | null;
   body: string;
+  conversationThreadId?: string | null;
 }): Promise<{
   message?: OutboundMessageRecord;
   destination?: OwnerMessageDestination;
@@ -178,7 +179,7 @@ export async function queueOwnerVisibleMessage(options: {
     toAddr: destination.toAddr,
     subject: options.subject ?? null,
     bodyText: options.body,
-    conversationThreadId: options.replyToMessage?.conversationThreadId ?? null
+    conversationThreadId: options.conversationThreadId ?? options.replyToMessage?.conversationThreadId ?? null
   });
   return { message, destination };
 }

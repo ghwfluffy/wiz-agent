@@ -119,7 +119,11 @@ boundaries.
 Omni Dev is the private development-job control plane. Wrapper tools can create
 a scoped objective with the selected durable conversation thread, read job
 status, request cancellation, or confirm a rare dangerous job after an explicit
-owner reply. An owner-command job executes through the
+owner reply. Omni Dev first plans in a disposable checkout and may return a
+focused question, a confident implementation plan, or a no-change explanation.
+The `respond_to_development_job` wrapper forwards the owner's answer from the
+same conversation to the existing waiting job, which must plan again before
+implementation. An owner-command job executes through the
 scoped integration path; an assistant suggestion first becomes a cross-app
 approval. The downstream service independently classifies destructive and
 security-boundary objectives, signs the runner intent, and requires another

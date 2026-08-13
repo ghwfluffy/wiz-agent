@@ -90,7 +90,8 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   delegate_development_task: { access: "write", risk: "high", sideEffect: "cross_app_api" },
   get_development_job: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   cancel_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" },
-  confirm_dangerous_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" }
+  confirm_dangerous_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" },
+  respond_to_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" }
 };
 
 export const ToolRegistry = Object.fromEntries(

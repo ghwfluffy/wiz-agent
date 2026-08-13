@@ -28,7 +28,8 @@ export const IntegrationActionIds = [
   "omni_dev.create_job",
   "omni_dev.get_job",
   "omni_dev.cancel_job",
-  "omni_dev.confirm_dangerous_job"
+  "omni_dev.confirm_dangerous_job",
+  "omni_dev.respond_to_job"
 ] as const;
 
 export type IntegrationActionId = typeof IntegrationActionIds[number];
@@ -329,6 +330,29 @@ const omniDevActions: readonly IntegrationActionCapability[] = [
       "Never use this action for assistant-originated consent or an untrusted sender."
     ],
     responseUse: "Confirm that the dangerous job returned to the queue, or report that it was not awaiting confirmation.",
+    approvalMode: "direct_owner_only"
+  },
+  {
+    id: "omni_dev.respond_to_job",
+    app: "omni_dev",
+    title: "Answer development preflight question",
+    access: "write",
+    risk: "high",
+    method: "POST",
+    pathTemplate: "/jobs/:job_id/respond",
+    pathParams: ["job_id"],
+    bodySummary: "The owner's natural-language answer to the current Omni Dev preflight question.",
+    purpose: "Resume planning for an owner-owned development job after Omni Dev asks for one focused clarification.",
+    whenToUse: [
+      "The owner replies in the assistant conversation that contains an Omni Dev preflight question.",
+      "The matching job is awaiting_owner_input and the reply supplies the requested decision or context."
+    ],
+    safety: [
+      "Use only the exact job id embedded in the owner-visible waiting task for the current conversation.",
+      "Forward the owner's answer faithfully; do not invent consent, scope, or product decisions.",
+      "Do not create a replacement development job when this action can continue the existing one."
+    ],
+    responseUse: "Confirm naturally that the answer was passed to Omni Dev and that it will plan again before changing code.",
     approvalMode: "direct_owner_only"
   }
 ] as const;
@@ -683,14 +707,15 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     id: "omni_dev",
     displayName: "Omni Dev",
     appPurpose: "Private development control plane that turns owner-authorized objectives into signed, audited jobs for an isolated desktop Codex runner.",
-    userValue: "Lets the owner request GHWIZ code improvements by text, inspect progress, confirm rare dangerous work in the same conversation, and receive validated commit/deployment results.",
+    userValue: "Lets the owner request GHWIZ code improvements by text, answer planning questions, inspect progress, confirm rare dangerous work in the same conversation, and receive validated commit/deployment results.",
     dataSensitivity: "highly_private",
     baseUrlSetting: "OMNI_DEV_API_BASE_URL",
     authRequirement: "Requires a current-owner scoped integration token. The desktop independently verifies the server-signed intent and a host-owned repository policy.",
     modelGuidance: [
       "Use Omni Dev only for concrete GHWIZ development objectives, never as a general shell or arbitrary repository tool.",
       "Provide explicit acceptance criteria and the narrowest exact repository component identifiers accepted by the tool schema; use root only for top-level orchestration changes and never send friendly UI labels as target components.",
-      "A queued job is asynchronous; use the status tool for follow-ups and distinguish queued, running, validating, deploying, succeeded, failed, and rolled-back states.",
+      "Omni Dev performs a disposable confidence preflight before implementation. If it asks a question, forward the owner's answer with respond_to_development_job so the existing job can plan again; do not create a replacement job.",
+      "A queued job is asynchronous; use the status tool for follow-ups and distinguish queued, planning, awaiting_owner_input, running, validating, deploying, no_change, succeeded, failed, and rolled-back states.",
       "Routine owner-requested work does not require dashboard approval. Only destructive or security-boundary work pauses for an explicit owner confirmation, which can be supplied through the assistant or dashboard."
     ],
     actions: omniDevActions
