@@ -322,6 +322,13 @@ inbound owner-message context into MCP when applicable; MCP/tool execution owns
 recipient resolution, approval handling, SMTP transport configuration, delivery,
 status updates, and audit records.
 
+The owner-command-only `send_runtime_cpu_model` tool is narrower still: it has
+no arguments. Deterministic host code reads and sanitizes only the current
+runtime's CPU model, creates fixed bounded message text (including a fixed
+fallback when unavailable), and queues it through the same verified inbound or
+configured owner-contact resolution. It does not expose other host details and
+cannot be used by autonomous or scheduled runs.
+
 Owner replies are resolved by host code. For owner-classified inbound
 SMS/MMS/email, the reply goes back to the verified inbound owner address and
 uses the inbound source to select SMS, MMS, or email. Final assistant text

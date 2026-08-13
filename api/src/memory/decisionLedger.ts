@@ -44,6 +44,7 @@ const MEANINGFUL_TOOL_NAMES = new Set([
   "request_clarification",
   "record_schedule_rationale",
   "propose_outbound_message",
+  "send_runtime_cpu_model",
   "ask_owner_clarification",
   "record_observation",
   "integration_action",
@@ -235,6 +236,17 @@ function entryForToolCall(toolCall: ToolCallRecord): DecisionEntry | null {
           : `delivery:${stringValue(result, "status") ?? "pending"}`
       };
     }
+    case "send_runtime_cpu_model":
+      return {
+        markerId: markerBasis,
+        trigger: "tool:send_runtime_cpu_model",
+        action: "queued runtime CPU model message for the owner",
+        alternative: "do not inspect or report runtime hardware",
+        contextSummary: stringValue(result, "cpu_model") ?? "The runtime CPU model was unavailable; a bounded fallback was queued.",
+        rationale: "The owner explicitly requested the assistant runtime CPU model.",
+        links,
+        sideEffectStatus: `delivery:${stringValue(result, "status") ?? "pending"}`
+      };
     case "request_clarification":
     case "ask_owner_clarification":
       return {

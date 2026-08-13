@@ -83,6 +83,7 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   record_schedule_rationale: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   schedule_owner_message: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   propose_outbound_message: { access: "write", risk: "high", sideEffect: "local_persistence" },
+  send_runtime_cpu_model: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   ask_owner_clarification: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   record_observation: { access: "write", risk: "low", sideEffect: "none" },
   integration_action: { access: "write", risk: "high", sideEffect: "cross_app_api" },

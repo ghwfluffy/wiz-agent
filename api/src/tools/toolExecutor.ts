@@ -36,6 +36,8 @@ import {
   assertOwnerVisibleOutboundBudget,
   queueOwnerVisibleMessage,
   resolveOwnerMessageDestination,
+  runtimeCpuModel,
+  runtimeCpuOwnerMessage,
   scheduledOwnerMessagePrompt
 } from "./ownerMessaging.js";
 
@@ -1303,6 +1305,47 @@ export async function executeToolCall(options: {
           status: "queued_approval",
           approval_required: true,
           destination: destination.source
+        }
+      };
+    }
+    case "send_runtime_cpu_model": {
+      if (!ownerInitiated) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: {
+            rejected: true,
+            reason: "owner_command_required",
+            approval_required: false
+          }
+        };
+      }
+      const cpuModel = runtimeCpuModel();
+      const queued = await queueOwnerVisibleMessage({
+        context: options.context,
+        store: options.store,
+        settings: options.settings,
+        replyToMessage: options.replyToMessage,
+        source: "send_runtime_cpu_model",
+        ownerInitiated: true,
+        body: runtimeCpuOwnerMessage(cpuModel)
+      });
+      if (!queued.message || !queued.destination) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { reason: queued.reason ?? "owner_reply_destination_unavailable" }
+        };
+      }
+      return {
+        executed: true,
+        sideEffect: "local_persistence",
+        result: {
+          outbound_message_id: queued.message.id,
+          status: queued.message.status,
+          destination: queued.destination.source,
+          cpu_model: cpuModel,
+          fallback_used: cpuModel === null
         }
       };
     }

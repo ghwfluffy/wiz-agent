@@ -131,6 +131,7 @@ Current tool contracts:
 - `record_schedule_rationale`
 - `schedule_owner_message`
 - `propose_outbound_message`
+- `send_runtime_cpu_model`
 - `ask_owner_clarification`
 - `record_observation`
 - `integration_action`
@@ -267,6 +268,12 @@ Current migrated agent tools:
   resolves the owner destination. Autonomous newsletter/self-review style
   messages and explicit `approvalRequired=true` requests still create approval
   records.
+- `send_runtime_cpu_model` is available only for a current authenticated owner
+  command. Host code reads only the runtime CPU model, collapses control and
+  whitespace characters, caps it at 200 characters, generates fixed owner-facing
+  wording, and queues it through the verified-owner outbound path. The tool has
+  no recipient or body arguments. If the runtime exposes no usable model, the
+  message uses a fixed bounded fallback instead of adding other system details.
 - `ask_owner_clarification` records that the agent needs more owner input. For
   `urgency = now`, it queues an owner message through host-resolved owner
   contact or verified inbound reply context. For lower urgency, it creates a

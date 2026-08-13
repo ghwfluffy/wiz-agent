@@ -1,3 +1,4 @@
+import { cpus, type CpuInfo } from "node:os";
 import type { Settings } from "../config/settings.js";
 import type {
   AgentStore,
@@ -14,6 +15,8 @@ import {
 
 export const OWNER_SCHEDULED_MESSAGE_RECURRENCE = "owner-requested scheduled message/v1";
 
+export const MAX_RUNTIME_CPU_MODEL_CHARS = 200;
+
 const OWNER_SCHEDULED_MESSAGE_PROMPT_PREFIX = "OWNER_SCHEDULED_MESSAGE_V1\n";
 
 export type OwnerMessageDestination = {
@@ -26,6 +29,37 @@ export type ScheduledOwnerMessagePayload = {
   body: string;
   subject?: string | null;
 };
+
+type RuntimeCpuInfo = Pick<CpuInfo, "model">;
+
+export function runtimeCpuModel(cpuInfo?: readonly RuntimeCpuInfo[]): string | null {
+  let detectedCpuInfo = cpuInfo;
+  if (!detectedCpuInfo) {
+    try {
+      detectedCpuInfo = cpus();
+    } catch {
+      return null;
+    }
+  }
+  for (const cpu of detectedCpuInfo) {
+    const model = cpu.model
+      .replace(/[\u0000-\u001f\u007f]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, MAX_RUNTIME_CPU_MODEL_CHARS)
+      .trim();
+    if (model) {
+      return model;
+    }
+  }
+  return null;
+}
+
+export function runtimeCpuOwnerMessage(cpuModel: string | null = runtimeCpuModel()): string {
+  return cpuModel
+    ? `The AI assistant is running on CPU: ${cpuModel}.`
+    : "The AI assistant is running on a CPU whose model could not be determined from this runtime.";
+}
 
 function configString(config: Record<string, unknown>, key: string): string | undefined {
   const value = config[key];

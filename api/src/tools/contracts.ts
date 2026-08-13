@@ -448,6 +448,8 @@ export const ProposeOutboundMessageToolSchema = z.object({
   approvalRequired: z.boolean().default(false)
 }).strict();
 
+export const SendRuntimeCpuModelToolSchema = z.object({}).strict();
+
 export const AskOwnerClarificationToolSchema = z.object({
   question: z.string().min(1),
   relatedTaskId: z.string().min(1).optional(),
@@ -558,6 +560,7 @@ export const ToolContracts = {
   record_schedule_rationale: RecordScheduleRationaleToolSchema,
   schedule_owner_message: ScheduleOwnerMessageToolSchema,
   propose_outbound_message: ProposeOutboundMessageToolSchema,
+  send_runtime_cpu_model: SendRuntimeCpuModelToolSchema,
   ask_owner_clarification: AskOwnerClarificationToolSchema,
   record_observation: RecordObservationToolSchema,
   integration_action: IntegrationActionToolSchema,

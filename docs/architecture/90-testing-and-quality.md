@@ -128,6 +128,9 @@ Current tests cover:
   path filtering, read-file links, and redaction of credential-like markdown
   lines in audit-backed diffs and provenance evidence.
 - owner reply tool contract without model-selected recipients.
+- runtime CPU model normalization and length bounds, fixed unavailable-model
+  fallback wording, owner-command-only enforcement, recipient-free tool
+  validation, and verified-owner outbox queueing.
 - conversation thread schema coverage, in-memory store round trips, bounded
   prompt context, owner follow-up thread reuse, MCP list/update/link tools, and
   rejection of missing or foreign linked records.
