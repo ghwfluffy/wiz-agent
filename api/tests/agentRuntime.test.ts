@@ -1755,7 +1755,8 @@ describe("agent task execution", () => {
             toolName: "append_task_prompt",
             arguments: {
               taskId: task.id,
-              prompt: "Owner added a morning preference."
+              prompt: "Owner added a morning preference.",
+              status: "running"
             }
           }
         ]

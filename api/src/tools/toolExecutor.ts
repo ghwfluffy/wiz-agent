@@ -51,6 +51,21 @@ function compactPayload(payload: Record<string, unknown>): Record<string, unknow
   return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
 }
 
+async function queueOwnerApprovalNotification(options: {
+  context: RequestContext;
+  store: AgentStore;
+  settings?: Settings;
+  summary: string;
+}): Promise<void> {
+  await queueOwnerVisibleMessage({
+    context: options.context,
+    store: options.store,
+    settings: options.settings,
+    source: "approval_request",
+    body: `I need your approval for this action: ${options.summary}\nReply YES to approve, NO to reject, LATER to leave it pending, or DETAILS for more information.`
+  });
+}
+
 function budgetContractPayload(args: Record<string, unknown>, options: { includeType?: boolean } = {}): Record<string, unknown> {
   return compactPayload({
     name: args.name,
@@ -258,6 +273,12 @@ export async function executeToolCall(options: {
         body: input.body ?? null,
         user_intent_summary: input.summary
       },
+      summary: input.summary
+    });
+    await queueOwnerApprovalNotification({
+      context: options.context,
+      store: options.store,
+      settings: options.settings,
       summary: input.summary
     });
     return {
@@ -991,7 +1012,9 @@ export async function executeToolCall(options: {
       const prompt = String(options.args.prompt);
       const updated = await options.store.updateTask(options.context, taskId, {
         prompt: `${task.prompt}\n\nInbound follow-up:\n${prompt}`,
-        status: String(options.args.status)
+        // The inbound agent is already running synchronously. Requeue the
+        // appended work for a separate worker run.
+        status: "pending"
       });
       const event = await options.store.recordTaskEvent(options.context, taskId, "task.prompt_added", {
         prompt,
@@ -1296,6 +1319,12 @@ export async function executeToolCall(options: {
         subject: typeof options.args.subject === "string" ? options.args.subject : null,
         bodyText: String(options.args.body)
       });
+      await queueOwnerApprovalNotification({
+        context: options.context,
+        store: options.store,
+        settings: options.settings,
+        summary: `Send ${destination.channel} owner message: ${String(options.args.body)}`
+      });
       return {
         executed: true,
         sideEffect: "local_persistence",
@@ -1586,6 +1615,11 @@ const APPROVAL_GATED_OUTBOUND_TASK_MARKERS = [
   "autonomous agent wake review"
 ];
 
+const DIRECT_NEWSLETTER_OUTBOUND_TASK_MARKERS = [
+  "newsletter interest check",
+  "newsletter-interest"
+];
+
 async function shouldRequireOutboundApproval(options: {
   context: RequestContext;
   store: AgentStore;
@@ -1612,5 +1646,8 @@ async function shouldRequireOutboundApproval(options: {
     task.scheduleRationale,
     task.recurrencePolicy
   ].filter((value): value is string => typeof value === "string").join("\n").toLowerCase();
+  if (DIRECT_NEWSLETTER_OUTBOUND_TASK_MARKERS.some((marker) => taskText.includes(marker))) {
+    return false;
+  }
   return APPROVAL_GATED_OUTBOUND_TASK_MARKERS.some((marker) => taskText.includes(marker));
 }

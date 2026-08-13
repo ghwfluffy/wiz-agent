@@ -230,6 +230,11 @@ rationale and write task events; failed recurring wake runs still create the
 next wake. Newsletter interest messages are sent directly through the outbound
 queue when they fit the notification policy and daily owner-visible budget; the
 daily check should not create approval backlog for routine useful updates.
+Inbound task continuations are requeued as pending worker work after the owner
+message run completes. Approval-gated autonomous actions send their approval
+notice through the configured owner SMS/MMS or email connector, where owner
+replies such as `YES` and `NO` are handled deterministically; signing into the
+web UI is not required.
 
 The memory quality review runs around Sunday 10:00 local/server time. Its
 prompt includes bounded recent markdown writes under `/personal/`,

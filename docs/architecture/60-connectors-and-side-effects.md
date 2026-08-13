@@ -60,6 +60,12 @@ queue a short budgeted conversational owner message about one or two specific
 discoveries, or to stay quiet and record rationale. It is not a rigid daily
 digest.
 
+Newsletter-interest messages that fit the notification policy are sent directly
+through the configured owner SMS/MMS or email connector; they do not create a
+web approval backlog. Other autonomous messages that require approval queue an
+approval notice through that same owner connector. The owner can reply `YES`,
+`NO`, `LATER`, `DETAILS`, or `EDIT ...`; the web approval screen is optional.
+
 Connectors should call `processInboundMessage`, not the lower-level sender
 policy helper directly. The processor records the message, applies sender
 policy, and for owner-classified messages first gives deterministic owner reply

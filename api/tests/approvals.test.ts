@@ -76,16 +76,27 @@ describe("approval and notification policy", () => {
         proposedPayload: expect.objectContaining({ body_text: "This needs approval." })
       })
     ]);
-    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+    await expect(store.listOutboundMessages(context)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
         status: "requires_approval",
-        toAddr: "owner-sms@example.test"
+        toAddr: "owner-sms@example.test",
+        bodyText: "This needs approval."
+      }),
+      expect.objectContaining({
+        status: "pending",
+        toAddr: "owner-sms@example.test",
+        bodyText: expect.stringContaining("Reply YES to approve")
       })
-    ]);
+    ]));
   });
 
   it("queues approval instead of executing cross-app write actions", async () => {
     const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { mms_gateway: "owner-mms@example.test" }
+    });
 
     const result = await runAgentTask({
       context,
@@ -116,6 +127,14 @@ describe("approval and notification policy", () => {
         actionType: "cross_app_write_action",
         sourceRef: "goals.create_goal",
         proposedPayload: expect.objectContaining({ action_id: "goals.create_goal" })
+      })
+    ]);
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        channel: "mms",
+        status: "pending",
+        toAddr: "owner-mms@example.test",
+        bodyText: expect.stringContaining("Reply YES to approve")
       })
     ]);
   });
