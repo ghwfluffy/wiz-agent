@@ -83,17 +83,16 @@ describe("model tiers", () => {
 });
 
 describe("tool validation and repair", () => {
-  it("rejects friendly development labels that the desktop runner cannot authorize", () => {
+  it("delegates development objectives without asking the model to scope repository components", () => {
     const invalid = validateToolArguments("delegate_development_task", {
       objective: "Add shared navigation",
       acceptanceCriteria: ["Navigation works."],
-      targetComponents: ["Omni Dev UI", "Codex Proxy UI"],
+      targetComponents: ["apps/omni-dev"],
       rationale: "The owner requested it."
     });
     const valid = validateToolArguments("delegate_development_task", {
       objective: "Add shared navigation",
       acceptanceCriteria: ["Navigation works."],
-      targetComponents: ["root", "apps/omni-dev", "apps/codex-proxy"],
       rationale: "The owner requested it."
     });
 
@@ -241,7 +240,7 @@ describe("app capability registry", () => {
       approvalMode: "direct_owner_only"
     });
     expect(getIntegrationAction("omni_dev.create_job")?.safety).toEqual(expect.arrayContaining([
-      expect.stringContaining("initial hints")
+      expect.stringContaining("Do not guess repository paths")
     ]));
     expect(getIntegrationAction("omni_dev.respond_to_job")?.bodySummary).toContain("sanitized images");
   });
@@ -315,7 +314,6 @@ describe("agent task execution", () => {
       args: {
         objective: "Improve the goals screen",
         acceptanceCriteria: ["The layout is clearer."],
-        targetComponents: ["apps/goals"],
         conversationThreadId: thread.id,
         rationale: "The owner explicitly requested the change."
       },
@@ -341,6 +339,7 @@ describe("agent task execution", () => {
         memoryPaths: ["/projects/goals.md"]
       }
     });
+    expect(body).not.toHaveProperty("targetComponents");
     expect(body.context.entries).toEqual([
       expect.objectContaining({ direction: "owner", body: "Please improve the goals screen." }),
       expect.objectContaining({ direction: "assistant", body: "Which part should change?" })

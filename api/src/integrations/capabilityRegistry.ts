@@ -419,16 +419,15 @@ const omniDevActions: readonly IntegrationActionCapability[] = [
     risk: "high",
     method: "POST",
     pathTemplate: "/jobs",
-    bodySummary: "Signed owner objective, acceptance criteria, initial target-component hints, and a bounded conversation-thread snapshot.",
+    bodySummary: "Signed owner objective, acceptance criteria, and a bounded conversation-thread snapshot; Omni Dev selects repository components during preflight.",
     purpose: "Queue an authorized GHWIZ code-improvement objective for the paired isolated desktop development runner.",
     whenToUse: [
       "The owner explicitly asks the assistant to change, fix, improve, test, or deploy the GHWIZ site.",
       "The assistant has a concrete improvement suggestion and is prepared to request owner approval before submission."
     ],
     safety: [
-      "Only GHWIZ and its registered submodules are in scope.",
-      "Target components must be exact allowlisted repository identifiers from the tool schema, such as apps/omni-dev or apps/codex-proxy, not product names or UI labels.",
-      "For direct owner commands, target components are initial hints: confidence preflight may resolve a different allowlisted component without another retargeting question. Assistant-originated suggestions retain strict approved scope.",
+      "Only the current GHWIZ repository and its checked-in app components are available to the runner.",
+      "Do not guess repository paths or component identifiers. Submit the owner's objective and evidence unchanged; Omni Dev discovers and selects the required components during read-only preflight.",
       "Direct owner commands may submit routine jobs; assistant-originated suggestions must use the existing approval path.",
       "Routine UI, dependency, compose, and authorization changes proceed without another confirmation.",
       "Only destructive operations and security boundaries such as secrets, database restore, deploy machinery, CI workflows, and runner policy require a separate explicit owner confirmation.",
@@ -881,7 +880,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     authRequirement: "Requires a current-owner scoped integration token. The desktop independently verifies the server-signed intent and a host-owned repository policy.",
     modelGuidance: [
       "Use Omni Dev only for concrete GHWIZ development objectives, never as a general shell or arbitrary repository tool.",
-      "Provide explicit acceptance criteria and the narrowest plausible repository component identifiers accepted by the tool schema; use root only for top-level orchestration changes and never send friendly UI labels. For direct owner commands these are initial hints, and confidence preflight may correct them within the desktop allowlist.",
+      "Provide a faithful objective and explicit acceptance criteria without guessing repository paths. Omni Dev inspects the current repository and selects every required component during confidence preflight.",
       "Omni Dev performs a disposable confidence preflight before implementation. If it asks a question, forward the owner's answer with respond_to_development_job so the existing job can plan again; do not create a replacement job.",
       "A queued job is asynchronous; use the status tool for follow-ups and distinguish queued, planning, awaiting_owner_input, running, validating, deploying, no_change, succeeded, failed, and rolled-back states.",
       "Routine owner-requested work does not require dashboard approval. Only destructive or security-boundary work pauses for an explicit owner confirmation, which can be supplied through the assistant or dashboard."

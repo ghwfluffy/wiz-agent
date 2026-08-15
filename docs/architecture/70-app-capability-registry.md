@@ -133,7 +133,7 @@ boundaries.
 ### Omni Dev
 
 Omni Dev is the private development-job control plane. Wrapper tools can create
-a scoped objective with the selected durable conversation thread, read job
+an objective with the selected durable conversation thread, read job
 status, request cancellation, or confirm a rare dangerous job after an explicit
 owner reply. Omni Dev first plans in a disposable checkout and may return a
 focused question, a confident implementation plan, or a no-change explanation.
@@ -146,12 +146,13 @@ security-boundary objectives, signs the runner intent, and requires another
 owner confirmation only for dangerous concrete changes. That confirmation can
 travel through the current owner conversation; the dashboard is optional. The
 agent never receives Git, SSH, Codex, or deploy credentials.
-Development targets are constrained by the tool schema to the desktop policy's
-exact repository component identifiers (`root` and the registered `apps/...`
-paths). Friendly product or UI labels fail validation and enter the normal tool
-repair loop before any job is submitted.
-The component list includes `apps/notes-app` so future Notes improvements can be
-delegated without mis-scoping the new submodule.
+The wrapper deliberately has no repository-component field. The assistant
+passes the objective and evidence without guessing paths; Omni Dev enumerates
+the current checkout and selects the required `root` and `apps/...` components
+during read-only confidence preflight. The runner constrains the implementation
+diff to that resolved selection and keeps protected-path, remote, signature, and
+repository checks deterministic. New apps therefore do not require synchronized
+component enums in the Assistant and desktop policy before they can be handled.
 Owner image attachments are never added to ordinary model context. Host code may
 decode, resize, metadata-strip, re-encode, and integrity-bind supported images
 to the signed development context; untrusted and non-image attachments remain

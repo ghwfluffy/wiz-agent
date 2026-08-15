@@ -1574,7 +1574,6 @@ export async function executeToolCall(options: {
         body: {
           objective: String(options.args.objective),
           acceptanceCriteria: Array.isArray(options.args.acceptanceCriteria) ? options.args.acceptanceCriteria : [],
-          targetComponents: Array.isArray(options.args.targetComponents) ? options.args.targetComponents : [],
           origin: ownerInitiated ? "owner_command" : "assistant_suggestion",
           context
         },
