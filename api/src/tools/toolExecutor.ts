@@ -855,8 +855,7 @@ export async function executeToolCall(options: {
           title: options.args.title,
           details: options.args.details,
           completed: options.args.completed,
-          position: options.args.position,
-          list_id: options.args.listId
+          position: options.args.position
         }),
         summary: String(options.args.userIntentSummary)
       });

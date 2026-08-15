@@ -211,10 +211,9 @@ export const UpdateNoteItemToolSchema = z.object({
   details: z.string().max(10_000).nullable().optional(),
   completed: z.boolean().optional(),
   position: z.number().int().min(0).optional(),
-  listId: z.string().min(1).optional(),
   userIntentSummary: z.string().min(1)
-}).refine(
-  (value) => value.title !== undefined || value.details !== undefined || value.completed !== undefined || value.position !== undefined || value.listId !== undefined,
+}).strict().refine(
+  (value) => value.title !== undefined || value.details !== undefined || value.completed !== undefined || value.position !== undefined,
   { message: "At least one item update field is required." }
 );
 

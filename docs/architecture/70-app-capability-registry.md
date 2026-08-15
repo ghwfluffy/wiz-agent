@@ -73,6 +73,9 @@ newsletter and untrusted content cannot authorize a list change. The assistant
 should resolve ambiguous list or item names with a read before writing.
 List reordering always starts with a current list read and submits every current
 id exactly once under the dedicated `notes.reorder_lists` scope.
+An item stays in the list where it was created. `notes.update_item` can edit its
+content, completion state, or position within that list, but its schema and
+executor do not accept a destination list and must not describe cross-list moves.
 
 My Notes is the default for collections the owner expects to browse in the app.
 Markdown personal-list tools remain available for assistant-internal memory,

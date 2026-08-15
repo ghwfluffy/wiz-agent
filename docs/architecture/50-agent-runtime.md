@@ -288,7 +288,8 @@ Current migrated agent tools:
   list ordering so explicit owner collections stay visible and consistently
   ordered in the mobile Notes app rather than only in assistant-internal
   markdown memory. Reordering first reads the current lists and then submits
-  every current id exactly once.
+  every current id exactly once. An existing item's parent list is immutable;
+  the update wrapper changes content, completion, or in-list position only.
 - Fluffynomics wrappers expose account lookup, forecasts, transfers, contracts,
   projected expenses, investments, audit logs, and account-value updates.
   Contract and expense write wrappers are intended for owner statements such as

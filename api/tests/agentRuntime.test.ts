@@ -83,6 +83,22 @@ describe("model tiers", () => {
 });
 
 describe("tool validation and repair", () => {
+  it("does not accept moving an existing My Notes item to another list", () => {
+    const attemptedMove = validateToolArguments("update_note_item", {
+      itemId: "item-1",
+      listId: "list-2",
+      userIntentSummary: "Move the item to another list."
+    });
+    const contentUpdate = validateToolArguments("update_note_item", {
+      itemId: "item-1",
+      title: "Updated title",
+      userIntentSummary: "Rename the existing item."
+    });
+
+    expect(attemptedMove.ok).toBe(false);
+    expect(contentUpdate.ok).toBe(true);
+  });
+
   it("delegates development objectives without asking the model to scope repository components", () => {
     const invalid = validateToolArguments("delegate_development_task", {
       objective: "Add shared navigation",
@@ -236,6 +252,11 @@ describe("app capability registry", () => {
       pathTemplate: "/lists/order",
       approvalMode: "direct_owner_only"
     });
+    const updateNoteItem = getIntegrationAction("notes.update_item");
+    expect(updateNoteItem?.bodySummary).not.toContain("list_id");
+    expect(updateNoteItem?.safety).toEqual(expect.arrayContaining([
+      expect.stringContaining("remain in the list where they were created")
+    ]));
     expect(getIntegrationAction("apartment_gate.open_right_gate")).toMatchObject({
       app: "apartment_gate",
       access: "write",
@@ -261,6 +282,10 @@ describe("app capability registry", () => {
     expect(prompt).toContain("App capability registry");
     expect(prompt).toContain("goals.list_goals");
     expect(prompt).toContain("budget.list_accounts");
+    const updateNoteItem = tools.find((tool) => (
+      tool as { name?: string }
+    ).name === "update_note_item") as { schema?: { properties?: Record<string, unknown> } } | undefined;
+    expect(updateNoteItem?.schema?.properties).not.toHaveProperty("listId");
     expect(tools).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ name: "list_app_capabilities", access: "read", sideEffect: "none" }),
@@ -3764,6 +3789,63 @@ describe("agent task execution", () => {
         status: 201,
         approval_required: false,
         action_id: "notes.create_item"
+      }
+    });
+  });
+
+  it("updates a Notes item without sending a destination list", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "oauth:central-oauth:notes-owner",
+      NOTES_API_BASE_URL: "https://notes.example.test/api/agent/v1",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://notes.example.test/api/agent/v1/items/item-1");
+      expect(init?.method).toBe("PATCH");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        title: "Arrival (2016)",
+        completed: true
+      });
+      return Response.json({ id: "item-1", title: "Arrival (2016)", completed: true });
+    });
+    const app = buildApp({
+      settings,
+      fetchImpl: fetchMock,
+      modelClient: new MockModelClient({
+        tools: [{
+          toolName: "update_note_item",
+          arguments: {
+            itemId: "item-1",
+            title: "Arrival (2016)",
+            completed: true,
+            userIntentSummary: "Rename Arrival and mark it complete."
+          }
+        }]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "Rename Arrival and mark it complete.",
+        mode: "normal"
+      })
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      selectedAction: "update_note_item",
+      toolResult: {
+        status: 200,
+        approval_required: false,
+        action_id: "notes.update_item"
       }
     });
   });
