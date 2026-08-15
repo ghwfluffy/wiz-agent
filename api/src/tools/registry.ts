@@ -3,6 +3,7 @@ import type { AgentStore, InboundMessageRecord, RequestContext } from "../domain
 import type { IntegrationTokenProvider } from "./integrationGateway.js";
 import { ToolContracts, type ToolName } from "./contracts.js";
 import { executeToolCall, type ToolExecutionResult } from "./toolExecutor.js";
+import type { WebResearchClient } from "../research/openAiWebResearchClient.js";
 
 export type ToolAccess = "read" | "write";
 export type ToolRisk = "low" | "medium" | "high";
@@ -15,9 +16,11 @@ export type ToolExecutionContext = {
   taskId?: string | null;
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
+  webResearchClient?: WebResearchClient;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  replyToMessage?: Pick<InboundMessageRecord, "id" | "fromAddr" | "source" | "subject" | "conversationThreadId">;
   now?: Date;
 };
 
@@ -94,12 +97,17 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   send_runtime_cpu_model: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   ask_owner_clarification: { access: "write", risk: "medium", sideEffect: "local_persistence" },
   record_observation: { access: "write", risk: "low", sideEffect: "none" },
+  web_research: { access: "read", risk: "low", sideEffect: "local_persistence" },
   integration_action: { access: "write", risk: "high", sideEffect: "cross_app_api" },
   delegate_development_task: { access: "write", risk: "high", sideEffect: "cross_app_api" },
   get_development_job: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   cancel_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" },
   confirm_dangerous_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" },
   respond_to_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" }
+};
+
+const toolDescriptions: Partial<Record<ToolName, string>> = {
+  web_research: "Search or open the public web using an isolated read-only researcher. Returns a sanitized, cited, externally-tainted evidence bundle and durable research session for natural follow-ups. No approval is required. Use priorResearchSessionId to continue an earlier search."
 };
 
 export const ToolRegistry = Object.fromEntries(
@@ -125,9 +133,11 @@ export function listToolDefinitions(): ToolDefinition[] {
   return Object.values(ToolRegistry);
 }
 
-export function modelToolDescriptors(): unknown[] {
-  return listToolDefinitions().map((tool) => ({
+export function modelToolDescriptors(allowedTools?: readonly ToolName[]): unknown[] {
+  const allowed = allowedTools ? new Set<ToolName>(allowedTools) : undefined;
+  return listToolDefinitions().filter((tool) => !allowed || allowed.has(tool.name)).map((tool) => ({
     name: tool.name,
+    description: toolDescriptions[tool.name],
     schema: tool.schema.toJSONSchema(),
     access: tool.access,
     risk: tool.risk,

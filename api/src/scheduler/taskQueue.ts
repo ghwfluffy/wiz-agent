@@ -8,6 +8,7 @@ import {
   buildScheduledTaskPrompt,
   ensureAutonomousTasks,
   isAutonomousRecurringTask,
+  isNewsletterInterestTask,
   scheduleNextAutonomousTask
 } from "./autonomousTasks.js";
 import { executeApprovedCrossAppApprovals } from "./approvalExecutor.js";
@@ -18,6 +19,7 @@ import {
   parseScheduledOwnerMessageTask,
   queueOwnerVisibleMessage
 } from "../tools/ownerMessaging.js";
+import type { WebResearchClient } from "../research/openAiWebResearchClient.js";
 
 const WORKER_STUCK_STATE_GRACE_MS = 30 * 60 * 1000;
 const STALE_TASK_FAILURE_MESSAGE = "Worker claim expired before completion.";
@@ -185,6 +187,7 @@ export async function daemonOnce(options: {
   outboundLimit?: number;
   now?: Date;
   fetchImpl?: typeof fetch;
+  webResearchClient?: WebResearchClient;
 }): Promise<{
   claimedTasks: number;
   ranTasks: number;
@@ -273,19 +276,65 @@ export async function daemonOnce(options: {
             now: options.now
           })
           : task.prompt;
+        const newsletterInterestTask = isNewsletterInterestTask(task);
         const result = await runAgentTask({
           context: options.context,
           store: options.store,
           modelClient,
           settings: options.settings,
           integrationTokenProvider: options.settings ? new SignedIntegrationTokenProvider(options.settings) : undefined,
+          webResearchClient: options.webResearchClient,
+          fetchImpl: options.fetchImpl,
           request: {
             taskId: task.id,
-            prompt
+            prompt,
+            allowedTools: newsletterInterestTask ? ["web_research", "record_observation"] : undefined
           },
           now: options.now
         });
         runFailed = result.status === "failed";
+        let newsletterOutboundMessageId: string | undefined;
+        if (!runFailed && newsletterInterestTask && result.toolName === "web_research") {
+          const researchStatus = payloadString(result.executionResult ?? {}, "status");
+          const researchSessionId = payloadString(result.executionResult ?? {}, "research_session_id");
+          const query = payloadString(result.executionResult ?? {}, "query") ?? "Newsletter research";
+          if ((researchStatus === "ok" || researchStatus === "partial") && result.responseText && researchSessionId) {
+            const sourcePaths = Array.isArray(result.executionResult?.source_markdown_paths)
+              ? result.executionResult.source_markdown_paths.filter((path): path is string => typeof path === "string")
+              : [];
+            const thread = await options.store.createConversationThread(options.context, {
+              title: `Newsletter research: ${query.replace(/\s+/g, " ").slice(0, 120)}`,
+              status: "active",
+              linkedTaskIds: [task.id],
+              linkedMemoryPaths: sourcePaths
+            });
+            const queued = await queueOwnerVisibleMessage({
+              context: options.context,
+              store: options.store,
+              settings: options.settings,
+              source: "newsletter_web_research",
+              body: result.responseText,
+              conversationThreadId: thread.id,
+              preferredChannel: "mms",
+              requirePreferredChannel: true
+            });
+            if (!queued.message) {
+              throw new Error("The owner's MMS destination is unavailable for newsletter research.");
+            }
+            newsletterOutboundMessageId = queued.message.id;
+            await options.store.linkWebResearchSession(options.context, researchSessionId, {
+              conversationThreadId: thread.id,
+              outboundMessageId: queued.message.id
+            });
+            await options.store.recordTaskEvent(options.context, task.id, "newsletter_research.queued", {
+              research_session_id: researchSessionId,
+              outbound_message_id: queued.message.id,
+              conversation_thread_id: thread.id,
+              channel: queued.message.channel,
+              summary: "Sanitized newsletter research was queued to the owner through MMS without approval."
+            });
+          }
+        }
         await options.store.updateTask(options.context, task.id, {
           status: runFailed ? "failed" : "completed",
           lastAgentReviewAt: (options.now ?? new Date()).toISOString()
@@ -306,10 +355,11 @@ export async function daemonOnce(options: {
             now: options.now
           });
         } else {
-          const outcome = result.sideEffect && result.sideEffect !== "none" ? "acted" : "observed";
+          const outcome = newsletterOutboundMessageId || (result.sideEffect && result.sideEffect !== "none") ? "acted" : "observed";
           await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.outcome", {
             outcome,
             tool_name: result.toolName ?? null,
+            outbound_message_id: newsletterOutboundMessageId ?? null,
             summary: `Scheduled task outcome: ${outcome}.`
           });
           await recordScheduledTaskDecision({

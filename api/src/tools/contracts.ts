@@ -524,6 +524,15 @@ export const RecordObservationToolSchema = z.object({
   source: z.string().min(1)
 });
 
+export const WebResearchToolSchema = z.object({
+  query: z.string().min(1).max(10_000),
+  priorResearchSessionId: z.string().uuid().optional(),
+  sourceNewsletterPaths: z.array(
+    z.string().min(1).max(500).regex(/^\/newsletters\/\d{4}-\d{2}-\d{2}\/[a-zA-Z0-9._-]+\.md$/)
+  ).max(10).default([]),
+  rationale: z.string().min(1).max(2000)
+}).strict();
+
 export const IntegrationActionToolSchema = z.object({
   actionId: z.enum(IntegrationActionIds),
   pathParams: z.record(z.string(), z.string()).default({}),
@@ -624,6 +633,7 @@ export const ToolContracts = {
   send_runtime_cpu_model: SendRuntimeCpuModelToolSchema,
   ask_owner_clarification: AskOwnerClarificationToolSchema,
   record_observation: RecordObservationToolSchema,
+  web_research: WebResearchToolSchema,
   integration_action: IntegrationActionToolSchema,
   delegate_development_task: DelegateDevelopmentTaskToolSchema,
   get_development_job: GetDevelopmentJobToolSchema,

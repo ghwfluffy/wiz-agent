@@ -28,6 +28,7 @@ import { daemonOnce } from "../../src/scheduler/taskQueue.js";
 import { SlidingWindowRateLimiter } from "../../src/security/senderPolicy.js";
 import type { ToolName } from "../../src/tools/contracts.js";
 import { runAgentTask, type AgentTaskResult } from "../../src/agent/runAgentTask.js";
+import type { WebResearchClient } from "../../src/research/openAiWebResearchClient.js";
 
 type StagedToolCall = {
   toolName: ToolName;
@@ -136,6 +137,7 @@ export async function createAgentSimulation(options: {
   settings?: Record<string, string>;
   loginLabel?: string;
   now?: string;
+  webResearchClient?: WebResearchClient;
 } = {}): Promise<AgentSimulation> {
   let currentTime = new Date(options.now ?? "2026-06-13T12:00:00.000Z");
   const settings = loadSettings({
@@ -251,6 +253,7 @@ export async function createAgentSimulation(options: {
         context: systemContext,
         settings,
         modelClient: model,
+        webResearchClient: options.webResearchClient,
         mailTransport: { sendMail: async () => ({ accepted: ["ok"] }) },
         now: currentTime
       });

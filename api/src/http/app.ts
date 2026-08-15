@@ -651,6 +651,13 @@ function operationalConfiguration(settings: Settings) {
       requiredFor: ["live_model_runs", "voice_transcription"]
     },
     {
+      name: "web_research",
+      status: settings.agentWebResearchEnabled
+        ? settings.agentOpenaiApiKey ? "configured" : "misconfigured_missing_openai_key"
+        : "disabled",
+      requiredFor: ["isolated_public_web_search", "newsletter_link_enrichment"]
+    },
+    {
       name: "goals",
       status: optionalIntegrationStatus(Boolean(settings.goalsApiBaseUrl), tokenSecretConfigured),
       requiredFor: ["goals_app_actions"]

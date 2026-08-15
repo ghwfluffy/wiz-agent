@@ -55,14 +55,13 @@ trust rows, so `Name <sender@example>` stores and later matches
 A newsletter interest check is a scheduled agent task, not an inbound side
 effect. That task reviews newsletter knowledge, newsletter preferences,
 communication preferences, recent owner response timing, pending approvals, and
-recent bot activity evidence. It then decides whether now is a good time to
-queue a short budgeted conversational owner message about one or two specific
-discoveries, or to stay quiet and record rationale. It is not a rigid daily
-digest.
+recent bot activity evidence. It then decides whether one or two specific
+discoveries justify an isolated public-web research call, or whether to stay
+quiet and record rationale. It is not a rigid daily digest.
 
-Newsletter-interest messages that fit the notification policy are sent directly
-through the configured owner SMS/MMS or email connector; they do not create a
-web approval backlog. Other autonomous messages that require approval queue an
+When newsletter research fits the notification policy, only its sanitized cited
+result is sent directly through the configured owner MMS gateway; it does not
+create a web approval backlog. Other autonomous messages that require approval queue an
 approval notice through that same owner connector. The owner can reply `YES`,
 `NO`, `LATER`, `DETAILS`, or `EDIT ...`; the web approval screen is optional.
 
@@ -168,10 +167,11 @@ self-review notes, then writes compact curation findings to
 `/assistant/memory-review/YYYY-MM.md`.
 The newsletter interest check runs from the schedule, not directly from inbound
 newsletter delivery. It receives newsletter excerpts as trusted knowledge data,
-must still choose a host-approved tool, and can queue a short owner message only
-through the normal outbox/budget controls. Quiet decisions should record
-rationale through task events or assistant memory such as
-`/assistant/newsletter-interest/YYYY-MM.md`. Autonomous wakes can update task
+and receives only `web_research` and `record_observation`. For a selected item,
+the research query can include public links and exact newsletter markdown
+provenance paths. Host code creates a conversation thread and queues the safe
+result only through the MMS outbox and owner-visible budget controls. Unsafe
+research is not sent. Quiet decisions use `record_observation`. Autonomous wakes can update task
 schedule, status, waiting/blocked state, follow-up tasks, and schedule rationale
 only through MCP tools that require rationale and write task events. Self-review
 writes compact operational notes under `/assistant/self-review/YYYY-MM-DD.md`
@@ -360,6 +360,8 @@ than exposing internal failure details or leaving the owner without a response.
 For proactive messages
 without an inbound message context, the host uses the current user's
 owner-contact connector, preferring SMS gateway, then MMS gateway, then email.
+Newsletter research is narrower: it requires the configured MMS gateway and
+does not fall back to SMS or email.
 SMTP delivery fails closed unless the final recipient is a configured or
 sender-table owner address. Legacy queued SMS/MMS records containing only the
 owner mobile number are mapped to the configured carrier gateway before SMTP
@@ -470,11 +472,38 @@ Safe-fetch code controls network access. It should reject private, loopback,
 link-local, and metadata-service addresses; limit redirects; limit response
 sizes; and time out aggressively before article extraction or summarization.
 
+## Isolated Web Research
+
+The `web_research` tool does not fetch pages inside the main assistant process
+or send page text back into its tool continuation. Host code minimizes the
+query, validates direct URLs as public HTTP(S), removes tracking and
+credential-shaped URL parameters, and redacts common secrets, addresses, phone
+numbers, and local paths. It then starts a fresh auxiliary OpenAI Responses API
+call with hosted `web_search` as the only tool and with no assistant memory,
+app tools, integration credentials, or private conversation context.
+
+The raw answer and source metadata are passed to a separate no-tool
+prompt-injection detector, then to a separate no-tool structured sanitizer.
+Only source-bound factual claims, stable entities, public source URLs, and a
+risk verdict can cross back. Provider titles are replaced with deterministic
+hostnames because titles are also hostile page data. Any introduced URL,
+unknown source id, invalid schema, missing citation, or unsafe destination fails
+closed.
+
+Sanitized bundles are stored as user-owned `web_research_sessions` with an
+`external_web` taint, expiry, parent session, and optional newsletter, task,
+message, thread, and outbound links. Follow-up research receives only the prior
+sanitized bundle. On a later assistant turn, external evidence can identify a
+referenced entity but cannot authorize a side effect; mutation tools remain
+unavailable unless the current authenticated owner's message explicitly asks
+for an action.
+
 ## Cross-App Integrations
 
-The agent understands other apps through the app capability registry in
+The agent understands other apps and major host capabilities through the app capability registry in
 `api/src/integrations/capabilityRegistry.ts`. The registry currently covers
-Goals, My Notes, Fluffynomics, Federated Services, Android Assistant, and Apartment Gate.
+Goals, My Notes, Fluffynomics, Federated Services, Android Assistant, Apartment Gate,
+Model Gateway, Isolated Web Research, and Omni Dev.
 Goals, My Notes, and Fluffynomics expose agent-callable API actions, Federated Services
 and Android Assistant are directory-only entries with no agent API, and
 Apartment Gate exposes one scoped high-risk action for the configured right

@@ -129,6 +129,15 @@ const SettingsSchema = z.object({
   agentOpenaiModelOrchestrator: AiModelIdSchema.default("gpt-5"),
   agentOpenaiModelRepair: AiModelIdSchema.default("gpt-5-mini"),
   agentOpenaiTranscriptionModel: AiModelIdSchema.default("gpt-4o-transcribe"),
+  agentWebResearchEnabled: EnvBooleanSchema.default(false),
+  agentWebResearchModel: AiModelIdSchema.default("gpt-5-mini"),
+  agentWebResearchSanitizerModel: AiModelIdSchema.default("gpt-5-mini"),
+  agentWebResearchSearchContextSize: z.enum(["low", "medium", "high"]).default("medium"),
+  agentWebResearchMaxSources: boundedInteger(1, 30).default(12),
+  agentWebResearchMaxQueryChars: boundedInteger(100, 10_000).default(2500),
+  agentWebResearchMaxOutputChars: boundedInteger(500, 20_000).default(6000),
+  agentWebResearchRetentionDays: boundedInteger(1, 365).default(30),
+  agentWebResearchTimeoutSec: boundedInteger(5, 300).default(120),
   agentOpenaiApiKey: z.string().trim().default(""),
   agentOpenaiBaseUrl: RequiredServiceUrlSchema.default("https://api.openai.com/v1"),
   agentModelApiKey: z.string().trim().default(""),
@@ -347,6 +356,9 @@ function validateProductionSettings(settings: Settings): void {
   if (settings.omniDevApiBaseUrl && settings.omniDevEventToken.length < 32) {
     unsafe.push("OMNI_DEV_EVENT_TOKEN");
   }
+  if (settings.agentWebResearchEnabled && !settings.agentOpenaiApiKey) {
+    unsafe.push("AGENT_OPENAI_API_KEY");
+  }
   if (unsafe.length > 0) {
     throw new Error(`Unsafe production configuration values: ${unsafe.join(", ")}`);
   }
@@ -383,6 +395,15 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     agentOpenaiModelOrchestrator: nonBlank(env.AGENT_OPENAI_MODEL_ORCHESTRATOR),
     agentOpenaiModelRepair: nonBlank(env.AGENT_OPENAI_MODEL_REPAIR),
     agentOpenaiTranscriptionModel: nonBlank(env.AGENT_OPENAI_TRANSCRIPTION_MODEL),
+    agentWebResearchEnabled: nonBlank(env.AGENT_WEB_RESEARCH_ENABLED),
+    agentWebResearchModel: nonBlank(env.AGENT_WEB_RESEARCH_MODEL),
+    agentWebResearchSanitizerModel: nonBlank(env.AGENT_WEB_RESEARCH_SANITIZER_MODEL),
+    agentWebResearchSearchContextSize: nonBlank(env.AGENT_WEB_RESEARCH_SEARCH_CONTEXT_SIZE),
+    agentWebResearchMaxSources: nonBlank(env.AGENT_WEB_RESEARCH_MAX_SOURCES),
+    agentWebResearchMaxQueryChars: nonBlank(env.AGENT_WEB_RESEARCH_MAX_QUERY_CHARS),
+    agentWebResearchMaxOutputChars: nonBlank(env.AGENT_WEB_RESEARCH_MAX_OUTPUT_CHARS),
+    agentWebResearchRetentionDays: nonBlank(env.AGENT_WEB_RESEARCH_RETENTION_DAYS),
+    agentWebResearchTimeoutSec: nonBlank(env.AGENT_WEB_RESEARCH_TIMEOUT_SEC),
     agentOpenaiApiKey: nonBlank(env.AGENT_OPENAI_API_KEY) ?? nonBlank(env.OPENAI_API_KEY) ?? openAiKeyFromFile,
     agentOpenaiBaseUrl: nonBlank(env.AGENT_OPENAI_BASE_URL),
     agentModelApiKey: nonBlank(env.AGENT_MODEL_API_KEY) ?? modelKeyFromFile

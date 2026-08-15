@@ -23,13 +23,20 @@ import {
   runtimeSafetyPolicy
 } from "../security/safetyPolicy.js";
 import { recordDecisionLedgerForToolCall } from "../memory/decisionLedger.js";
+import type { WebResearchClient } from "../research/openAiWebResearchClient.js";
+import type { ToolName } from "../tools/contracts.js";
+import { agentToolNames } from "../tools/registry.js";
+import { allowedToolsForExternalResearchTurn } from "./externalResearchPolicy.js";
 
 export type AgentTaskRequest = {
   prompt: string;
   taskId?: string | null;
   complexity?: AgentTaskComplexity;
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  replyToMessage?: Pick<InboundMessageRecord, "id" | "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  allowedTools?: readonly ToolName[];
+  ownerCommandText?: string;
+  externalResearchContext?: boolean;
 };
 
 export type AgentTaskResult = {
@@ -51,6 +58,7 @@ export async function runAgentTask(options: {
   request: AgentTaskRequest;
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
+  webResearchClient?: WebResearchClient;
   fetchImpl?: typeof fetch;
   toolClient?: AgentToolClient;
   now?: Date;
@@ -86,6 +94,16 @@ export async function runAgentTask(options: {
   const modelId = resolveModelId(modelTierConfigFromAiConfig(aiConfig), tier);
   const runtimeDeadline = new AgentRuntimeDeadline(aiConfig.maxRuntimeSec);
   const runtimeModelClient = modelClientWithDeadline(options.modelClient, runtimeDeadline);
+  const externalPolicy = options.request.externalResearchContext
+    ? allowedToolsForExternalResearchTurn({
+        ownerCommand: options.request.ownerCommandText,
+        baseAllowedTools: options.request.allowedTools
+      })
+    : {
+        allowedTools: [...new Set(options.request.allowedTools ?? agentToolNames())],
+        mutationAuthorized: false
+      };
+  const allowedTools = externalPolicy.allowedTools;
   const run = await options.store.createAgentRun(options.context, {
     taskId: options.request.taskId ?? null,
     status: "running",
@@ -98,11 +116,14 @@ export async function runAgentTask(options: {
     let modelOutput = await runtimeModelClient.runWithTools({
       model: modelId,
       tier,
-      prompt: buildAgentPrompt(options.request.prompt),
-      tools: modelToolDescriptors()
+      prompt: buildAgentPrompt(options.request.prompt, {
+        externalResearchContext: options.request.externalResearchContext,
+        externalResearchMutationAuthorized: externalPolicy.mutationAuthorized
+      }),
+      tools: modelToolDescriptors(allowedTools)
     });
     if (options.request.taskId) {
-      const responseSummary = typeof modelOutput === "string" ? modelOutput : JSON.stringify(modelOutput);
+      const responseSummary = auditedModelOutputSummary(modelOutput);
       await options.store.recordTaskEvent(options.context, options.request.taskId, "agent.prompted", {
         model_id: modelId,
         model_tier: tier,
@@ -154,9 +175,7 @@ export async function runAgentTask(options: {
             runId: run.id,
             toolName: proposal.toolName,
             status: "rejected",
-            arguments: typeof proposal.arguments === "object" && proposal.arguments !== null
-              ? proposal.arguments as Record<string, unknown>
-              : { value: proposal.arguments },
+            arguments: auditedToolArguments(proposal.toolName, proposal.arguments),
             validationError: `guardrail_exceeded:${MAX_RUNTIME_GUARDRAIL}`,
             result: runtimeGuardrailResult(error, proposal.toolName)
           });
@@ -184,9 +203,7 @@ export async function runAgentTask(options: {
           runId: run.id,
           toolName: validated.toolName,
           status: "rejected",
-          arguments: typeof validated.rawArguments === "object" && validated.rawArguments !== null
-            ? validated.rawArguments as Record<string, unknown>
-            : { value: validated.rawArguments },
+          arguments: auditedToolArguments(validated.toolName, validated.rawArguments),
           validationError: validated.validationErrors.join("; "),
           result: failure
         });
@@ -197,7 +214,8 @@ export async function runAgentTask(options: {
           modelOutput,
           modelId,
           tier,
-          output: failure
+          output: failure,
+          allowedTools
         });
         if (continued !== undefined) {
           modelOutput = continued;
@@ -211,6 +229,31 @@ export async function runAgentTask(options: {
           repaired,
           toolName,
           executionResult,
+          failureMessage: message
+        };
+      }
+
+      if (!allowedTools.includes(validated.toolName)) {
+        const message = `Tool ${validated.toolName} is not allowed for this agent run.`;
+        const failure = recoverableToolFailure(validated.toolName, message, {
+          reason: "tool_not_allowed_for_run"
+        });
+        await options.store.recordToolCall(options.context, {
+          runId: run.id,
+          toolName: validated.toolName,
+          status: "rejected",
+          arguments: auditedToolArguments(validated.toolName, validated.arguments),
+          validationError: "tool_not_allowed_for_run",
+          result: failure
+        });
+        await options.store.finishAgentRun(options.context, run.id, "failed", message);
+        return {
+          status: "failed",
+          runId: run.id,
+          toolStatus: "rejected",
+          repaired,
+          toolName: validated.toolName,
+          executionResult: failure,
           failureMessage: message
         };
       }
@@ -235,7 +278,7 @@ export async function runAgentTask(options: {
           runId: run.id,
           toolName: validated.toolName,
           status: "rejected",
-          arguments: validated.arguments,
+          arguments: auditedToolArguments(validated.toolName, validated.arguments),
           validationError: "guardrail_exceeded:maxToolCallsPerRun",
           result: {
             status: "guardrail_exceeded",
@@ -265,7 +308,9 @@ export async function runAgentTask(options: {
           args: validated.arguments,
           settings: options.settings,
           integrationTokenProvider: options.integrationTokenProvider,
+          webResearchClient: options.webResearchClient,
           fetchImpl: options.fetchImpl,
+          allowedTools,
           ownerInitiated: options.request.ownerInitiated === true,
           replyToMessage: options.request.replyToMessage,
           signal,
@@ -300,7 +345,7 @@ export async function runAgentTask(options: {
           runId: run.id,
           toolName: validated.toolName,
           status: "failed",
-          arguments: validated.arguments,
+          arguments: auditedToolArguments(validated.toolName, validated.arguments),
           validationError: error instanceof AgentRuntimeDeadlineExceededError
             ? `guardrail_exceeded:${MAX_RUNTIME_GUARDRAIL}`
             : error instanceof GuardrailExceededError
@@ -316,7 +361,8 @@ export async function runAgentTask(options: {
             modelOutput,
             modelId,
             tier,
-            output: failure
+            output: failure,
+            allowedTools
           });
           if (continued !== undefined) {
             modelOutput = continued;
@@ -339,7 +385,7 @@ export async function runAgentTask(options: {
         runId: run.id,
         toolName: validated.toolName,
         status: "accepted",
-        arguments: validated.arguments,
+        arguments: auditedToolArguments(validated.toolName, validated.arguments, execution.result),
         result: {
           accepted: true,
           side_effect_executed: execution.executed && execution.sideEffect !== "none",
@@ -358,12 +404,30 @@ export async function runAgentTask(options: {
       sideEffect = execution.sideEffect;
       executionResult = execution.result;
 
+      if (validated.toolName === "web_research") {
+        const responseText = typeof execution.result.display_text === "string"
+          ? execution.result.display_text.trim() || undefined
+          : undefined;
+        await options.store.finishAgentRun(options.context, run.id, "completed");
+        return {
+          status: "completed",
+          runId: run.id,
+          toolStatus,
+          repaired,
+          toolName,
+          responseText,
+          sideEffect,
+          executionResult
+        };
+      }
+
       const continued = await continueToolConversation({
         modelClient: runtimeModelClient,
         modelOutput,
         modelId,
         tier,
-        output: execution.result
+        output: execution.result,
+        allowedTools
       });
       if (continued !== undefined) {
         modelOutput = continued;
@@ -522,6 +586,7 @@ async function continueToolConversation(options: {
   modelId: string;
   tier: ReturnType<typeof chooseModelTier>;
   output: Record<string, unknown>;
+  allowedTools: readonly ToolName[];
 }): Promise<unknown | undefined> {
   const continuation = toolContinuation(options.modelOutput);
   if (!continuation) {
@@ -531,10 +596,43 @@ async function continueToolConversation(options: {
     model: options.modelId,
     tier: options.tier,
     prompt: "",
-    tools: modelToolDescriptors(),
+    tools: modelToolDescriptors(options.allowedTools),
     previousResponseId: continuation.responseId,
     toolOutputs: [{ callId: continuation.callId, output: options.output }]
   });
+}
+
+function auditedToolArguments(
+  toolName: string,
+  value: unknown,
+  executionResult?: Record<string, unknown>
+): Record<string, unknown> {
+  if (toolName !== "web_research") {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : { value };
+  }
+  const input = typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+  return {
+    query: typeof executionResult?.query === "string" ? executionResult.query : "[withheld until privacy filtering succeeds]",
+    priorResearchSessionId: typeof input.priorResearchSessionId === "string" ? input.priorResearchSessionId : undefined,
+    sourceNewsletterPaths: Array.isArray(input.sourceNewsletterPaths)
+      ? input.sourceNewsletterPaths.filter((item): item is string => typeof item === "string").slice(0, 10)
+      : []
+  };
+}
+
+function auditedModelOutputSummary(output: unknown): string {
+  const proposal = parseToolProposal(output);
+  if (proposal?.toolName === "web_research") {
+    return JSON.stringify({
+      toolName: proposal.toolName,
+      arguments: auditedToolArguments(proposal.toolName, proposal.arguments)
+    });
+  }
+  return (typeof output === "string" ? output : JSON.stringify(output)) ?? "";
 }
 
 function toolContinuation(output: unknown): { responseId: string; callId: string } | undefined {

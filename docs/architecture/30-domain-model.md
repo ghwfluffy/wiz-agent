@@ -12,6 +12,8 @@ integration activity. `users.id` is the isolation boundary for user-owned data.
 - Conversation: grouped messages and agent interactions.
 - Conversation thread: lightweight owner-scoped continuity record that groups
   related owner/assistant exchanges across messages, tasks, and memory paths.
+- Web research session: expiring externally-tainted bundle of sanitized public
+  evidence and stable follow-up context.
 - Message: inbound, outbound, or internal communication.
 - Task: scheduled or on-demand work item for the agent or worker.
 - Task event: append-only task state transition history.
@@ -189,6 +191,20 @@ user scope from the MCP session and validates linked tasks, messages, and
 markdown paths before adding them to a thread. A missing or foreign linked
 record is rejected rather than silently creating a cross-user reference.
 
+## Web Research Sessions
+
+`web_research_sessions` stores only post-sanitization research state. Each row
+is owned by `user_id` and includes a minimized query, purpose, risk level,
+`external_web` taint, expiry, validated source-bound bundle, optional parent
+session, and optional conversation-thread, source-message, source-task,
+newsletter-markdown, and outbound-message links. Parent and linked records are
+validated in the same user scope before insert or update.
+
+The raw hosted-search answer and raw page text are process-local transient data
+and are never inserted. Unexpired sessions can be included in a linked owner
+conversation or supplied to a fresh follow-up researcher. Expired sessions are
+excluded from normal prompt hydration.
+
 ## Inbox Messages
 
 Inbound email/SMS/MMS records are source records in `messages` with
@@ -221,8 +237,8 @@ owner review. Owner replies can mark the sender as `newsletter` or `blocked`.
 Accepted newsletters create markdown knowledge records under
 `/newsletters/YYYY-MM-DD/*.md`; they enqueue normal RAG indexing but do not
 create immediate owner notifications. A separate scheduled newsletter interest
-check may later decide to queue a short budgeted conversational owner message or
-stay quiet and record rationale.
+check may later run isolated public research for a high-interest item and queue
+only the sanitized cited result to MMS, or stay quiet and record an observation.
 
 Sender trust rows are explicit user-owned classifications for known addresses.
 They can be created, updated, listed, and deleted through the API and operations

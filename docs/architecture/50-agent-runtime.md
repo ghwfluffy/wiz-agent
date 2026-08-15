@@ -50,6 +50,15 @@ Implemented clients:
 This keeps real network calls out of tests and keeps OpenAI API details behind a
 small adapter.
 
+Public-web research uses a separate `OpenAIWebResearchClient` boundary rather
+than the normal assistant model route. It sends a minimized query to a fresh
+Responses API call whose only tool is hosted `web_search`. The research call
+has no assistant conversation, memory, app tools, credentials, or private
+integration context. A second no-tool model call classifies prompt-injection
+risk, and a third no-tool structured call rewrites the result into factual
+claims, stable entities, and validated source IDs. Raw page/search output is
+never returned to the main assistant model or persisted.
+
 OpenAI API credentials are secret config. Use `AGENT_OPENAI_API_KEY` in ignored
 secret env files or `AGENT_OPENAI_API_KEY_FILE` to read a mounted ignored secret
 file. `AGENT_OPENAI_BASE_URL` is non-secret configuration and defaults to
@@ -134,6 +143,7 @@ Current tool contracts:
 - `send_runtime_cpu_model`
 - `ask_owner_clarification`
 - `record_observation`
+- `web_research`
 - `integration_action`
 
 Cross-app API access is intentionally outside direct model control. The model
@@ -173,6 +183,36 @@ structured, non-secret failure result to the model. The model may correct the
 arguments, choose another allowed tool, or explain the failure to the owner.
 Every retry still consumes the same run's tool-call and runtime budgets. Runtime
 deadline exhaustion and tool-call budget exhaustion remain terminal guardrails.
+`web_research` is the deliberate exception: its sanitized result terminates the
+tool turn and is rendered directly by deterministic host code. It is never sent
+back through `previous_response_id`, which prevents web-derived text from
+reopening the assistant's broader tool set.
+
+## Isolated Web Research
+
+`web_research` accepts a bounded query, an optional prior research-session id,
+and optional exact `/newsletters/YYYY-MM-DD/*.md` provenance paths. Direct URLs
+must be public HTTP(S) destinations. Host validation rejects embedded
+credentials, unsafe ports, deployment-local hosts, private/reserved IP ranges,
+and hostnames whose DNS answers include non-public addresses. Tracking and
+credential-shaped query parameters are removed, and common secrets, email
+addresses, phone numbers, and local filesystem paths are redacted before the
+query leaves the service.
+
+Only the structured sanitized bundle is stored in `web_research_sessions`.
+Each user-scoped record contains the minimized query, validated sources,
+source-bound claims and entities, risk verdict, `external_web` taint, optional
+thread/message/task/outbound links, parent session, and expiry. Follow-up calls
+receive only that prior sanitized bundle, preserving useful context without
+reusing the research agent's hidden state or raw pages.
+
+Conversation prompts may include a bounded set of unexpired sanitized sessions
+linked to the current thread. External evidence never grants authority. When a
+thread contains research, host code exposes mutation tools only if the current
+authenticated owner message itself contains an explicit action command. A
+question-only follow-up receives read tools and normal response delivery. This
+host-derived action envelope is enforced in both model descriptors and the MCP
+session allowlist.
 
 The local in-process executor remains only as `LocalToolClient`, a
 compatibility wrapper for deterministic tests and emergency fallback. It is not
@@ -553,8 +593,8 @@ The model must not receive secrets or raw credential references.
 Untrusted inbound messages and newsletters must be treated as data, not
 instructions. Only owner-classified inbound messages can drive agent actions.
 Trusted newsletter and trusted third-party messages may be ingested into
-long-term knowledge, but they must not directly trigger replies, goal updates,
-or cross-app actions.
+long-term knowledge, but inbound delivery must not directly trigger replies,
+goal updates, or cross-app actions.
 
 The worker reconciles every signed-in user when a model client is configured so
 recurring scheduler tasks are created even before that user has due work,
@@ -564,7 +604,14 @@ reviews ingested newsletter knowledge, newsletter preferences, communication
 preferences, recent owner response timing, pending approvals, and recent bot
 activity evidence before deciding whether now is a good time to mention one or
 two genuinely interesting discoveries. This is not a rigid digest; staying
-quiet and recording the rationale is a successful outcome. A three-hour
+quiet and recording the rationale is a successful outcome. For a selected
+discovery, the scheduled run has only `web_research` and `record_observation`.
+The isolated researcher may follow public newsletter links and search for
+corroborating detail. After sanitization, host code creates a conversation
+thread and queues the cited answer directly to the configured MMS gateway as a
+normal pending outbox record; no web approval is created. Unsafe research stays
+quiet. Owner replies reuse the linked sanitized research session, so follow-up
+questions feel like the same assistant conversation. A three-hour
 autonomous wake task reviews memory, active tasks, and schedule rationale so the
 agent can decide whether to act or adjust future work timing through controlled
 tools. A weekly memory quality review inspects durable memory and writes
@@ -605,5 +652,6 @@ worker tick or status update is retried.
 Production may route language generation through an internal OpenAI-compatible model gateway using
 `AGENT_MODEL_BASE_URL` and `AGENT_MODEL_API_KEY_FILE`. These settings are deliberately separate
 from `AGENT_OPENAI_BASE_URL` and `AGENT_OPENAI_API_KEY_FILE`, which remain responsible for audio
-transcription and other auxiliary OpenAI API workloads. Tool results are returned to the Responses
-API with `previous_response_id`, allowing the model to produce a context-aware final answer.
+transcription, embeddings, and isolated hosted web research. Ordinary tool results are returned to
+the Responses API with `previous_response_id`, allowing the model to produce a context-aware final
+answer; externally tainted `web_research` results are terminalized instead.

@@ -40,6 +40,22 @@ Production settings fail closed when:
 - the owner email list explicitly contains `dev@example.test`;
 - a Goals, My Notes, Budget, or Apartment Gate integration URL is configured without
   `AGENT_INTEGRATION_TOKEN_SECRET`.
+- `AGENT_WEB_RESEARCH_ENABLED=true` without an auxiliary
+  `AGENT_OPENAI_API_KEY`/`AGENT_OPENAI_API_KEY_FILE` credential.
+
+## Web Research Settings
+
+Web research is disabled by default. `AGENT_WEB_RESEARCH_ENABLED` turns on the
+isolated hosted-search tool. `AGENT_WEB_RESEARCH_MODEL` and
+`AGENT_WEB_RESEARCH_SANITIZER_MODEL` select the researcher and no-tool safety
+models independently of the main model gateway. `AGENT_WEB_RESEARCH_SEARCH_CONTEXT_SIZE`
+is `low`, `medium`, or `high`; production uses `medium`.
+
+The host also bounds source count, query/output size, context retention, and
+provider time with `AGENT_WEB_RESEARCH_MAX_SOURCES`,
+`AGENT_WEB_RESEARCH_MAX_QUERY_CHARS`, `AGENT_WEB_RESEARCH_MAX_OUTPUT_CHARS`,
+`AGENT_WEB_RESEARCH_RETENTION_DAYS`, and `AGENT_WEB_RESEARCH_TIMEOUT_SEC`.
+These are deployment safety limits, not model-controlled preferences.
 
 ## Admin AI Config
 

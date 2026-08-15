@@ -1070,9 +1070,13 @@ describe("scheduler and safe side effects", () => {
       ok: false,
       reason: "unsupported_protocol"
     });
-    await expect(validateSafeHttpUrl("http://127.0.0.1:8000/admin")).resolves.toEqual({
+    await expect(validateSafeHttpUrl("http://127.0.0.1/admin")).resolves.toEqual({
       ok: false,
       reason: "private_ip"
+    });
+    await expect(validateSafeHttpUrl("https://example.com:8000/admin")).resolves.toEqual({
+      ok: false,
+      reason: "unsafe_port"
     });
   });
 

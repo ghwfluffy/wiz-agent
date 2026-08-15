@@ -335,6 +335,25 @@ CREATE TABLE IF NOT EXISTS article_snapshots (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS web_research_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  parent_session_id TEXT REFERENCES web_research_sessions(id) ON DELETE SET NULL,
+  conversation_thread_id TEXT REFERENCES conversation_threads(id) ON DELETE SET NULL,
+  source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  source_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  outbound_message_id TEXT REFERENCES outbound_messages(id) ON DELETE SET NULL,
+  query TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  source_markdown_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  bundle_json JSONB NOT NULL,
+  risk_level TEXT NOT NULL,
+  taint TEXT NOT NULL DEFAULT 'external_web',
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS agent_runs (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -420,4 +439,9 @@ CREATE INDEX IF NOT EXISTS idx_markdown_documents_user_path ON markdown_document
 CREATE INDEX IF NOT EXISTS idx_markdown_sections_document_version ON markdown_sections(document_id, document_version);
 CREATE INDEX IF NOT EXISTS idx_rag_index_jobs_status_available ON rag_index_jobs(status, available_at, created_at);
 CREATE INDEX IF NOT EXISTS idx_agent_mcp_sessions_token ON agent_mcp_sessions(token_hash) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_web_research_sessions_user_created
+  ON web_research_sessions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_research_sessions_thread_created
+  ON web_research_sessions(user_id, conversation_thread_id, created_at DESC)
+  WHERE conversation_thread_id IS NOT NULL;
 `;

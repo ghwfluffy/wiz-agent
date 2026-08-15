@@ -8,6 +8,7 @@ import { executeToolCall, type ToolExecutionResult } from "../tools/toolExecutor
 import { agentToolNames } from "../tools/registry.js";
 import { GuardrailExceededError } from "../security/safetyPolicy.js";
 import { validateToolArguments } from "../tools/validator.js";
+import type { WebResearchClient } from "../research/openAiWebResearchClient.js";
 
 export type AgentToolClientExecuteInput = {
   context: RequestContext;
@@ -18,9 +19,11 @@ export type AgentToolClientExecuteInput = {
   args: Record<string, unknown>;
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
+  webResearchClient?: WebResearchClient;
   fetchImpl?: typeof fetch;
+  allowedTools?: readonly ToolName[];
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  replyToMessage?: Pick<InboundMessageRecord, "id" | "fromAddr" | "source" | "subject" | "conversationThreadId">;
   signal?: AbortSignal;
   now?: Date;
 };
@@ -32,6 +35,9 @@ export type AgentToolClient = {
 export class LocalToolClient implements AgentToolClient {
   async execute(input: AgentToolClientExecuteInput): Promise<ToolExecutionResult> {
     throwIfAborted(input.signal);
+    if (input.allowedTools && !input.allowedTools.includes(input.toolName)) {
+      throw new Error(`Tool ${input.toolName} is not allowed for this agent run.`);
+    }
     const validated = validateToolArguments(input.toolName, input.args);
     if (!validated.ok) {
       throw new Error(`Tool arguments failed validation: ${validated.validationErrors.join("; ")}`);
@@ -45,7 +51,9 @@ export class LocalToolClient implements AgentToolClient {
       args: validated.arguments,
       settings: input.settings,
       integrationTokenProvider: input.integrationTokenProvider,
+      webResearchClient: input.webResearchClient,
       fetchImpl: input.fetchImpl,
+      signal: input.signal,
       ownerInitiated: input.ownerInitiated,
       replyToMessage: input.replyToMessage,
       now: input.now
@@ -64,7 +72,7 @@ export class McpToolClient implements AgentToolClient {
     const session = await input.store.createAgentMcpSession(input.context, {
       runId: input.runId,
       ttlSeconds: 120,
-      allowedTools: agentToolNames()
+      allowedTools: [...(input.allowedTools ?? agentToolNames())]
     });
     const response = await this.request(input, session.token);
     const body = await response.json().catch(() => ({})) as Record<string, unknown>;
@@ -113,6 +121,7 @@ export class McpToolClient implements AgentToolClient {
       store: input.store,
       taskId: input.taskId ?? null,
       integrationTokenProvider: input.integrationTokenProvider,
+      webResearchClient: input.webResearchClient,
       fetchImpl: input.fetchImpl,
       ownerInitiated: input.ownerInitiated,
       replyToMessage: input.replyToMessage,

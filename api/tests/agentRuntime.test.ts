@@ -196,7 +196,7 @@ describe("app capability registry", () => {
     const apps = listAppCapabilities();
     const context = buildCapabilityContext();
 
-    expect(apps.map((app) => app.id)).toEqual(["goals", "notes", "budget", "federated_services", "android_client", "apartment_gate", "model_gateway", "omni_dev"]);
+    expect(apps.map((app) => app.id)).toEqual(["goals", "notes", "budget", "federated_services", "android_client", "apartment_gate", "model_gateway", "web_research", "omni_dev"]);
     expect(listIntegrationActions().map((action) => action.id).sort()).toEqual([...IntegrationActionIds].sort());
     expect(apps.find((app) => app.id === "federated_services")?.actions).toEqual([]);
     expect(apps.find((app) => app.id === "android_client")?.actions).toEqual([]);
@@ -212,6 +212,7 @@ describe("app capability registry", () => {
     expect(context).toContain("budget.get_net_worth_forecast");
     expect(context).toContain("direct owner command only");
     expect(context).toContain("Private development control plane");
+    expect(context).toContain("Isolated Web Research");
     expect(getIntegrationAction("budget.update_account_value")).toMatchObject({
       app: "budget",
       access: "write",

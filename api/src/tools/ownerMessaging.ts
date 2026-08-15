@@ -118,6 +118,8 @@ export async function resolveOwnerMessageDestination(options: {
   context: RequestContext;
   store: AgentStore;
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  preferredChannel?: "email" | "sms" | "mms";
+  requirePreferredChannel?: boolean;
 }): Promise<OwnerMessageDestination | undefined> {
   const fromAddr = options.replyToMessage?.fromAddr?.trim();
   if (fromAddr && fromAddr.includes("@")) {
@@ -132,17 +134,22 @@ export async function resolveOwnerMessageDestination(options: {
   if (ownerContact?.status !== "enabled") {
     return undefined;
   }
-  const smsGateway = configString(ownerContact.config, "sms_gateway");
-  if (smsGateway) {
-    return { channel: "sms", toAddr: smsGateway, source: "owner-contact" };
+  const destinations: Record<"email" | "sms" | "mms", string | undefined> = {
+    email: configString(ownerContact.config, "email"),
+    sms: configString(ownerContact.config, "sms_gateway"),
+    mms: configString(ownerContact.config, "mms_gateway")
+  };
+  const preferred = options.preferredChannel;
+  if (preferred && destinations[preferred]) {
+    return { channel: preferred, toAddr: destinations[preferred], source: "owner-contact" };
   }
-  const mmsGateway = configString(ownerContact.config, "mms_gateway");
-  if (mmsGateway) {
-    return { channel: "mms", toAddr: mmsGateway, source: "owner-contact" };
+  if (preferred && options.requirePreferredChannel) {
+    return undefined;
   }
-  const email = configString(ownerContact.config, "email");
-  if (email) {
-    return { channel: "email", toAddr: email, source: "owner-contact" };
+  for (const channel of ["sms", "mms", "email"] as const) {
+    if (destinations[channel]) {
+      return { channel, toAddr: destinations[channel], source: "owner-contact" };
+    }
   }
   return undefined;
 }
@@ -157,6 +164,8 @@ export async function queueOwnerVisibleMessage(options: {
   subject?: string | null;
   body: string;
   conversationThreadId?: string | null;
+  preferredChannel?: "email" | "sms" | "mms";
+  requirePreferredChannel?: boolean;
 }): Promise<{
   message?: OutboundMessageRecord;
   destination?: OwnerMessageDestination;

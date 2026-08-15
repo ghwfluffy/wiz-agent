@@ -58,8 +58,9 @@ cross-app write proposals, self-review contact, and memory-review contact
 create approval records instead of executing immediately. Direct owner commands
 from web chat, mobile voice, or owner-classified inbound messages execute
 through scoped app tokens without an extra approval hop. Newsletter interest
-checks may send short, budgeted owner messages when the material is genuinely
-useful; otherwise they record rationale and stay quiet. The owner can approve,
+checks may research genuinely useful material and send only the sanitized cited
+result through the owner's MMS chain; otherwise they record an observation and
+stay quiet. This path does not create an approval. The owner can approve,
 reject, edit outbound text, or bulk reject stale approvals from the UI.
 Owner-classified SMS/email replies of `YES`, `NO`, `EDIT <text>`, `LATER`, or
 `DETAILS` are parsed by host code against the most recent pending approval; the
@@ -107,6 +108,12 @@ API. Real OpenAI wiring must remain behind `AgentModelClient`. To run real
 model calls locally, set `AGENT_OPENAI_API_KEY` in your ignored local env file
 or point `AGENT_OPENAI_API_KEY_FILE` at an ignored file. `AGENT_OPENAI_BASE_URL`
 defaults to `https://api.openai.com/v1`.
+
+Web-research tests inject `WebResearchClient` or a mocked fetch implementation.
+They verify the isolated search/detector/sanitizer calls and must not contact the
+live web or OpenAI. For a manual live check, explicitly set
+`AGENT_WEB_RESEARCH_ENABLED=true`; the feature uses the auxiliary OpenAI key,
+not the internal no-network model gateway key.
 
 Authenticated owner prompts can be sent to the same decision loop used for
 owner-classified SMS/MMS/email:
@@ -227,9 +234,11 @@ prompt with active tasks, `/assistant/schedule.md`,
 `/tasks/schedule-rationale.md`, `/assistant/notification-policy.md`, recent
 owner messages, and recent newsletter knowledge. Schedule-changing tools require
 rationale and write task events; failed recurring wake runs still create the
-next wake. Newsletter interest messages are sent directly through the outbound
-queue when they fit the notification policy and daily owner-visible budget; the
-daily check should not create approval backlog for routine useful updates.
+next wake. When newsletter material fits the notification policy, the daily task
+may run one isolated public-web research call with exact newsletter provenance
+paths. The host sends only the sanitized cited result directly through the
+configured MMS gateway and outbound budget; the daily check does not create a
+web approval backlog. Quiet decisions use `record_observation`.
 Inbound task continuations are requeued as pending worker work after the owner
 message run completes. Approval-gated autonomous actions send their approval
 notice through the configured owner SMS/MMS or email connector, where owner

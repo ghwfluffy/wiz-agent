@@ -20,6 +20,9 @@ describe("settings", () => {
     expect(settings.agentMaxOwnerVisibleOutboundMessagesPerUserPerDay).toBe(10);
     expect(settings.agentOutboundMessagesPerWorkerTick).toBe(1);
     expect(settings.inboundMaxUntrustedReviewNotificationsPerSenderPerDay).toBe(5);
+    expect(settings.agentWebResearchEnabled).toBe(false);
+    expect(settings.agentWebResearchSearchContextSize).toBe("medium");
+    expect(settings.agentWebResearchRetentionDays).toBe(30);
   });
 
   it("loads runaway guardrail overrides", () => {
@@ -76,6 +79,8 @@ describe("settings", () => {
     expect(() => loadSettings({ AGENT_OWNER_EMAILS: "not-an-email" })).toThrow();
     expect(() => loadSettings({ PUBLIC_URL: "https://example.test/agent" })).toThrow();
     expect(() => loadSettings({ SESSION_COOKIE_PATH: "/agent?debug=true" })).toThrow(/Base paths/);
+    expect(() => loadSettings({ AGENT_WEB_RESEARCH_SEARCH_CONTEXT_SIZE: "unbounded" })).toThrow();
+    expect(() => loadSettings({ AGENT_WEB_RESEARCH_MAX_SOURCES: "0" })).toThrow();
   });
 
   it("fails closed for unsafe production auth and deployment settings", () => {
@@ -140,6 +145,18 @@ describe("settings", () => {
     });
 
     expect(settings.agentOwnerEmails).toEqual([]);
+  });
+
+  it("requires an auxiliary OpenAI credential when production web research is enabled", () => {
+    expect(() => loadSettings({
+      APP_ENV: "production",
+      AUTH_MODE: "oauth",
+      POSTGRES_PASSWORD: "not-the-development-default",
+      PUBLIC_URL: "https://agent.example.test",
+      OAUTH_SERVER_BASE_URL: "http://auth-api:8000",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-integration-secret",
+      AGENT_WEB_RESEARCH_ENABLED: "true"
+    })).toThrow(/AGENT_OPENAI_API_KEY/);
   });
 
   it("loads the OpenAI API key from a configured file", () => {

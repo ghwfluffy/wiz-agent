@@ -11,7 +11,9 @@ import {
   CONVERSATION_THREADING_MIGRATION_ID,
   CONVERSATION_THREADING_SQL,
   OUTBOUND_CONVERSATION_THREAD_MIGRATION_ID,
-  OUTBOUND_CONVERSATION_THREAD_SQL
+  OUTBOUND_CONVERSATION_THREAD_SQL,
+  WEB_RESEARCH_SESSIONS_MIGRATION_ID,
+  WEB_RESEARCH_SESSIONS_SQL
 } from "../src/db/migrations.js";
 import { INITIAL_SCHEMA_SQL } from "../src/db/schema.js";
 
@@ -26,6 +28,7 @@ describe("initial schema", () => {
       "connector_secret_refs",
       "conversations",
       "conversation_threads",
+      "web_research_sessions",
       "messages",
       "tasks",
       "task_events",
@@ -75,6 +78,8 @@ describe("initial schema", () => {
     expect(INITIAL_SCHEMA_SQL).toContain("ADD COLUMN IF NOT EXISTS execution_status TEXT");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_conversation_threads_user_status_updated");
     expect(INITIAL_SCHEMA_SQL).toContain("conversation_thread_id TEXT REFERENCES conversation_threads(id)");
+    expect(INITIAL_SCHEMA_SQL).toContain("bundle_json JSONB NOT NULL");
+    expect(INITIAL_SCHEMA_SQL).toContain("idx_web_research_sessions_thread_created");
   });
 
   it("defines the tenant-collapse migration", () => {
@@ -116,5 +121,12 @@ describe("initial schema", () => {
     expect(OUTBOUND_CONVERSATION_THREAD_MIGRATION_ID).toBe("0010_outbound_conversation_thread");
     expect(OUTBOUND_CONVERSATION_THREAD_SQL).toContain("ADD COLUMN IF NOT EXISTS conversation_thread_id TEXT");
     expect(OUTBOUND_CONVERSATION_THREAD_SQL).toContain("idx_outbound_messages_conversation_thread");
+  });
+
+  it("defines durable externally-tainted web research sessions", () => {
+    expect(WEB_RESEARCH_SESSIONS_MIGRATION_ID).toBe("0011_web_research_sessions");
+    expect(WEB_RESEARCH_SESSIONS_SQL).toContain("CREATE TABLE IF NOT EXISTS web_research_sessions");
+    expect(WEB_RESEARCH_SESSIONS_SQL).toContain("taint TEXT NOT NULL DEFAULT 'external_web'");
+    expect(WEB_RESEARCH_SESSIONS_SQL).toContain("idx_web_research_sessions_thread_created");
   });
 });

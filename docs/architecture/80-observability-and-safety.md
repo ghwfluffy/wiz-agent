@@ -200,6 +200,13 @@ user-scoped memory/list/outcome/self-review context and may write curation
 findings or perform safe list cleanup through validated tools, but they must not
 silently delete memory or contact the owner solely because the review ran.
 
+Web research records `web_research.completed` and `web_research.linked` audit
+events with non-secret counts, risk/status, taint, expiry, and linkage ids. Raw
+page text, provider answers, private queries before filtering, API keys, and
+prompt-injection excerpts must not enter audit details, tool arguments, task
+events, logs, or decision memory. Failed privacy/network/schema/source checks
+record only bounded host-owned failure reasons.
+
 Runaway guardrails are safety limits for accidental loops and provider abuse.
 They fail closed before side effects, record non-secret counts and limits in
 audit details, and show up in the Jobs/Workers status surface. They are not

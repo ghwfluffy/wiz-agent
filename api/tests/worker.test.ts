@@ -11,6 +11,30 @@ import {
   scheduledOwnerMessagePrompt
 } from "../src/tools/ownerMessaging.js";
 import { isWorkerEntrypoint, workerTick } from "../src/worker.js";
+import type { WebResearchClient } from "../src/research/openAiWebResearchClient.js";
+
+function stubWebResearch(answer: string): WebResearchClient {
+  return {
+    research: async () => ({
+      riskLevel: "clean",
+      bundle: {
+        status: "ok",
+        answer,
+        claims: [{ id: "c1", text: answer, sourceIds: ["source-original"] }],
+        entities: [],
+        sources: [{
+          id: "source-original",
+          url: "https://1.1.1.1/newsletter-story",
+          title: "Provider-supplied title",
+          publishedAt: null
+        }],
+        warnings: [],
+        taint: "external_web",
+        searchedAt: "2026-06-16T17:00:00.000Z"
+      }
+    })
+  };
+}
 
 describe("worker loop", () => {
   it("detects the worker entrypoint when node receives a relative script path", () => {
@@ -504,7 +528,9 @@ describe("worker loop", () => {
     const settings = loadSettings({
       APP_ENV: "test",
       AUTH_MODE: "standalone",
-      AGENT_OUTBOUND_ENABLED: "true"
+      AGENT_OUTBOUND_ENABLED: "true",
+      AGENT_OPENAI_API_KEY: "test-key",
+      AGENT_WEB_RESEARCH_ENABLED: "true"
     });
     const session = await store.createDevelopmentSession(settings, "worker-newsletter-contact-login");
     const context = {
@@ -517,7 +543,7 @@ describe("worker loop", () => {
     await store.upsertConnector(context, {
       kind: "owner-contact",
       status: "enabled",
-      config: { sms_gateway: "owner-sms@example.test" }
+      config: { mms_gateway: "owner-mms@example.test" }
     });
     await store.upsertConnector(context, {
       kind: "smtp",
@@ -538,7 +564,7 @@ describe("worker loop", () => {
       scheduleRationale: "Preference-aware daily newsletter interest check.",
       recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
     });
-    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-mms@example.test"] });
 
     const result = await daemonOnce({
       store,
@@ -547,14 +573,16 @@ describe("worker loop", () => {
       modelClient: new MockModelClient({
         tools: [
           {
-            toolName: "propose_outbound_message",
+            toolName: "web_research",
             arguments: {
-              intent: "reply",
-              body: "Cool newsletter find: one concrete thing worth checking later."
+              query: "Find current details about the concrete newsletter discovery.",
+              sourceNewsletterPaths: [],
+              rationale: "The item appears unusually relevant to the owner."
             }
           }
         ]
       }),
+      webResearchClient: stubWebResearch("Cool newsletter find: one concrete thing worth checking later."),
       mailTransport: { sendMail },
       now: new Date("2026-06-16T17:00:00.000Z")
     });
@@ -566,12 +594,14 @@ describe("worker loop", () => {
       outboundSent: 1
     });
     expect(sendMail).toHaveBeenCalledTimes(1);
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ to: "owner-mms@example.test" }));
     await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
     await expect(store.listOutboundMessages(context)).resolves.toEqual([
       expect.objectContaining({
         status: "sent",
         approvalId: null,
-        bodyText: "Cool newsletter find: one concrete thing worth checking later."
+        channel: "mms",
+        bodyText: expect.stringContaining("Cool newsletter find: one concrete thing worth checking later.")
       })
     ]);
   });
@@ -618,10 +648,10 @@ describe("worker loop", () => {
       modelClient: new MockModelClient({
         tools: [
           {
-            toolName: "record_schedule_rationale",
+            toolName: "record_observation",
             arguments: {
-              taskId: legacyTask.id,
-              rationale: "Stayed quiet and switch future checks to conversational interest timing."
+              summary: "Stayed quiet and switch future checks to conversational interest timing.",
+              source: "newsletter_interest_check"
             }
           }
         ]
@@ -688,7 +718,7 @@ describe("worker loop", () => {
     });
 
     expect(prompt).toContain("This is not a daily digest");
-    expect(prompt).toContain("Use get_recent_bot_activity");
+    expect(prompt).toContain("host prompt includes current contact cadence");
     expect(prompt).toContain("/assistant/preferences/newsletters.md");
     expect(prompt).toContain("Communication preferences:");
     expect(prompt).toContain("Newsletter preferences:");
@@ -767,13 +797,10 @@ describe("worker loop", () => {
       modelClient: new MockModelClient({
         tools: [
           {
-            toolName: "record_schedule_rationale",
+            toolName: "record_observation",
             arguments: {
-              taskId: task.id,
-              rationale: "Stayed quiet: recent newsletter material was routine and an approval was already pending.",
-              sourceMemoryPath: "/assistant/newsletter-interest/2026-06.md",
-              recurrencePolicy: "check again tomorrow unless owner preference changes",
-              nextReviewAt: "2026-06-14T17:00:00.000Z"
+              summary: "Stayed quiet: recent newsletter material was routine and an approval was already pending.",
+              source: "newsletter_interest_check"
             }
           }
         ]
@@ -784,20 +811,19 @@ describe("worker loop", () => {
     expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1, outboundAttempted: 0 });
     await expect(store.getTask(context, task.id)).resolves.toMatchObject({
       status: "completed",
-      scheduleRationale: "Stayed quiet: recent newsletter material was routine and an approval was already pending."
+      scheduleRationale: "Test quiet newsletter check."
     });
     await expect(store.listOutboundMessages(context)).resolves.toEqual([]);
     await expect(store.listTaskEvents(context, task.id)).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ eventType: "task.schedule_rationale_recorded" }),
       expect.objectContaining({ eventType: "scheduled_task.outcome" })
     ]));
     const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
     expect(ledger).toMatchObject({
-      markdown: expect.stringContaining("completed scheduled task with action")
+      markdown: expect.stringContaining("completed scheduled task without owner-visible action")
     });
     expect(ledger?.markdown).toContain(`taskId: ${task.id}`);
     expect(ledger?.markdown).toContain("Stayed quiet: recent newsletter material was routine");
-    expect(ledger?.markdown).toContain("Owner-visible side effect status: tool_or_local_side_effect_recorded");
+    expect(ledger?.markdown).toContain("Owner-visible side effect status: none");
     expect((await store.listTasks(context)).filter((entry) =>
       entry.title === "Newsletter interest check" &&
       entry.status === "pending" &&
@@ -810,7 +836,9 @@ describe("worker loop", () => {
     const settings = loadSettings({
       APP_ENV: "test",
       AUTH_MODE: "standalone",
-      AGENT_OUTBOUND_ENABLED: "true"
+      AGENT_OUTBOUND_ENABLED: "true",
+      AGENT_OPENAI_API_KEY: "test-key",
+      AGENT_WEB_RESEARCH_ENABLED: "true"
     });
     const session = await store.createDevelopmentSession(settings, "worker-newsletter-propose-login");
     const context = {
@@ -824,7 +852,7 @@ describe("worker loop", () => {
       kind: "owner-contact",
       status: "enabled",
       config: {
-        sms_gateway: "owner-sms@example.test"
+        mms_gateway: "owner-mms@example.test"
       }
     });
     await store.upsertConnector(context, {
@@ -851,7 +879,7 @@ describe("worker loop", () => {
       recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
     });
 
-    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-mms@example.test"] });
     const result = await daemonOnce({
       store,
       context,
@@ -859,14 +887,16 @@ describe("worker loop", () => {
       modelClient: new MockModelClient({
         tools: [
           {
-            toolName: "propose_outbound_message",
+            toolName: "web_research",
             arguments: {
-              intent: "reply",
-              body: "One newsletter thing worth flagging: Agent Weekly had a useful approval pattern for keeping runtime actions gated. Might be relevant to the assistant work."
+              query: "Research the approval pattern discussed in Agent Weekly and find current corroborating details.",
+              sourceNewsletterPaths: ["/newsletters/2026-06-13/agent-weekly.md"],
+              rationale: "The pattern is directly relevant to the owner's assistant work."
             }
           }
         ]
       }),
+      webResearchClient: stubWebResearch("One newsletter thing worth flagging: Agent Weekly described a useful approval pattern for keeping runtime actions gated."),
       mailTransport: { sendMail },
       now: new Date("2026-06-13T17:00:00.000Z")
     });
@@ -875,9 +905,9 @@ describe("worker loop", () => {
     expect(sendMail).toHaveBeenCalledTimes(1);
     await expect(store.listOutboundMessages(context)).resolves.toEqual([
       expect.objectContaining({
-        channel: "sms",
+        channel: "mms",
         status: "sent",
-        toAddr: "owner-sms@example.test",
+        toAddr: "owner-mms@example.test",
         approvalId: null,
         bodyText: expect.stringContaining("One newsletter thing worth flagging")
       })
@@ -885,23 +915,33 @@ describe("worker loop", () => {
     await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
     await expect(store.listToolCalls(context)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
-        toolName: "propose_outbound_message",
+        toolName: "web_research",
         status: "accepted",
         result: expect.objectContaining({
           execution: expect.objectContaining({
-            status: "pending",
-            approval_required: false
+            status: "ok",
+            taint: "external_web"
           })
         })
       })
     ]));
     const [outbound] = await store.listOutboundMessages(context);
-    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
-    expect(ledger).toMatchObject({
-      markdown: expect.stringContaining("queued owner-visible outbound message for delivery")
+    const [research] = await store.listWebResearchSessions(context, {
+      sourceTaskId: task.id,
+      includeExpired: true
     });
-    expect(ledger?.markdown).toContain(`outboundMessageId: ${outbound.id}`);
-    expect(ledger?.markdown).toContain("Owner-visible side effect status: delivery:pending");
+    expect(research).toMatchObject({
+      purpose: "newsletter_enrichment",
+      outboundMessageId: outbound.id,
+      conversationThreadId: outbound.conversationThreadId,
+      sourceMarkdownPaths: ["/newsletters/2026-06-13/agent-weekly.md"]
+    });
+    await expect(store.listTaskEvents(context, task.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventType: "newsletter_research.queued",
+        details: expect.objectContaining({ outbound_message_id: outbound.id, channel: "mms" })
+      })
+    ]));
   });
 
   it("builds a self-review prompt with activity and preference-memory guidance", async () => {

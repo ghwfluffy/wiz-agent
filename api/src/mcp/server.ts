@@ -16,6 +16,7 @@ import { isToolName } from "../tools/contracts.js";
 import { mcpToolDescriptors, ToolRegistry } from "../tools/registry.js";
 import { validateToolArguments } from "../tools/validator.js";
 import { GuardrailExceededError, guardrailResult } from "../security/safetyPolicy.js";
+import type { WebResearchClient } from "../research/openAiWebResearchClient.js";
 
 export type McpAppOptions = {
   settings?: Settings;
@@ -24,9 +25,10 @@ export type McpAppOptions = {
   embeddings?: EmbeddingClient;
   qdrant?: QdrantClient;
   integrationTokenProvider?: IntegrationTokenProvider;
+  webResearchClient?: WebResearchClient;
   fetchImpl?: typeof fetch;
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  replyToMessage?: Pick<InboundMessageRecord, "id" | "fromAddr" | "source" | "subject" | "conversationThreadId">;
   now?: Date;
 };
 
@@ -300,7 +302,9 @@ export function buildMcpApp(options: McpAppOptions = {}): Hono {
           taskId,
           settings,
           integrationTokenProvider: options.integrationTokenProvider,
+          webResearchClient: options.webResearchClient,
           fetchImpl: options.fetchImpl,
+          signal: context.req.raw.signal,
           ownerInitiated,
           replyToMessage: options.replyToMessage,
           now: options.now

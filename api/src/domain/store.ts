@@ -73,7 +73,11 @@ import type {
   TaskInput,
   TaskRecord,
   TaskUpdate,
-  ToolCallRecord
+  ToolCallRecord,
+  WebResearchBundle,
+  WebResearchSessionFilter,
+  WebResearchSessionInput,
+  WebResearchSessionRecord
 } from "./types.js";
 import { qdrantCollectionForUser } from "../rag/qdrant.js";
 
@@ -540,6 +544,36 @@ function conversationThreadFromRow(row: Record<string, unknown>): ConversationTh
     linkedTaskIds: stringArray(row.linked_task_ids_json),
     linkedMessageIds: stringArray(row.linked_message_ids_json),
     linkedMemoryPaths: stringArray(row.linked_memory_paths_json),
+    createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
+    updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
+  };
+}
+
+function webResearchSessionFromRow(row: Record<string, unknown>): WebResearchSessionRecord {
+  const bundle = (row.bundle_json as WebResearchBundle | null) ?? {
+    status: "unsafe",
+    answer: "Stored web research is unavailable.",
+    claims: [],
+    entities: [],
+    sources: [],
+    warnings: ["stored_bundle_missing"],
+    taint: "external_web",
+    searchedAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at)
+  };
+  return {
+    id: String(row.id),
+    userId: String(row.user_id),
+    parentSessionId: row.parent_session_id ? String(row.parent_session_id) : null,
+    conversationThreadId: row.conversation_thread_id ? String(row.conversation_thread_id) : null,
+    sourceMessageId: row.source_message_id ? String(row.source_message_id) : null,
+    sourceTaskId: row.source_task_id ? String(row.source_task_id) : null,
+    outboundMessageId: row.outbound_message_id ? String(row.outbound_message_id) : null,
+    query: String(row.query),
+    purpose: row.purpose as WebResearchSessionRecord["purpose"],
+    sourceMarkdownPaths: stringArray(row.source_markdown_paths_json),
+    bundle: { ...bundle, taint: "external_web" },
+    riskLevel: row.risk_level as WebResearchSessionRecord["riskLevel"],
+    expiresAt: row.expires_at instanceof Date ? row.expires_at.toISOString() : String(row.expires_at),
     createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
     updatedAt: row.updated_at instanceof Date ? row.updated_at.toISOString() : String(row.updated_at)
   };
@@ -1406,6 +1440,134 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
         await recordAudit(pool, context, "conversation_thread.link", "conversation_thread", threadId, links);
       }
       return updated;
+    },
+
+    async createWebResearchSession(context, input: WebResearchSessionInput): Promise<WebResearchSessionRecord> {
+      if (input.parentSessionId && !await this.getWebResearchSession(context, input.parentSessionId)) {
+        throw new Error("web_research_parent_not_found_for_user");
+      }
+      if (input.conversationThreadId && !await this.getConversationThread(context, input.conversationThreadId)) {
+        throw new Error("web_research_thread_not_found_for_user");
+      }
+      if (input.sourceMessageId && !await this.getInboundMessage(context, input.sourceMessageId)) {
+        throw new Error("web_research_message_not_found_for_user");
+      }
+      if (input.sourceTaskId && !await this.getTask(context, input.sourceTaskId)) {
+        throw new Error("web_research_task_not_found_for_user");
+      }
+      if (input.outboundMessageId) {
+        const outbound = (await this.listOutboundMessages(context)).find((message) => message.id === input.outboundMessageId);
+        if (!outbound) {
+          throw new Error("web_research_outbound_not_found_for_user");
+        }
+      }
+      const result = await pool.query(
+        `INSERT INTO web_research_sessions
+          (id, user_id, parent_session_id, conversation_thread_id, source_message_id, source_task_id,
+           outbound_message_id, query, purpose, source_markdown_paths_json, bundle_json, risk_level,
+           taint, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12, 'external_web', $13)
+         RETURNING *`,
+        [
+          randomUUID(),
+          context.userId,
+          input.parentSessionId ?? null,
+          input.conversationThreadId ?? null,
+          input.sourceMessageId ?? null,
+          input.sourceTaskId ?? null,
+          input.outboundMessageId ?? null,
+          input.query,
+          input.purpose,
+          JSON.stringify(uniqueStrings(input.sourceMarkdownPaths)),
+          JSON.stringify({ ...input.bundle, taint: "external_web" }),
+          input.riskLevel,
+          input.expiresAt
+        ]
+      );
+      const session = webResearchSessionFromRow(result.rows[0]);
+      await recordAudit(pool, context, "web_research.completed", "web_research_session", session.id, {
+        purpose: session.purpose,
+        status: session.bundle.status,
+        risk_level: session.riskLevel,
+        source_count: session.bundle.sources.length,
+        claim_count: session.bundle.claims.length,
+        parent_session_id: session.parentSessionId,
+        conversation_thread_id: session.conversationThreadId,
+        source_task_id: session.sourceTaskId,
+        expires_at: session.expiresAt,
+        taint: "external_web"
+      });
+      return session;
+    },
+
+    async getWebResearchSession(context, sessionId): Promise<WebResearchSessionRecord | undefined> {
+      const result = await pool.query(
+        `SELECT * FROM web_research_sessions WHERE id = $1 AND user_id = $2`,
+        [sessionId, context.userId]
+      );
+      return result.rows[0] ? webResearchSessionFromRow(result.rows[0]) : undefined;
+    },
+
+    async listWebResearchSessions(context, filter: WebResearchSessionFilter = {}): Promise<WebResearchSessionRecord[]> {
+      const conditions = ["user_id = $1"];
+      const values: unknown[] = [context.userId];
+      if (!filter.includeExpired) {
+        conditions.push("expires_at > now()");
+      }
+      if (filter.conversationThreadId) {
+        values.push(filter.conversationThreadId);
+        conditions.push(`conversation_thread_id = $${values.length}`);
+      }
+      if (filter.sourceTaskId) {
+        values.push(filter.sourceTaskId);
+        conditions.push(`source_task_id = $${values.length}`);
+      }
+      if (filter.createdSince) {
+        values.push(filter.createdSince);
+        conditions.push(`created_at >= $${values.length}`);
+      }
+      values.push(Math.max(1, Math.min(filter.limit ?? 10, 50)));
+      const result = await pool.query(
+        `SELECT * FROM web_research_sessions
+         WHERE ${conditions.join(" AND ")}
+         ORDER BY created_at DESC
+         LIMIT $${values.length}`,
+        values
+      );
+      return result.rows.map(webResearchSessionFromRow);
+    },
+
+    async linkWebResearchSession(context, sessionId, links): Promise<WebResearchSessionRecord | undefined> {
+      const existing = await this.getWebResearchSession(context, sessionId);
+      if (!existing) {
+        return undefined;
+      }
+      if (links.conversationThreadId && !await this.getConversationThread(context, links.conversationThreadId)) {
+        throw new Error("web_research_thread_not_found_for_user");
+      }
+      if (links.outboundMessageId) {
+        const outbound = (await this.listOutboundMessages(context)).find((message) => message.id === links.outboundMessageId);
+        if (!outbound) {
+          throw new Error("web_research_outbound_not_found_for_user");
+        }
+      }
+      const result = await pool.query(
+        `UPDATE web_research_sessions
+         SET conversation_thread_id = COALESCE($3, conversation_thread_id),
+             outbound_message_id = COALESCE($4, outbound_message_id),
+             updated_at = now()
+         WHERE id = $1 AND user_id = $2
+         RETURNING *`,
+        [sessionId, context.userId, links.conversationThreadId ?? null, links.outboundMessageId ?? null]
+      );
+      const session = result.rows[0] ? webResearchSessionFromRow(result.rows[0]) : undefined;
+      if (session) {
+        await recordAudit(pool, context, "web_research.linked", "web_research_session", session.id, {
+          conversation_thread_id: links.conversationThreadId ?? null,
+          outbound_message_id: links.outboundMessageId ?? null
+        });
+      }
+      return session;
     },
 
     async claimDueTasks(context: RequestContext, limit: number, now = new Date()): Promise<TaskRecord[]> {
@@ -2998,6 +3160,7 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
   const runs = new Map<string, AgentRunRecord>();
   const toolCalls = new Map<string, ToolCallRecord>();
   const conversationThreads = new Map<string, ConversationThreadRecord>();
+  const webResearchSessions = new Map<string, WebResearchSessionRecord>();
   const senderStatuses = new Map<string, SenderRecord>();
   const memoryDocuments = new Map<string, MemoryDocumentRecord>();
   const markdownDocuments = new Map<string, MarkdownDocumentRecord>();
@@ -3415,6 +3578,101 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       if (updated) {
         pushAudit(context, "conversation_thread.link", "conversation_thread", threadId, links);
       }
+      return updated;
+    },
+    async createWebResearchSession(context, input) {
+      if (input.parentSessionId && !await this.getWebResearchSession(context, input.parentSessionId)) {
+        throw new Error("web_research_parent_not_found_for_user");
+      }
+      if (input.conversationThreadId && !await this.getConversationThread(context, input.conversationThreadId)) {
+        throw new Error("web_research_thread_not_found_for_user");
+      }
+      if (input.sourceMessageId && !await this.getInboundMessage(context, input.sourceMessageId)) {
+        throw new Error("web_research_message_not_found_for_user");
+      }
+      if (input.sourceTaskId && !await this.getTask(context, input.sourceTaskId)) {
+        throw new Error("web_research_task_not_found_for_user");
+      }
+      if (input.outboundMessageId) {
+        const outbound = outboundMessages.get(input.outboundMessageId);
+        if (!outbound || outbound.userId !== context.userId) {
+          throw new Error("web_research_outbound_not_found_for_user");
+        }
+      }
+      const now = nowIso();
+      const session: WebResearchSessionRecord = {
+        id: randomUUID(),
+        userId: context.userId,
+        parentSessionId: input.parentSessionId ?? null,
+        conversationThreadId: input.conversationThreadId ?? null,
+        sourceMessageId: input.sourceMessageId ?? null,
+        sourceTaskId: input.sourceTaskId ?? null,
+        outboundMessageId: input.outboundMessageId ?? null,
+        query: input.query,
+        purpose: input.purpose,
+        sourceMarkdownPaths: uniqueStrings(input.sourceMarkdownPaths),
+        bundle: { ...input.bundle, taint: "external_web" },
+        riskLevel: input.riskLevel,
+        expiresAt: input.expiresAt,
+        createdAt: now,
+        updatedAt: now
+      };
+      webResearchSessions.set(session.id, session);
+      pushAudit(context, "web_research.completed", "web_research_session", session.id, {
+        purpose: session.purpose,
+        status: session.bundle.status,
+        risk_level: session.riskLevel,
+        source_count: session.bundle.sources.length,
+        claim_count: session.bundle.claims.length,
+        parent_session_id: session.parentSessionId,
+        conversation_thread_id: session.conversationThreadId,
+        source_task_id: session.sourceTaskId,
+        expires_at: session.expiresAt,
+        taint: "external_web"
+      });
+      return session;
+    },
+    async getWebResearchSession(context, sessionId) {
+      const session = webResearchSessions.get(sessionId);
+      return session && session.userId === context.userId ? session : undefined;
+    },
+    async listWebResearchSessions(context, filter = {}) {
+      const createdSince = filter.createdSince ? Date.parse(filter.createdSince) : undefined;
+      const now = Date.now();
+      return [...webResearchSessions.values()]
+        .filter((session) => session.userId === context.userId)
+        .filter((session) => filter.includeExpired || Date.parse(session.expiresAt) > now)
+        .filter((session) => !filter.conversationThreadId || session.conversationThreadId === filter.conversationThreadId)
+        .filter((session) => !filter.sourceTaskId || session.sourceTaskId === filter.sourceTaskId)
+        .filter((session) => createdSince === undefined || Date.parse(session.createdAt) >= createdSince)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, Math.max(1, Math.min(filter.limit ?? 10, 50)));
+    },
+    async linkWebResearchSession(context, sessionId, links) {
+      const existing = await this.getWebResearchSession(context, sessionId);
+      if (!existing) {
+        return undefined;
+      }
+      if (links.conversationThreadId && !await this.getConversationThread(context, links.conversationThreadId)) {
+        throw new Error("web_research_thread_not_found_for_user");
+      }
+      if (links.outboundMessageId) {
+        const outbound = outboundMessages.get(links.outboundMessageId);
+        if (!outbound || outbound.userId !== context.userId) {
+          throw new Error("web_research_outbound_not_found_for_user");
+        }
+      }
+      const updated: WebResearchSessionRecord = {
+        ...existing,
+        conversationThreadId: links.conversationThreadId ?? existing.conversationThreadId,
+        outboundMessageId: links.outboundMessageId ?? existing.outboundMessageId,
+        updatedAt: nowIso()
+      };
+      webResearchSessions.set(sessionId, updated);
+      pushAudit(context, "web_research.linked", "web_research_session", sessionId, {
+        conversation_thread_id: links.conversationThreadId ?? null,
+        outbound_message_id: links.outboundMessageId ?? null
+      });
       return updated;
     },
     async claimDueTasks(context: RequestContext, limit: number, now = new Date()): Promise<TaskRecord[]> {

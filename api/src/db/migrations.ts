@@ -7,6 +7,7 @@ export const APPROVAL_EXECUTION_MIGRATION_ID = "0007_approval_execution";
 export const CONVERSATION_THREADING_MIGRATION_ID = "0008_conversation_threading";
 export const SANITIZED_INBOUND_IMAGES_MIGRATION_ID = "0009_sanitized_inbound_images";
 export const OUTBOUND_CONVERSATION_THREAD_MIGRATION_ID = "0010_outbound_conversation_thread";
+export const WEB_RESEARCH_SESSIONS_MIGRATION_ID = "0011_web_research_sessions";
 
 const tenantOwnedTables = [
   "identities",
@@ -225,5 +226,32 @@ ALTER TABLE outbound_messages
 
 CREATE INDEX IF NOT EXISTS idx_outbound_messages_conversation_thread
   ON outbound_messages(user_id, conversation_thread_id, created_at)
+  WHERE conversation_thread_id IS NOT NULL;
+`;
+
+export const WEB_RESEARCH_SESSIONS_SQL = `
+CREATE TABLE IF NOT EXISTS web_research_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  parent_session_id TEXT REFERENCES web_research_sessions(id) ON DELETE SET NULL,
+  conversation_thread_id TEXT REFERENCES conversation_threads(id) ON DELETE SET NULL,
+  source_message_id TEXT REFERENCES messages(id) ON DELETE SET NULL,
+  source_task_id TEXT REFERENCES tasks(id) ON DELETE SET NULL,
+  outbound_message_id TEXT REFERENCES outbound_messages(id) ON DELETE SET NULL,
+  query TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  source_markdown_paths_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  bundle_json JSONB NOT NULL,
+  risk_level TEXT NOT NULL,
+  taint TEXT NOT NULL DEFAULT 'external_web',
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_web_research_sessions_user_created
+  ON web_research_sessions(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_web_research_sessions_thread_created
+  ON web_research_sessions(user_id, conversation_thread_id, created_at DESC)
   WHERE conversation_thread_id IS NOT NULL;
 `;

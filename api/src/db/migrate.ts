@@ -19,7 +19,9 @@ import {
   SANITIZED_INBOUND_IMAGES_MIGRATION_ID,
   SANITIZED_INBOUND_IMAGES_SQL,
   OUTBOUND_CONVERSATION_THREAD_MIGRATION_ID,
-  OUTBOUND_CONVERSATION_THREAD_SQL
+  OUTBOUND_CONVERSATION_THREAD_SQL,
+  WEB_RESEARCH_SESSIONS_MIGRATION_ID,
+  WEB_RESEARCH_SESSIONS_SQL
 } from "./migrations.js";
 
 export async function runMigrations(): Promise<void> {
@@ -228,6 +230,26 @@ export async function runMigrations(): Promise<void> {
         await client.query(OUTBOUND_CONVERSATION_THREAD_SQL);
         await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
           OUTBOUND_CONVERSATION_THREAD_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const webResearchSessionsApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      WEB_RESEARCH_SESSIONS_MIGRATION_ID
+    ]);
+    if (webResearchSessionsApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(WEB_RESEARCH_SESSIONS_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          WEB_RESEARCH_SESSIONS_MIGRATION_ID
         ]);
         await client.query("COMMIT");
       } catch (error) {

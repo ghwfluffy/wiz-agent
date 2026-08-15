@@ -179,6 +179,68 @@ export type ConversationThreadUpdate = {
   linkedMemoryPaths?: string[];
 };
 
+export type WebResearchStatus = "ok" | "partial" | "unsafe";
+
+export type WebResearchSource = {
+  id: string;
+  url: string;
+  title: string;
+  publishedAt: string | null;
+};
+
+export type WebResearchClaim = {
+  id: string;
+  text: string;
+  sourceIds: string[];
+};
+
+export type WebResearchEntity = {
+  id: string;
+  label: string;
+  description: string;
+  sourceIds: string[];
+};
+
+export type WebResearchBundle = {
+  status: WebResearchStatus;
+  answer: string;
+  claims: WebResearchClaim[];
+  entities: WebResearchEntity[];
+  sources: WebResearchSource[];
+  warnings: string[];
+  taint: "external_web";
+  searchedAt: string;
+};
+
+export type WebResearchSessionInput = {
+  parentSessionId?: string | null;
+  conversationThreadId?: string | null;
+  sourceMessageId?: string | null;
+  sourceTaskId?: string | null;
+  outboundMessageId?: string | null;
+  query: string;
+  purpose: "owner_question" | "follow_up" | "newsletter_enrichment";
+  sourceMarkdownPaths?: string[];
+  bundle: WebResearchBundle;
+  riskLevel: "clean" | "suspicious" | "unsafe";
+  expiresAt: string;
+};
+
+export type WebResearchSessionRecord = WebResearchSessionInput & {
+  id: string;
+  userId: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type WebResearchSessionFilter = {
+  conversationThreadId?: string;
+  sourceTaskId?: string;
+  createdSince?: string;
+  includeExpired?: boolean;
+  limit?: number;
+};
+
 export type ApprovalStatus = "pending" | "approved" | "rejected" | "expired";
 export type ApprovalExecutionStatus = "not_applicable" | "pending" | "running" | "succeeded" | "failed";
 
@@ -600,6 +662,23 @@ export type AgentStore = {
       memoryPaths?: string[];
     }
   ): Promise<ConversationThreadRecord | undefined>;
+  createWebResearchSession(
+    context: RequestContext,
+    input: WebResearchSessionInput
+  ): Promise<WebResearchSessionRecord>;
+  getWebResearchSession(
+    context: RequestContext,
+    sessionId: string
+  ): Promise<WebResearchSessionRecord | undefined>;
+  listWebResearchSessions(
+    context: RequestContext,
+    filter?: WebResearchSessionFilter
+  ): Promise<WebResearchSessionRecord[]>;
+  linkWebResearchSession(
+    context: RequestContext,
+    sessionId: string,
+    links: { conversationThreadId?: string | null; outboundMessageId?: string | null }
+  ): Promise<WebResearchSessionRecord | undefined>;
   claimDueTasks(context: RequestContext, limit: number, now?: Date): Promise<TaskRecord[]>;
   listAudit(context: RequestContext, includeAllUsers: boolean): Promise<AuditRecord[]>;
   recordAudit(

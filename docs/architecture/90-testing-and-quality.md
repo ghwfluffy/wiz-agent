@@ -104,6 +104,12 @@ Current tests cover:
   enqueueing.
 - recurring newsletter interest check and three-hour autonomous wake task
   scheduling with durable schedule rationale.
+- isolated web-search provider envelopes, no-tool injection detection and
+  sanitization, public-URL/DNS filtering, query redaction, source-ID validation,
+  terminalized results, durable follow-up sessions, and mutation-tool gating
+  based only on the current owner command.
+- newsletter research delivery through MMS without approval, including
+  research/thread/task/outbox linkage and quiet `record_observation` outcomes.
 - worker reconciliation for signed-in users without preexisting due work, stale
   claimed task failure with recurrence rescheduling, stale sending outbox
   failure without delivery retry, stale running approval execution failure, and

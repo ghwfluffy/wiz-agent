@@ -41,6 +41,10 @@ import {
   runtimeCpuOwnerMessage,
   scheduledOwnerMessagePrompt
 } from "./ownerMessaging.js";
+import type { WebResearchClient } from "../research/openAiWebResearchClient.js";
+import { conductWebResearch } from "../research/webResearchService.js";
+import { webResearchSessionToolResult } from "../research/webResearchSafety.js";
+import { isNewsletterInterestTask } from "../scheduler/autonomousTasks.js";
 
 export type ToolExecutionResult = {
   executed: boolean;
@@ -113,9 +117,11 @@ export async function executeToolCall(options: {
   args: Record<string, unknown>;
   settings?: Settings;
   integrationTokenProvider?: IntegrationTokenProvider;
+  webResearchClient?: WebResearchClient;
   fetchImpl?: typeof fetch;
+  signal?: AbortSignal;
   ownerInitiated?: boolean;
-  replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
+  replyToMessage?: Pick<InboundMessageRecord, "id" | "fromAddr" | "source" | "subject" | "conversationThreadId">;
   now?: Date;
 }): Promise<ToolExecutionResult> {
   const callReadIntegration = async (
@@ -295,6 +301,47 @@ export async function executeToolCall(options: {
   };
 
   switch (options.toolName) {
+    case "web_research": {
+      if (!options.settings) {
+        return {
+          executed: false,
+          sideEffect: "none",
+          result: { status: "unavailable", reason: "web_research_not_configured" }
+        };
+      }
+      const task = options.taskId ? await options.store.getTask(options.context, options.taskId) : undefined;
+      const newsletterTask = Boolean(task && isNewsletterInterestTask(task));
+      const priorResearchSessionId = typeof options.args.priorResearchSessionId === "string"
+        ? options.args.priorResearchSessionId
+        : undefined;
+      const session = await conductWebResearch({
+        context: options.context,
+        store: options.store,
+        settings: options.settings,
+        input: {
+          query: String(options.args.query),
+          priorResearchSessionId,
+          purpose: newsletterTask
+            ? "newsletter_enrichment"
+            : priorResearchSessionId ? "follow_up" : "owner_question",
+          conversationThreadId: options.replyToMessage?.conversationThreadId ?? null,
+          sourceMessageId: options.replyToMessage?.id ?? null,
+          sourceTaskId: options.taskId ?? null,
+          sourceMarkdownPaths: Array.isArray(options.args.sourceNewsletterPaths)
+            ? options.args.sourceNewsletterPaths.filter((path): path is string => typeof path === "string")
+            : []
+        },
+        client: options.webResearchClient,
+        fetchImpl: options.fetchImpl,
+        signal: options.signal,
+        now: options.now
+      });
+      return {
+        executed: true,
+        sideEffect: "local_persistence",
+        result: webResearchSessionToolResult(session)
+      };
+    }
     case "create_task": {
       const task = await options.store.createTask(options.context, {
         title: String(options.args.title),

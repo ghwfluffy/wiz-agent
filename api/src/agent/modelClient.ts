@@ -294,7 +294,9 @@ function toOpenAiTool(tool: unknown): Record<string, unknown> {
   return {
     type: "function",
     name: descriptor.name,
-    description: `Deterministic host tool: ${descriptor.name}`,
+    description: typeof descriptor.description === "string" && descriptor.description.trim()
+      ? descriptor.description
+      : `Deterministic host tool: ${descriptor.name}`,
     strict: false,
     parameters: descriptor.schema ?? { type: "object", additionalProperties: true }
   };

@@ -3,12 +3,41 @@ import { buildScheduledTaskPrompt } from "../src/scheduler/autonomousTasks.js";
 import { createAgentSimulation } from "./helpers/agentSimulation.js";
 
 describe("agent simulation harness", () => {
-  it("keeps newsletter ingestion knowledge-only until a scheduled interest check proposes one owner message", async () => {
+  it("keeps newsletter ingestion knowledge-only until a scheduled interest check researches and sends one MMS", async () => {
     const sim = await createAgentSimulation({
       loginLabel: "scenario-newsletter",
-      settings: { AGENT_OUTBOUND_ENABLED: "true" }
+      settings: {
+        AGENT_OUTBOUND_ENABLED: "true",
+        AGENT_WEB_RESEARCH_ENABLED: "true"
+      },
+      webResearchClient: {
+        async research(request) {
+          return {
+            riskLevel: "clean",
+            bundle: {
+              status: "ok",
+              answer: "The outage writeup traces the incident to an unsafe database failover and explains the recovery safeguards.",
+              claims: [{
+                id: "c1",
+                text: "The incident involved an unsafe database failover.",
+                sourceIds: ["s1"]
+              }],
+              entities: [],
+              sources: [{
+                id: "s1",
+                url: "https://1.1.1.1/database-outage",
+                title: "1.1.1.1",
+                publishedAt: null
+              }],
+              warnings: request.queryWarnings ?? [],
+              taint: "external_web",
+              searchedAt: (request.now ?? new Date()).toISOString()
+            }
+          };
+        }
+      }
     });
-    await sim.configureOwnerContact();
+    await sim.configureOwnerContact({ mms_gateway: "owner-mms@example.test" });
     await sim.store.upsertConnector(sim.ownerContext, {
       kind: "smtp",
       status: "enabled",
@@ -40,9 +69,10 @@ describe("agent simulation harness", () => {
     await sim.runWorkerTick();
     sim.advanceTime(5 * 60 * 60 * 1000);
     await sim.makeTaskDue("Newsletter interest check");
-    sim.model.stageToolCall("propose_outbound_message", {
-      intent: "reply",
-      body: "Infra Weekly had a useful outage writeup worth reading later."
+    sim.model.stageToolCall("web_research", {
+      query: "What caused the database outage and what safeguards did the recovery add?",
+      sourceNewsletterPaths: ["/newsletters/2026-06-13/infra-weekly.md"],
+      rationale: "The incident analysis is specific and likely useful to the owner."
     });
 
     const tick = await sim.runWorkerTick();
@@ -53,10 +83,18 @@ describe("agent simulation harness", () => {
       expect.objectContaining({
         status: "sent",
         approvalId: null,
+        channel: "mms",
         bodyText: expect.stringContaining("outage writeup")
       })
     ]);
     expect(snapshot.approvals).toEqual([]);
+    expect(await sim.store.listWebResearchSessions(sim.ownerContext, { includeExpired: true })).toEqual([
+      expect.objectContaining({
+        purpose: "newsletter_enrichment",
+        sourceMarkdownPaths: ["/newsletters/2026-06-13/infra-weekly.md"],
+        outboundMessageId: snapshot.outbound[0]?.id
+      })
+    ]);
   });
 
   it("remembers Desperado as a movie-night list item and later recalls it by Banderas", async () => {
