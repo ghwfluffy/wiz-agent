@@ -2155,7 +2155,7 @@ describe("agent task execution", () => {
     }, "owner");
     const modelClient = new MockModelClient({
       tools: [
-        { responseText: "I can't submit this to Omni Dev from the current tool-restricted context." },
+        { responseText: "I couldn’t submit the Omni Dev job in this response." },
         {
           toolName: "delegate_development_task",
           arguments: {
@@ -2199,13 +2199,13 @@ describe("agent task execution", () => {
     expect(result.conversationThreadId).not.toBe(priorThread.id);
     expect(runWithTools).toHaveBeenCalledTimes(2);
     expect(runWithTools.mock.calls[1]?.[0].prompt).toContain("Fresh trusted owner task context.");
-    expect(runWithTools.mock.calls[1]?.[0].prompt).not.toContain("I can't submit this");
+    expect(runWithTools.mock.calls[1]?.[0].prompt).not.toContain("I couldn’t submit");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     await expect(store.listOutboundMessages(context)).resolves.toEqual([]);
     await expect(store.listAudit(context, false)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
         action: "agent_context.trusted_handoff",
-        details: expect.objectContaining({ trigger: "restriction_refusal" })
+        details: expect.objectContaining({ trigger: "action_refusal" })
       })
     ]));
   });

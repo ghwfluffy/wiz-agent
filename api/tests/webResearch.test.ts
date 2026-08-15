@@ -258,6 +258,16 @@ describe("durable research sessions and action boundary", () => {
         responseText: TRUSTED_CONTEXT_HANDOFF_SIGNAL
       }
     })).toBeUndefined();
+    expect(trustedContextHandoffTrigger({
+      ownerCommand: "Tell OmniDev to fix the list controls.",
+      result: {
+        status: "completed",
+        runId: "run-restriction-refusal",
+        toolStatus: "none",
+        repaired: false,
+        responseText: "I can’t submit this from the current tool-restricted context."
+      }
+    })).toBe("restriction_refusal");
   });
 
   it("terminalizes sanitized web output without returning it to the main model", async () => {
