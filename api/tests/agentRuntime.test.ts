@@ -230,6 +230,10 @@ describe("app capability registry", () => {
       pathTemplate: "/jobs/:job_id/respond",
       approvalMode: "direct_owner_only"
     });
+    expect(getIntegrationAction("omni_dev.create_job")?.safety).toEqual(expect.arrayContaining([
+      expect.stringContaining("initial hints")
+    ]));
+    expect(getIntegrationAction("omni_dev.respond_to_job")?.bodySummary).toContain("sanitized images");
   });
 
   it("adds integration capability context and tool schemas to model requests", async () => {
@@ -451,6 +455,16 @@ describe("agent task execution", () => {
       status: 200,
       json: async () => ({ job: { id: jobId, status: "queued" } })
     });
+    vi.spyOn(store, "listSanitizedInboundImages").mockResolvedValue([{
+      messageId: inbound.id,
+      filename: "calendar.png",
+      contentType: "image/png",
+      byteSize: 3,
+      sha256: "a".repeat(64),
+      handling: "sanitized_image",
+      reason: "owner_image_sanitized_for_development",
+      dataBase64: Buffer.from("png").toString("base64")
+    }]);
     const result = await executeToolCall({
       context,
       store,
@@ -469,7 +483,14 @@ describe("agent task execution", () => {
     });
     expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(`https://omni.example.test/api/agent/v1/jobs/${jobId}/respond`);
     expect(JSON.parse(String((fetchImpl.mock.calls[0]?.[1] as RequestInit).body))).toEqual({
-      response: "Keep desktop unchanged; compact only the mobile layout."
+      response: "Keep desktop unchanged; compact only the mobile layout.",
+      attachments: [{
+        filename: "calendar.png",
+        contentType: "image/png",
+        byteSize: 3,
+        sha256: "a".repeat(64),
+        dataBase64: Buffer.from("png").toString("base64")
+      }]
     });
     expect(await store.getTask(context, waitingTask!.id)).toMatchObject({ status: "completed", ownerClarificationNeeded: false });
     expect(await store.getConversationThread(context, thread.id)).toMatchObject({ status: "active", unresolvedQuestion: null });

@@ -269,7 +269,7 @@ const omniDevActions: readonly IntegrationActionCapability[] = [
     risk: "high",
     method: "POST",
     pathTemplate: "/jobs",
-    bodySummary: "Signed owner objective, acceptance criteria, target components, and a bounded conversation-thread snapshot.",
+    bodySummary: "Signed owner objective, acceptance criteria, initial target-component hints, and a bounded conversation-thread snapshot.",
     purpose: "Queue an authorized GHWIZ code-improvement objective for the paired isolated desktop development runner.",
     whenToUse: [
       "The owner explicitly asks the assistant to change, fix, improve, test, or deploy the GHWIZ site.",
@@ -278,6 +278,7 @@ const omniDevActions: readonly IntegrationActionCapability[] = [
     safety: [
       "Only GHWIZ and its registered submodules are in scope.",
       "Target components must be exact allowlisted repository identifiers from the tool schema, such as apps/omni-dev or apps/codex-proxy, not product names or UI labels.",
+      "For direct owner commands, target components are initial hints: confidence preflight may resolve a different allowlisted component without another retargeting question. Assistant-originated suggestions retain strict approved scope.",
       "Direct owner commands may submit routine jobs; assistant-originated suggestions must use the existing approval path.",
       "Routine UI, dependency, compose, and authorization changes proceed without another confirmation.",
       "Only destructive operations and security boundaries such as secrets, database restore, deploy machinery, CI workflows, and runner policy require a separate explicit owner confirmation.",
@@ -341,7 +342,7 @@ const omniDevActions: readonly IntegrationActionCapability[] = [
     method: "POST",
     pathTemplate: "/jobs/:job_id/respond",
     pathParams: ["job_id"],
-    bodySummary: "The owner's natural-language answer to the current Omni Dev preflight question.",
+    bodySummary: "The owner's natural-language answer plus up to five host-selected sanitized images from the same conversation thread.",
     purpose: "Resume planning for an owner-owned development job after Omni Dev asks for one focused clarification.",
     whenToUse: [
       "The owner replies in the assistant conversation that contains an Omni Dev preflight question.",
@@ -350,6 +351,7 @@ const omniDevActions: readonly IntegrationActionCapability[] = [
     safety: [
       "Use only the exact job id embedded in the owner-visible waiting task for the current conversation.",
       "Forward the owner's answer faithfully; do not invent consent, scope, or product decisions.",
+      "Host code may attach sanitized owner images from the same conversation so visual context survives a planning follow-up; raw or outside-thread attachments are never forwarded.",
       "Do not create a replacement development job when this action can continue the existing one."
     ],
     responseUse: "Confirm naturally that the answer was passed to Omni Dev and that it will plan again before changing code.",
@@ -713,7 +715,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     authRequirement: "Requires a current-owner scoped integration token. The desktop independently verifies the server-signed intent and a host-owned repository policy.",
     modelGuidance: [
       "Use Omni Dev only for concrete GHWIZ development objectives, never as a general shell or arbitrary repository tool.",
-      "Provide explicit acceptance criteria and the narrowest exact repository component identifiers accepted by the tool schema; use root only for top-level orchestration changes and never send friendly UI labels as target components.",
+      "Provide explicit acceptance criteria and the narrowest plausible repository component identifiers accepted by the tool schema; use root only for top-level orchestration changes and never send friendly UI labels. For direct owner commands these are initial hints, and confidence preflight may correct them within the desktop allowlist.",
       "Omni Dev performs a disposable confidence preflight before implementation. If it asks a question, forward the owner's answer with respond_to_development_job so the existing job can plan again; do not create a replacement job.",
       "A queued job is asynchronous; use the status tool for follow-ups and distinguish queued, planning, awaiting_owner_input, running, validating, deploying, no_change, succeeded, failed, and rolled-back states.",
       "Routine owner-requested work does not require dashboard approval. Only destructive or security-boundary work pauses for an explicit owner confirmation, which can be supplied through the assistant or dashboard."

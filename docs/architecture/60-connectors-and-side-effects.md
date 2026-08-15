@@ -122,7 +122,10 @@ destination when available. The waiting-task prompt starts with
 `OMNI_DEV_OWNER_INPUT_V1`, allowing the model to route the owner's natural reply
 through `respond_to_development_job`. A successful response resolves the waiting
 task and reactivates the thread; it never creates a replacement development job
-or requires a dashboard approval.
+or requires a dashboard approval. Host code also forwards at most five sanitized
+owner images linked to that same conversation when it submits the answer, so a
+reattached visual reference becomes part of the re-signed job context without
+letting the model choose raw or outside-thread attachments.
 
 Owner messages can update durable memory through the controlled model tool/MCP
 path. The agent decides whether an owner message contains durable preferences,

@@ -183,7 +183,7 @@ export async function executeToolCall(options: {
           }))
       : [];
     const attachments = thread
-      ? (await options.store.listSanitizedInboundImages(options.context, thread.linkedMessageIds)).map((attachment) => ({
+      ? (await options.store.listSanitizedInboundImages(options.context, thread.linkedMessageIds)).slice(-5).map((attachment) => ({
           filename: attachment.filename ?? `${attachment.sha256}.png`,
           contentType: attachment.contentType,
           byteSize: attachment.byteSize,
@@ -1535,9 +1535,21 @@ export async function executeToolCall(options: {
       });
     case "respond_to_development_job": {
       const jobId = String(options.args.jobId);
+      let attachments: unknown[] | undefined;
+      const threadId = options.replyToMessage?.conversationThreadId;
+      if (threadId) {
+        try {
+          const refreshedContext = await developmentContext(threadId);
+          if (Array.isArray(refreshedContext.attachments) && refreshedContext.attachments.length > 0) {
+            attachments = refreshedContext.attachments;
+          }
+        } catch {
+          // A text answer must still resume the job if optional image lookup fails.
+        }
+      }
       const result = await executeOrQueueWriteIntegration("omni_dev.respond_to_job", {
         pathParams: { job_id: jobId },
-        body: { response: String(options.args.response) },
+        body: compactPayload({ response: String(options.args.response), attachments }),
         summary: "Pass the owner's answer to the waiting Omni Dev planning job."
       });
       if (!result.executed || result.result.action_id !== "omni_dev.respond_to_job") {
@@ -1558,7 +1570,6 @@ export async function executeToolCall(options: {
           omni_dev_job_id: jobId
         });
       }
-      const threadId = options.replyToMessage?.conversationThreadId;
       if (threadId) {
         await options.store.updateConversationThread(options.context, threadId, {
           status: "active",
