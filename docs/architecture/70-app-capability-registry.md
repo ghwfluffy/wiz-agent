@@ -76,6 +76,8 @@ id exactly once under the dedicated `notes.reorder_lists` scope.
 An item stays in the list where it was created. `notes.update_item` can edit its
 content, completion state, or position within that list, but its schema and
 executor do not accept a destination list and must not describe cross-list moves.
+Position updates use the current zero-based item order and the Notes API
+normalizes every item in that list back to contiguous positions.
 
 My Notes is the default for collections the owner expects to browse in the app.
 Markdown personal-list tools remain available for assistant-internal memory,

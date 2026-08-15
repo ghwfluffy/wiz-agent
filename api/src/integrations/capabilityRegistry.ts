@@ -385,11 +385,12 @@ const notesActions: readonly IntegrationActionCapability[] = [
     pathTemplate: "/items/:item_id",
     approvalMode: "direct_owner_only",
     pathParams: ["item_id"],
-    bodySummary: "One or more of title, details, completed, or position. An item's parent list is immutable.",
+    bodySummary: "One or more of title, details, completed, or a zero-based position within the current list. Position moves are normalized contiguously; an item's parent list is immutable.",
     purpose: "Edit, complete, reopen, or reorder one My Notes item within its existing list.",
     whenToUse: ["The owner clearly identifies an existing item and asks to change its content or state."],
     safety: [
       "List matching items first when the title is ambiguous.",
+      "Read the current list before a position move so the requested zero-based destination is valid.",
       "Items remain in the list where they were created; do not offer or attempt cross-list movement."
     ],
     responseUse: "Confirm the item and its new content, completion state, or position."
