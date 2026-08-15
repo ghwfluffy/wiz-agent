@@ -171,11 +171,18 @@ export const UpdateNoteListToolSchema = z.object({
   name: z.string().min(1).max(120).optional(),
   description: z.string().max(2000).nullable().optional(),
   color: NoteColorSchema.optional(),
-  position: z.number().int().min(0).optional(),
   userIntentSummary: z.string().min(1)
 }).refine(
-  (value) => value.name !== undefined || value.description !== undefined || value.color !== undefined || value.position !== undefined,
+  (value) => value.name !== undefined || value.description !== undefined || value.color !== undefined,
   { message: "At least one list update field is required." }
+);
+
+export const ReorderNoteListsToolSchema = z.object({
+  listIds: z.array(z.string().min(1).max(36)).min(1).max(100),
+  userIntentSummary: z.string().min(1)
+}).refine(
+  (value) => new Set(value.listIds).size === value.listIds.length,
+  { message: "Each list id must appear exactly once.", path: ["listIds"] }
 );
 
 export const DeleteNoteListToolSchema = z.object({
@@ -591,6 +598,7 @@ export const ToolContracts = {
   list_note_lists: ListNoteListsToolSchema,
   create_note_list: CreateNoteListToolSchema,
   update_note_list: UpdateNoteListToolSchema,
+  reorder_note_lists: ReorderNoteListsToolSchema,
   delete_note_list: DeleteNoteListToolSchema,
   list_note_items: ListNoteItemsToolSchema,
   create_note_item: CreateNoteItemToolSchema,

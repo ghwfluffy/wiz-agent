@@ -55,6 +55,7 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   list_note_lists: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   create_note_list: { access: "write", risk: "medium", sideEffect: "cross_app_api" },
   update_note_list: { access: "write", risk: "medium", sideEffect: "cross_app_api" },
+  reorder_note_lists: { access: "write", risk: "medium", sideEffect: "cross_app_api" },
   delete_note_list: { access: "write", risk: "medium", sideEffect: "cross_app_api" },
   list_note_items: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   create_note_item: { access: "write", risk: "medium", sideEffect: "cross_app_api" },

@@ -63,12 +63,16 @@ progress, reminders, or what to work on next.
 My Notes owns private, user-visible lightweight collections such as movies,
 games, project ideas, date ideas, quotes, restaurants, books, gifts, places,
 and things to buy. The registry exposes scoped list and item CRUD actions plus
-simplified wrapper tools for natural conversation.
+simplified wrapper tools for natural conversation. It also exposes an atomic
+list-order action so requests such as “move Games above Movies” can be completed
+without deleting, duplicating, or losing another list.
 
 Each token is restricted to the current central OAuth subject, the `notes`
 audience, and one exact action. Direct owner requests may write immediately;
 newsletter and untrusted content cannot authorize a list change. The assistant
 should resolve ambiguous list or item names with a read before writing.
+List reordering always starts with a current list read and submits every current
+id exactly once under the dedicated `notes.reorder_lists` scope.
 
 My Notes is the default for collections the owner expects to browse in the app.
 Markdown personal-list tools remain available for assistant-internal memory,

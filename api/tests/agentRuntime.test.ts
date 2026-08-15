@@ -228,6 +228,14 @@ describe("app capability registry", () => {
       pathTemplate: "/lists/:list_id/items",
       approvalMode: "direct_owner_only"
     });
+    expect(getIntegrationAction("notes.reorder_lists")).toMatchObject({
+      app: "notes",
+      access: "write",
+      risk: "medium",
+      method: "PUT",
+      pathTemplate: "/lists/order",
+      approvalMode: "direct_owner_only"
+    });
     expect(getIntegrationAction("apartment_gate.open_right_gate")).toMatchObject({
       app: "apartment_gate",
       access: "write",
@@ -260,6 +268,7 @@ describe("app capability registry", () => {
         expect.objectContaining({ name: "create_goal", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "create_goal_metric", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "list_budget_accounts", access: "read", sideEffect: "cross_app_api" }),
+        expect.objectContaining({ name: "reorder_note_lists", access: "write", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "create_budget_contract", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "create_budget_expense", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "integration_action" }),
@@ -3555,6 +3564,75 @@ describe("agent task execution", () => {
         status: 201,
         approval_required: false,
         action_id: "notes.create_item"
+      }
+    });
+  });
+
+  it("reorders owner-visible Notes lists immediately with the complete ordered id set", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "oauth:central-oauth:notes-owner",
+      NOTES_API_BASE_URL: "https://notes.example.test/api/agent/v1",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://notes.example.test/api/agent/v1/lists/order");
+      expect(init?.method).toBe("PUT");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        list_ids: ["list-games", "list-movies", "list-projects"]
+      });
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      const tokenPayload = JSON.parse(
+        Buffer.from(authorization.split(".")[1] ?? "", "base64url").toString("utf8")
+      );
+      expect(tokenPayload).toMatchObject({
+        aud: "notes",
+        scope: "notes.reorder_lists",
+        sub: "notes-owner"
+      });
+      return Response.json({
+        lists: [
+          { id: "list-games", name: "Games", position: 0 },
+          { id: "list-movies", name: "Movies to Watch", position: 1 },
+          { id: "list-projects", name: "Project Ideas", position: 2 }
+        ]
+      });
+    });
+    const app = buildApp({
+      settings,
+      fetchImpl: fetchMock,
+      modelClient: new MockModelClient({
+        tools: [{
+          toolName: "reorder_note_lists",
+          arguments: {
+            listIds: ["list-games", "list-movies", "list-projects"],
+            userIntentSummary: "Move Games above Movies to Watch."
+          }
+        }]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "Move Games above Movies to Watch in My Notes.",
+        mode: "normal"
+      })
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      selectedAction: "reorder_note_lists",
+      toolResult: {
+        status: 200,
+        approval_required: false,
+        action_id: "notes.reorder_lists"
       }
     });
   });

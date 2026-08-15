@@ -253,9 +253,11 @@ Current migrated agent tools:
   boundaries at runtime.
 - Goals wrappers expose common goal, metric, checklist, and notification
   workflows without requiring the model to build generic app API requests.
-- My Notes wrappers expose list discovery and scoped list/item CRUD so explicit
-  owner collections stay visible in the mobile Notes app rather than only in
-  assistant-internal markdown memory.
+- My Notes wrappers expose list discovery, scoped list/item CRUD, and atomic
+  list ordering so explicit owner collections stay visible and consistently
+  ordered in the mobile Notes app rather than only in assistant-internal
+  markdown memory. Reordering first reads the current lists and then submits
+  every current id exactly once.
 - Fluffynomics wrappers expose account lookup, forecasts, transfers, contracts,
   projected expenses, investments, audit logs, and account-value updates.
   Contract and expense write wrappers are intended for owner statements such as

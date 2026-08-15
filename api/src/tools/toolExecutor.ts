@@ -816,9 +816,13 @@ export async function executeToolCall(options: {
         body: compactPayload({
           name: options.args.name,
           description: options.args.description,
-          color: options.args.color,
-          position: options.args.position
+          color: options.args.color
         }),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "reorder_note_lists":
+      return executeOrQueueWriteIntegration("notes.reorder_lists", {
+        body: { list_ids: options.args.listIds },
         summary: String(options.args.userIntentSummary)
       });
     case "delete_note_list":

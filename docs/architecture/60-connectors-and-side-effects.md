@@ -149,6 +149,9 @@ list/item tools instead of creating a task or appending generic memory. Examples
 include movie-night ideas, restaurants, books, games, project ideas, date ideas,
 quotes, gifts, research buckets, places, and things to buy. Direct owner writes
 execute immediately; untrusted or newsletter content cannot authorize them.
+Owner-requested list ordering uses the dedicated atomic reorder wrapper after a
+fresh list read; it preserves every current list id exactly once instead of
+patching an isolated numeric position.
 The older markdown personal-list tools remain for assistant-internal memory,
 legacy entries, and fallback when My Notes is unavailable. Indirect recall
 should search My Notes first and identify uncertain matches as uncertain.
