@@ -51,6 +51,10 @@ modes. Standalone mode passes no federated app links; omnisite OAuth mode passes
 app-switcher base paths from root-owned frontend build configuration and links
 shared identity management back to central Account Settings.
 
+The parent deployment may provide one `VITE_FEDERATED_APPS` JSON inventory.
+When present it is authoritative; individual app base URL variables remain only
+as a deployment-neutral fallback.
+
 For live operational seeding, the target central OAuth user must already have a
 matching local agent user and `central-oauth` identity. A normal OAuth sign-in
 creates that mapping automatically; operators may also insert it deliberately

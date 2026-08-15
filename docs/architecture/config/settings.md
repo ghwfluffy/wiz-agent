@@ -38,7 +38,7 @@ Production settings fail closed when:
 - `PUBLIC_URL` points at localhost or a wildcard bind address;
 - an app base path is configured while the session cookie path remains `/`;
 - the owner email list explicitly contains `dev@example.test`;
-- a Goals, Budget, or Apartment Gate integration URL is configured without
+- a Goals, My Notes, Budget, or Apartment Gate integration URL is configured without
   `AGENT_INTEGRATION_TOKEN_SECRET`.
 
 ## Admin AI Config

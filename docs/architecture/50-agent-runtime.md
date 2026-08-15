@@ -142,7 +142,7 @@ sender trust, user scope, allowed app/action, and token availability before any
 API call.
 
 The runtime includes the app capability registry in the model prompt so the
-model knows what Goals, Fluffynomics, and Apartment Gate are for and which
+model knows what Goals, My Notes, Fluffynomics, and Apartment Gate are for and which
 actions are available.
 
 Owner inbound prompts include a deterministic host-detected intent envelope for
@@ -213,6 +213,9 @@ Current migrated agent tools:
   boundaries at runtime.
 - Goals wrappers expose common goal, metric, checklist, and notification
   workflows without requiring the model to build generic app API requests.
+- My Notes wrappers expose list discovery and scoped list/item CRUD so explicit
+  owner collections stay visible in the mobile Notes app rather than only in
+  assistant-internal markdown memory.
 - Fluffynomics wrappers expose account lookup, forecasts, transfers, contracts,
   projected expenses, investments, audit logs, and account-value updates.
   Contract and expense write wrappers are intended for owner statements such as

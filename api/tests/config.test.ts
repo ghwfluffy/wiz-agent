@@ -118,6 +118,15 @@ describe("settings", () => {
       OAUTH_SERVER_BASE_URL: "http://auth-api:8000",
       GOALS_API_BASE_URL: "http://goals-api:8000"
     })).toThrow(/AGENT_INTEGRATION_TOKEN_SECRET/);
+
+    expect(() => loadSettings({
+      APP_ENV: "production",
+      AUTH_MODE: "oauth",
+      POSTGRES_PASSWORD: "not-the-development-default",
+      PUBLIC_URL: "https://agent.example.test",
+      OAUTH_SERVER_BASE_URL: "http://auth-api:8000",
+      NOTES_API_BASE_URL: "http://notes-api:8000/api/agent/v1"
+    })).toThrow(/AGENT_INTEGRATION_TOKEN_SECRET/);
   });
 
   it("does not bootstrap the development owner address in production", () => {

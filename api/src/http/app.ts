@@ -634,7 +634,7 @@ function productionSafetyIssues(settings: Settings): string[] {
     issues.push("development_owner_email_configured");
   }
   if (
-    (settings.goalsApiBaseUrl || settings.budgetApiBaseUrl || settings.apartmentGateApiBaseUrl || settings.omniDevApiBaseUrl) &&
+    (settings.goalsApiBaseUrl || settings.notesApiBaseUrl || settings.budgetApiBaseUrl || settings.apartmentGateApiBaseUrl || settings.omniDevApiBaseUrl) &&
     !settings.agentIntegrationTokenSecret
   ) {
     issues.push("integration_token_secret_missing");
@@ -659,6 +659,11 @@ function operationalConfiguration(settings: Settings) {
       name: "budget",
       status: optionalIntegrationStatus(Boolean(settings.budgetApiBaseUrl), tokenSecretConfigured),
       requiredFor: ["budget_app_actions"]
+    },
+    {
+      name: "notes",
+      status: optionalIntegrationStatus(Boolean(settings.notesApiBaseUrl), tokenSecretConfigured),
+      requiredFor: ["notes_app_actions"]
     },
     {
       name: "apartment_gate",

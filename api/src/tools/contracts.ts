@@ -153,6 +153,69 @@ export const CompleteGoalNotificationToolSchema = z.object({
   userIntentSummary: z.string().min(1)
 });
 
+const NoteColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+
+export const ListNoteListsToolSchema = z.object({
+  reason: z.string().min(1).optional()
+});
+
+export const CreateNoteListToolSchema = z.object({
+  name: z.string().min(1).max(120),
+  description: z.string().max(2000).nullable().optional(),
+  color: NoteColorSchema.optional(),
+  userIntentSummary: z.string().min(1)
+});
+
+export const UpdateNoteListToolSchema = z.object({
+  listId: z.string().min(1),
+  name: z.string().min(1).max(120).optional(),
+  description: z.string().max(2000).nullable().optional(),
+  color: NoteColorSchema.optional(),
+  position: z.number().int().min(0).optional(),
+  userIntentSummary: z.string().min(1)
+}).refine(
+  (value) => value.name !== undefined || value.description !== undefined || value.color !== undefined || value.position !== undefined,
+  { message: "At least one list update field is required." }
+);
+
+export const DeleteNoteListToolSchema = z.object({
+  listId: z.string().min(1),
+  userIntentSummary: z.string().min(1)
+});
+
+export const ListNoteItemsToolSchema = z.object({
+  listId: z.string().min(1),
+  includeCompleted: z.boolean().default(true),
+  query: z.string().min(1).max(200).optional(),
+  reason: z.string().min(1).optional()
+});
+
+export const CreateNoteItemToolSchema = z.object({
+  listId: z.string().min(1),
+  title: z.string().min(1).max(500),
+  details: z.string().max(10_000).nullable().optional(),
+  completed: z.boolean().default(false),
+  userIntentSummary: z.string().min(1)
+});
+
+export const UpdateNoteItemToolSchema = z.object({
+  itemId: z.string().min(1),
+  title: z.string().min(1).max(500).optional(),
+  details: z.string().max(10_000).nullable().optional(),
+  completed: z.boolean().optional(),
+  position: z.number().int().min(0).optional(),
+  listId: z.string().min(1).optional(),
+  userIntentSummary: z.string().min(1)
+}).refine(
+  (value) => value.title !== undefined || value.details !== undefined || value.completed !== undefined || value.position !== undefined || value.listId !== undefined,
+  { message: "At least one item update field is required." }
+);
+
+export const DeleteNoteItemToolSchema = z.object({
+  itemId: z.string().min(1),
+  userIntentSummary: z.string().min(1)
+});
+
 export const ListBudgetAccountsToolSchema = z.object({
   reason: z.string().min(1).optional()
 });
@@ -480,6 +543,7 @@ export const DevelopmentTargetComponents = [
   "apps/goals",
   "apps/ingress",
   "apps/main",
+  "apps/notes-app",
   "apps/omni-dev"
 ] as const;
 
@@ -531,6 +595,14 @@ export const ToolContracts = {
   record_goal_metric_entry: RecordGoalMetricEntryToolSchema,
   list_goal_notifications: ListGoalNotificationsToolSchema,
   complete_goal_notification: CompleteGoalNotificationToolSchema,
+  list_note_lists: ListNoteListsToolSchema,
+  create_note_list: CreateNoteListToolSchema,
+  update_note_list: UpdateNoteListToolSchema,
+  delete_note_list: DeleteNoteListToolSchema,
+  list_note_items: ListNoteItemsToolSchema,
+  create_note_item: CreateNoteItemToolSchema,
+  update_note_item: UpdateNoteItemToolSchema,
+  delete_note_item: DeleteNoteItemToolSchema,
   list_budget_accounts: ListBudgetAccountsToolSchema,
   get_budget_account: GetBudgetAccountToolSchema,
   record_budget_account_value: RecordBudgetAccountValueToolSchema,

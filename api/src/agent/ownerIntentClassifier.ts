@@ -187,7 +187,7 @@ function scoreCasual(body: string): Candidate | undefined {
 function guidanceFor(intent: OwnerMessageIntent): string {
   switch (intent) {
     case "memory_list_offload":
-      return "Host detected likely memory/list offload; verify before using personal list tools and do not create a task unless the owner asks for work.";
+      return "Host detected likely list offload; prefer the owner-visible My Notes tools, use memory-list tools only for internal/legacy storage, and do not create a task unless the owner asks for work.";
     case "task_creation":
       return "Host detected likely task creation; verify whether the owner is asking for future work before creating a task.";
     case "task_update":

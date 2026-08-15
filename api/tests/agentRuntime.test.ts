@@ -197,17 +197,19 @@ describe("app capability registry", () => {
     const apps = listAppCapabilities();
     const context = buildCapabilityContext();
 
-    expect(apps.map((app) => app.id)).toEqual(["goals", "budget", "federated_services", "android_client", "apartment_gate", "model_gateway", "omni_dev"]);
+    expect(apps.map((app) => app.id)).toEqual(["goals", "notes", "budget", "federated_services", "android_client", "apartment_gate", "model_gateway", "omni_dev"]);
     expect(listIntegrationActions().map((action) => action.id).sort()).toEqual([...IntegrationActionIds].sort());
     expect(apps.find((app) => app.id === "federated_services")?.actions).toEqual([]);
     expect(apps.find((app) => app.id === "android_client")?.actions).toEqual([]);
     expect(context).toContain("Personal goal tracking");
+    expect(context).toContain("Private, owner-visible lists");
     expect(context).toContain("Personal finance planning");
     expect(context).toContain("Central authenticated launcher");
     expect(context).toContain("Native Android wrapper");
     expect(context).toContain("public root path is intentionally not an app directory");
     expect(context).toContain("Federated-login protected mobile web app");
     expect(context).toContain("goals.record_metric_entry");
+    expect(context).toContain("notes.create_item");
     expect(context).toContain("budget.get_net_worth_forecast");
     expect(context).toContain("direct owner command only");
     expect(context).toContain("Private development control plane");
@@ -217,6 +219,14 @@ describe("app capability registry", () => {
       risk: "high",
       method: "PUT",
       pathTemplate: "/accounts/:account_id/value"
+    });
+    expect(getIntegrationAction("notes.create_item")).toMatchObject({
+      app: "notes",
+      access: "write",
+      risk: "medium",
+      method: "POST",
+      pathTemplate: "/lists/:list_id/items",
+      approvalMode: "direct_owner_only"
     });
     expect(getIntegrationAction("apartment_gate.open_right_gate")).toMatchObject({
       app: "apartment_gate",
@@ -3477,6 +3487,74 @@ describe("agent task execution", () => {
         data: { id: "goal-1", title: "Morning walk" },
         approval_required: false,
         action_id: "goals.create_goal"
+      }
+    });
+  });
+
+  it("adds owner-visible Notes items immediately with a scoped token", async () => {
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_ID: "oauth:central-oauth:notes-owner",
+      NOTES_API_BASE_URL: "https://notes.example.test/api/agent/v1",
+      AGENT_INTEGRATION_TOKEN_SECRET: "test-signing-secret"
+    });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe("https://notes.example.test/api/agent/v1/lists/list-movies/items");
+      expect(init?.method).toBe("POST");
+      expect(JSON.parse(String(init?.body))).toEqual({
+        title: "The Wild Robot",
+        details: "Watch with the family",
+        completed: false
+      });
+      const authorization = new Headers(init?.headers).get("authorization") ?? "";
+      const tokenPayload = JSON.parse(
+        Buffer.from(authorization.split(".")[1] ?? "", "base64url").toString("utf8")
+      );
+      expect(tokenPayload).toMatchObject({
+        aud: "notes",
+        scope: "notes.create_item",
+        sub: "notes-owner"
+      });
+      return Response.json({ id: "item-1", title: "The Wild Robot" }, { status: 201 });
+    });
+    const app = buildApp({
+      settings,
+      fetchImpl: fetchMock,
+      modelClient: new MockModelClient({
+        tools: [{
+          toolName: "create_note_item",
+          arguments: {
+            listId: "list-movies",
+            title: "The Wild Robot",
+            details: "Watch with the family",
+            completed: false,
+            userIntentSummary: "Add The Wild Robot to Movies to Watch."
+          }
+        }]
+      })
+    });
+    const login = await app.request("/api/v1/auth/dev-login", { method: "POST" });
+    const cookie = login.headers.get("set-cookie") ?? "";
+
+    const response = await app.request("/api/v1/agent/prompts", {
+      method: "POST",
+      headers: { cookie, "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "Add The Wild Robot to my movies list.",
+        mode: "normal"
+      })
+    });
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await expect(response.json()).resolves.toMatchObject({
+      status: "completed",
+      selectedAction: "create_note_item",
+      toolResult: {
+        status: 201,
+        approval_required: false,
+        action_id: "notes.create_item"
       }
     });
   });

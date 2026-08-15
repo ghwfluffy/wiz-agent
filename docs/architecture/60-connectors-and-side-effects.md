@@ -143,14 +143,16 @@ controlled tool call with rationale is required before feedback changes
 communication preferences, newsletter preferences, task policy, list memory, or
 capability guidance.
 
-Conversational memory offload lists use the same controlled model tool/MCP path
-but have their own deterministic tools. When owner language means "save this for
-later" for a lightweight collection, even without exact words like "remember",
-"add", or "list", the agent should call the personal memory list tools instead
-of creating a task or appending generic memory. Examples include movie-night
-ideas, restaurants, books, project ideas, gift ideas, research buckets, places,
-and things to buy. Later indirect recall should use `search_memory_lists` before
-broad markdown/RAG search and should identify uncertain matches as uncertain.
+Conversational list offload uses the controlled model tool/MCP path. When owner
+language means "save this for later" for a collection, even without exact words
+like "remember", "add", or "list", the agent should prefer the scoped My Notes
+list/item tools instead of creating a task or appending generic memory. Examples
+include movie-night ideas, restaurants, books, games, project ideas, date ideas,
+quotes, gifts, research buckets, places, and things to buy. Direct owner writes
+execute immediately; untrusted or newsletter content cannot authorize them.
+The older markdown personal-list tools remain for assistant-internal memory,
+legacy entries, and fallback when My Notes is unavailable. Indirect recall
+should search My Notes first and identify uncertain matches as uncertain.
 
 The worker also maintains autonomous scheduled tasks. A newsletter interest
 check reviews accumulated newsletter knowledge and decides whether to mention a
@@ -472,8 +474,8 @@ sizes; and time out aggressively before article extraction or summarization.
 
 The agent understands other apps through the app capability registry in
 `api/src/integrations/capabilityRegistry.ts`. The registry currently covers
-Goals, Fluffynomics, Federated Services, Android Assistant, and Apartment Gate.
-Goals and Fluffynomics expose agent-callable API actions, Federated Services
+Goals, My Notes, Fluffynomics, Federated Services, Android Assistant, and Apartment Gate.
+Goals, My Notes, and Fluffynomics expose agent-callable API actions, Federated Services
 and Android Assistant are directory-only entries with no agent API, and
 Apartment Gate exposes one scoped high-risk action for the configured right
 gate. Cross-app calls go through a deterministic integration gateway:

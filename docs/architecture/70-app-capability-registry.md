@@ -58,6 +58,22 @@ The registry includes actions for:
 Use Goals when the owner asks about objectives, habits, measurements,
 progress, reminders, or what to work on next.
 
+### My Notes
+
+My Notes owns private, user-visible lightweight collections such as movies,
+games, project ideas, date ideas, quotes, restaurants, books, gifts, places,
+and things to buy. The registry exposes scoped list and item CRUD actions plus
+simplified wrapper tools for natural conversation.
+
+Each token is restricted to the current central OAuth subject, the `notes`
+audience, and one exact action. Direct owner requests may write immediately;
+newsletter and untrusted content cannot authorize a list change. The assistant
+should resolve ambiguous list or item names with a read before writing.
+
+My Notes is the default for collections the owner expects to browse in the app.
+Markdown personal-list tools remain available for assistant-internal memory,
+legacy entries, and degraded operation when the Notes integration is absent.
+
 ### Fluffynomics
 
 Fluffynomics is for personal finance planning with accounts, net worth
@@ -134,6 +150,8 @@ Development targets are constrained by the tool schema to the desktop policy's
 exact repository component identifiers (`root` and the registered `apps/...`
 paths). Friendly product or UI labels fail validation and enter the normal tool
 repair loop before any job is submitted.
+The component list includes `apps/notes-app` so future Notes improvements can be
+delegated without mis-scoping the new submodule.
 Owner image attachments are never added to ordinary model context. Host code may
 decode, resize, metadata-strip, re-encode, and integrity-bind supported images
 to the signed development context; untrusted and non-image attachments remain

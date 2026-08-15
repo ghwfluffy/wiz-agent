@@ -3,6 +3,7 @@ import {
   FederatedBanner,
   accountSettingsUrl,
   createGhwizFederatedSites,
+  parseFederatedSites,
   type FederatedBannerUser
 } from "@ghwiz/federated-banner";
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
@@ -82,11 +83,12 @@ const legacyTabAliases: Record<string, TabId> = {
   admin: "settings"
 };
 const personalDashboardTabs = new Set<TabId>(["attention"]);
+const configuredBannerSites = parseFederatedSites(import.meta.env.VITE_FEDERATED_APPS);
 const bannerSites = computed(() => {
   if (!usesCentralAuth) {
     return [];
   }
-  return createGhwizFederatedSites({
+  return configuredBannerSites.length > 0 ? configuredBannerSites : createGhwizFederatedSites({
     authBaseUrl: centralAuthBaseUrl,
     goalsBaseUrl: import.meta.env.VITE_GOALS_BASE_URL,
     moneyPlannerBaseUrl: import.meta.env.VITE_MONEY_PLANNER_BASE_URL,

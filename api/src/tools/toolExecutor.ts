@@ -752,6 +752,68 @@ export async function executeToolCall(options: {
         }),
         summary: String(options.args.userIntentSummary)
       });
+    case "list_note_lists":
+      return callReadIntegration("notes.list_lists");
+    case "create_note_list":
+      return executeOrQueueWriteIntegration("notes.create_list", {
+        body: compactPayload({
+          name: options.args.name,
+          description: options.args.description,
+          color: options.args.color
+        }),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "update_note_list":
+      return executeOrQueueWriteIntegration("notes.update_list", {
+        pathParams: { list_id: String(options.args.listId) },
+        body: compactPayload({
+          name: options.args.name,
+          description: options.args.description,
+          color: options.args.color,
+          position: options.args.position
+        }),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "delete_note_list":
+      return executeOrQueueWriteIntegration("notes.delete_list", {
+        pathParams: { list_id: String(options.args.listId) },
+        summary: String(options.args.userIntentSummary)
+      });
+    case "list_note_items":
+      return callReadIntegration("notes.list_items", {
+        pathParams: { list_id: String(options.args.listId) },
+        query: compactPayload({
+          include_completed: options.args.includeCompleted !== false,
+          q: options.args.query
+        }) as Record<string, string | number | boolean>
+      });
+    case "create_note_item":
+      return executeOrQueueWriteIntegration("notes.create_item", {
+        pathParams: { list_id: String(options.args.listId) },
+        body: compactPayload({
+          title: options.args.title,
+          details: options.args.details,
+          completed: options.args.completed
+        }),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "update_note_item":
+      return executeOrQueueWriteIntegration("notes.update_item", {
+        pathParams: { item_id: String(options.args.itemId) },
+        body: compactPayload({
+          title: options.args.title,
+          details: options.args.details,
+          completed: options.args.completed,
+          position: options.args.position,
+          list_id: options.args.listId
+        }),
+        summary: String(options.args.userIntentSummary)
+      });
+    case "delete_note_item":
+      return executeOrQueueWriteIntegration("notes.delete_item", {
+        pathParams: { item_id: String(options.args.itemId) },
+        summary: String(options.args.userIntentSummary)
+      });
     case "list_budget_accounts":
       return callReadIntegration("budget.list_accounts");
     case "get_budget_account":

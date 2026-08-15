@@ -38,6 +38,10 @@ describe("status route", () => {
             status: "missing_optional"
           }),
           expect.objectContaining({
+            name: "notes",
+            status: "missing_optional"
+          }),
+          expect.objectContaining({
             name: "omni_dev",
             status: "missing_optional"
           })

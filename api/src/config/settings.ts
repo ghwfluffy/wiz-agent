@@ -157,6 +157,7 @@ const SettingsSchema = z.object({
   inboundMaxUntrustedReviewNotificationsPerSenderPerDay: boundedInteger(1, 10_000).default(5),
   agentIntegrationTokenSecret: z.string().trim().default(""),
   goalsApiBaseUrl: OptionalServiceUrlSchema,
+  notesApiBaseUrl: OptionalServiceUrlSchema,
   budgetApiBaseUrl: OptionalServiceUrlSchema,
   apartmentGateApiBaseUrl: OptionalServiceUrlSchema,
   omniDevApiBaseUrl: OptionalServiceUrlSchema,
@@ -338,7 +339,7 @@ function validateProductionSettings(settings: Settings): void {
     unsafe.push("AGENT_OWNER_EMAILS");
   }
   if (
-    (settings.goalsApiBaseUrl || settings.budgetApiBaseUrl || settings.apartmentGateApiBaseUrl || settings.omniDevApiBaseUrl) &&
+    (settings.goalsApiBaseUrl || settings.notesApiBaseUrl || settings.budgetApiBaseUrl || settings.apartmentGateApiBaseUrl || settings.omniDevApiBaseUrl) &&
     !settings.agentIntegrationTokenSecret
   ) {
     unsafe.push("AGENT_INTEGRATION_TOKEN_SECRET");
@@ -411,6 +412,7 @@ export function loadSettings(env: NodeJS.ProcessEnv = process.env): Settings {
     inboundMaxUntrustedReviewNotificationsPerSenderPerDay: nonBlank(env.INBOUND_MAX_UNTRUSTED_REVIEW_NOTIFICATIONS_PER_SENDER_PER_DAY),
     agentIntegrationTokenSecret: nonBlank(env.AGENT_INTEGRATION_TOKEN_SECRET),
     goalsApiBaseUrl: nonBlank(env.GOALS_API_BASE_URL),
+    notesApiBaseUrl: nonBlank(env.NOTES_API_BASE_URL),
     budgetApiBaseUrl: nonBlank(env.BUDGET_API_BASE_URL),
     apartmentGateApiBaseUrl: nonBlank(env.APARTMENT_GATE_API_BASE_URL),
     omniDevApiBaseUrl: nonBlank(env.OMNI_DEV_API_BASE_URL),
