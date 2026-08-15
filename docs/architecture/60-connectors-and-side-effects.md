@@ -88,6 +88,23 @@ creates a user/run-scoped MCP session with an explicit tool allowlist, and
 records the final handling action and optional conversation thread id back on
 the inbox record.
 
+A short subjectless owner message is not automatically a continuation. Thread
+reuse requires an explicit reply subject or a strong conversational cue such as
+an acknowledgement, ordinal answer, status request, temporal reference, or
+pronoun-based change to the prior object. A concrete app or Omni Dev instruction
+without those cues starts a new thread, preventing old research restrictions
+and unrelated task context from following it.
+
+When a no-tool run nevertheless says a clearly actionable owner request cannot
+continue in its current tool context, owner-command entry points make one
+host-verified trusted-context handoff before queuing a reply. The fresh run keeps
+the current authenticated owner command and bounded owner/host metadata while
+dropping assistant-authored text, external research/newsletter evidence, thread
+summaries, outbound text, task bodies, and response ids. It receives the normal
+registered tools but no bypass of tool validation, scoped integration tokens,
+MCP allowlists, approval rules, burst limits, or runtime budgets. Question-only
+research follow-ups cannot trigger this privilege transition.
+
 Inbound de-duplication happens before any side effect. Provider message ids are
 trimmed and normalized for matching; when a provider id is missing or blank,
 the store uses a deterministic fallback key from source, normalized sender,
@@ -500,6 +517,12 @@ sanitized bundle. On a later assistant turn, external evidence can identify a
 referenced entity but cannot authorize a side effect; mutation tools remain
 unavailable unless the current authenticated owner's message explicitly asks
 for an action.
+
+Those restrictions apply only to the research-bearing turn. An independently
+actionable owner task is handled in a fresh trusted context, and recent research
+is not hydrated into authenticated web prompts merely because they contain a
+generic word such as “this” or “it.” Explicit source/article/link references and
+question-shaped follow-ups still preserve natural research continuity.
 
 ## Cross-App Integrations
 

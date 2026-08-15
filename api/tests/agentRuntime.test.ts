@@ -545,6 +545,10 @@ describe("agent task execution", () => {
       intent: "question_answer_request",
       evidence: expect.arrayContaining(["question mark", "question opener"])
     });
+    expect(classifyOwnerMessageIntent("tell OmniDev these list buttons are too big")).toMatchObject({
+      intent: "app_action_request",
+      evidence: expect.arrayContaining(["registered app mentioned", "app action verb"])
+    });
     expect(classifyOwnerMessageIntent("purple umbrella")).toMatchObject({
       intent: "unknown",
       confidence: 0.2
@@ -2013,6 +2017,197 @@ describe("agent task execution", () => {
       linkedMessageIds: [message.id],
       lastOwnerIntentSummary: "Any update on that from yesterday?"
     });
+  });
+
+  it("starts a fresh conversation thread for a short concrete owner task", async () => {
+    const { context, store } = await testContext();
+    const priorThread = await store.createConversationThread(context, {
+      title: "Make a Rewatch list",
+      status: "active",
+      lastOwnerIntentSummary: "Owner asked for a new Rewatch list."
+    });
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "thread-new-task-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Tell OmniDev these list buttons are too big and make reordering friendlier.",
+      source: "sms"
+    }, "owner");
+
+    const result = await runOwnerInboundAgent({
+      context,
+      store,
+      message,
+      modelClient: new MockModelClient({
+        tools: [{ responseText: "I understand the new development request." }]
+      })
+    });
+
+    expect(result.conversationThreadId).toBeTruthy();
+    expect(result.conversationThreadId).not.toBe(priorThread.id);
+    await expect(store.getConversationThread(context, priorThread.id)).resolves.toMatchObject({
+      linkedMessageIds: []
+    });
+    await expect(store.getConversationThread(context, result.conversationThreadId!)).resolves.toMatchObject({
+      linkedMessageIds: [message.id]
+    });
+  });
+
+  it("moves a separate owner task out of a research-restricted turn and continues it once", async () => {
+    const { context, store } = await testContext();
+    const thread = await store.createConversationThread(context, {
+      title: "Earlier web research",
+      status: "active"
+    });
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "trusted-handoff-research-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Build a project checklist for the kitchen remodel.",
+      source: "sms"
+    }, "owner");
+    await store.linkConversationThread(context, thread.id, { messageIds: [message.id] });
+    const threadedMessage = await store.updateInboundMessageHandling(context, message.id, {
+      action: "routed_to_agent",
+      conversationThreadId: thread.id
+    });
+    await store.createWebResearchSession(context, {
+      conversationThreadId: thread.id,
+      query: "earlier unrelated research",
+      purpose: "owner_question",
+      bundle: {
+        status: "ok",
+        answer: "EXTERNAL_RESEARCH_MARKER must not cross the handoff.",
+        claims: [],
+        entities: [],
+        sources: [],
+        warnings: [],
+        taint: "external_web",
+        searchedAt: "2026-08-15T12:00:00.000Z"
+      },
+      riskLevel: "clean",
+      expiresAt: "2099-08-16T12:00:00.000Z"
+    });
+    const modelClient = new MockModelClient({
+      tools: [
+        { responseText: "TRUSTED_CONTEXT_HANDOFF_REQUIRED" },
+        {
+          toolName: "create_task",
+          arguments: {
+            title: "Kitchen remodel checklist",
+            prompt: "Build and organize the kitchen remodel checklist."
+          }
+        }
+      ]
+    });
+    const runWithTools = vi.spyOn(modelClient, "runWithTools");
+
+    const result = await runOwnerInboundAgent({
+      context,
+      store,
+      message: threadedMessage!,
+      modelClient
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "accepted",
+      toolName: "create_task"
+    });
+    expect(runWithTools).toHaveBeenCalledTimes(2);
+    const firstRequest = runWithTools.mock.calls[0]?.[0];
+    const resumedRequest = runWithTools.mock.calls[1]?.[0];
+    expect(firstRequest.prompt).toContain("EXTERNAL_RESEARCH_MARKER");
+    expect((firstRequest.tools as Array<{ name?: string }>).map((tool) => tool.name)).not.toContain("create_task");
+    expect(resumedRequest.prompt).toContain("Fresh trusted owner task context.");
+    expect(resumedRequest.prompt).toContain("Build a project checklist for the kitchen remodel.");
+    expect(resumedRequest.prompt).not.toContain("EXTERNAL_RESEARCH_MARKER");
+    expect(resumedRequest.prompt).not.toContain("TRUSTED_CONTEXT_HANDOFF_REQUIRED");
+    expect((resumedRequest.tools as Array<{ name?: string }>).map((tool) => tool.name)).toContain("create_task");
+    await expect(store.listTasks(context)).resolves.toEqual([
+      expect.objectContaining({ title: "Kitchen remodel checklist" })
+    ]);
+    await expect(store.listAudit(context, false)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "agent_context.trusted_handoff",
+        details: expect.objectContaining({
+          trigger: "explicit_signal",
+          source_external_research_context: true,
+          source_run_id: expect.any(String),
+          target_run_id: expect.any(String)
+        })
+      })
+    ]));
+  });
+
+  it("recovers from a false tool-restriction refusal and delegates the owner task", async () => {
+    const { context, store } = await testContext();
+    const priorThread = await store.createConversationThread(context, {
+      title: "Make a Rewatch list",
+      status: "active"
+    });
+    const message = await store.recordInboundMessage(context, {
+      providerMessageId: "trusted-handoff-omni-1",
+      fromAddr: "owner-sms@example.test",
+      toAddr: "agent@example.test",
+      bodyText: "Tell OmniDev these list buttons are too big, use less padding, and make reordering friendlier.",
+      source: "sms"
+    }, "owner");
+    const modelClient = new MockModelClient({
+      tools: [
+        { responseText: "I can't submit this to Omni Dev from the current tool-restricted context." },
+        {
+          toolName: "delegate_development_task",
+          arguments: {
+            objective: "Make My Notes list controls smaller and make list reordering more intuitive.",
+            acceptanceCriteria: [
+              "List buttons use smaller text and less padding.",
+              "Reordering is clear and mobile-friendly."
+            ],
+            rationale: "The owner directly requested the development change."
+          }
+        }
+      ]
+    });
+    const runWithTools = vi.spyOn(modelClient, "runWithTools");
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 201,
+      json: async () => ({ job: { id: "job-trusted-handoff", status: "queued" } })
+    });
+
+    const result = await runOwnerInboundAgent({
+      context,
+      store,
+      message,
+      modelClient,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "oauth",
+        OMNI_DEV_API_BASE_URL: "https://omni.example.test/api/agent/v1"
+      }),
+      integrationTokenProvider: { tokenFor: async () => "signed-token" },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      toolStatus: "accepted",
+      toolName: "delegate_development_task",
+      sideEffect: "cross_app_api"
+    });
+    expect(result.conversationThreadId).not.toBe(priorThread.id);
+    expect(runWithTools).toHaveBeenCalledTimes(2);
+    expect(runWithTools.mock.calls[1]?.[0].prompt).toContain("Fresh trusted owner task context.");
+    expect(runWithTools.mock.calls[1]?.[0].prompt).not.toContain("I can't submit this");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([]);
+    await expect(store.listAudit(context, false)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "agent_context.trusted_handoff",
+        details: expect.objectContaining({ trigger: "restriction_refusal" })
+      })
+    ]));
   });
 
   it("includes bounded recent owner context so short SMS follow-ups can refer to completed work", async () => {

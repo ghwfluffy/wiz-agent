@@ -117,10 +117,10 @@ function scoreMemoryListOffload(body: string): Candidate | undefined {
 
 function scoreAppActionRequest(body: string): Candidate | undefined {
   const evidence: string[] = [];
-  if (/\b(goals?|goal app|budget|fluffynomics|apartment gate|gate app|registered app)\b/.test(body)) {
+  if (/\b(goals?|goal app|budget|fluffynomics|apartment gate|gate app|registered app|omni\s*dev|development agent|coding agent)\b/.test(body)) {
     evidence.push("registered app mentioned");
   }
-  if (/\b(add|create|record|update|open|use|put|log|sync|check)\b/.test(body)) {
+  if (/\b(add|ask|change|create|delegate|fix|have|make|record|remove|reorder|tell|update|open|use|put|log|sync|check)\b/.test(body)) {
     evidence.push("app action verb");
   }
   if (evidence.length === 2) {

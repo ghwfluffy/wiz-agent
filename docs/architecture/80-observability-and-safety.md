@@ -207,6 +207,15 @@ prompt-injection excerpts must not enter audit details, tool arguments, task
 events, logs, or decision memory. Failed privacy/network/schema/source checks
 record only bounded host-owned failure reasons.
 
+A successful trusted-context recovery records
+`agent_context.trusted_handoff` against the resumed agent run. Audit details
+contain only source/resumed run ids, the host trigger category, whether the
+source turn carried research, and fixed copied/excluded context labels. They do
+not contain the owner command, prior model response, external evidence, or any
+other prompt body. The absence of this event alongside a restriction response
+means the owner text did not pass the host action check, a tool had already been
+attempted, or the run was not eligible for the one-shot recovery.
+
 Runaway guardrails are safety limits for accidental loops and provider abuse.
 They fail closed before side effects, record non-secret counts and limits in
 audit details, and show up in the Jobs/Workers status surface. They are not

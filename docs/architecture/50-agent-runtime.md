@@ -214,6 +214,27 @@ question-only follow-up receives read tools and normal response delivery. This
 host-derived action envelope is enforced in both model descriptors and the MCP
 session allowlist.
 
+Research restrictions are scoped to that model turn, not inherited as a general
+assistant state. Subjectless owner messages are attached to a recent thread only
+when they contain a strong continuation cue; being short is not enough. Web
+prompts hydrate old research only for an explicit research reference or a
+question-shaped natural follow-up, so a new app or development task does not
+silently inherit an unrelated research session.
+
+If a no-tool model result still reports that a clearly separate authenticated
+owner action cannot proceed because of its current tool context, the host may
+perform one trusted-context handoff. It starts a new model request with the
+normal registered tool set and copies only the current owner command, bounded
+prior owner-authored messages, non-text active-task metadata, attachment
+metadata, and host capability guidance. It excludes prior model/outbound text,
+web and newsletter evidence, research sessions, thread summaries, task prompt
+bodies, and response ids. Host code independently verifies that the current
+owner text starts an action, requires that no tool was attempted, retries at
+most once, retains every normal tool/MCP/runtime guardrail, and records the
+source and resumed run ids in `agent_context.trusted_handoff`. Only the resumed
+result is delivered, so a recoverable restriction refusal does not become the
+owner-visible answer.
+
 The local in-process executor remains only as `LocalToolClient`, a
 compatibility wrapper for deterministic tests and emergency fallback. It is not
 the default runtime path.

@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 import { MockModelClient } from "../src/agent/modelClient.js";
-import { allowedToolsForExternalResearchTurn } from "../src/agent/externalResearchPolicy.js";
+import {
+  allowedToolsForExternalResearchTurn,
+  ownerExplicitlyAuthorizedMutation
+} from "../src/agent/externalResearchPolicy.js";
+import { shouldHydrateRecentResearch } from "../src/agent/inboundMessageAgent.js";
+import { buildAgentPrompt } from "../src/agent/promptContext.js";
 import { runAgentTask } from "../src/agent/runAgentTask.js";
+import {
+  TRUSTED_CONTEXT_HANDOFF_SIGNAL,
+  trustedContextHandoffTrigger
+} from "../src/agent/trustedContextHandoff.js";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext, WebResearchBundle } from "../src/domain/types.js";
@@ -219,6 +228,36 @@ describe("durable research sessions and action boundary", () => {
     expect(action.mutationAuthorized).toBe(true);
     expect(action.allowedTools).toContain("create_note_item");
     expect(naturalConfirmation.mutationAuthorized).toBe(true);
+    expect(ownerExplicitlyAuthorizedMutation("tell OmniDev these list buttons are too big")).toBe(true);
+    expect(ownerExplicitlyAuthorizedMutation("tell me more about the article")).toBe(false);
+  });
+
+  it("hydrates research only for explicit research references or natural question follow-ups", () => {
+    expect(shouldHydrateRecentResearch("What did the second source mean?")).toBe(true);
+    expect(shouldHydrateRecentResearch("Tell me more about it")).toBe(true);
+    expect(shouldHydrateRecentResearch("Check https://example.com/story for updates")).toBe(true);
+    expect(shouldHydrateRecentResearch("Tell OmniDev to fix this new layout task")).toBe(false);
+    expect(shouldHydrateRecentResearch("Fix the source code and publish it")).toBe(false);
+  });
+
+  it("gives restricted research turns an exact host-verified handoff signal", () => {
+    const prompt = buildAgentPrompt("Organize my lists.", {
+      externalResearchContext: true,
+      externalResearchMutationAuthorized: false
+    });
+
+    expect(prompt).toContain(`return exactly ${TRUSTED_CONTEXT_HANDOFF_SIGNAL} and nothing else`);
+    expect(prompt).toContain("The host will independently verify the owner command");
+    expect(trustedContextHandoffTrigger({
+      ownerCommand: "What did the second source mean?",
+      result: {
+        status: "completed",
+        runId: "run-question",
+        toolStatus: "none",
+        repaired: false,
+        responseText: TRUSTED_CONTEXT_HANDOFF_SIGNAL
+      }
+    })).toBeUndefined();
   });
 
   it("terminalizes sanitized web output without returning it to the main model", async () => {
