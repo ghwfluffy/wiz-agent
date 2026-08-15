@@ -267,7 +267,17 @@ describe("durable research sessions and action boundary", () => {
         repaired: false,
         responseText: "I can’t submit this from the current tool-restricted context."
       }
-    })).toBe("restriction_refusal");
+    })).toBe("omni_dev_no_tool");
+    expect(trustedContextHandoffTrigger({
+      ownerCommand: "Please create a task for this.",
+      result: {
+        status: "completed",
+        runId: "run-action-refusal",
+        toolStatus: "none",
+        repaired: false,
+        responseText: "I couldn’t create the requested task in this response."
+      }
+    })).toBe("action_refusal");
   });
 
   it("terminalizes sanitized web output without returning it to the main model", async () => {

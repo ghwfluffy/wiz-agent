@@ -922,6 +922,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     modelGuidance: [
       "Use Omni Dev only for concrete GHWIZ development objectives, never as a general shell or arbitrary repository tool.",
       "Provide a faithful objective and explicit acceptance criteria without guessing repository paths. Omni Dev inspects the current repository and selects every required component during confidence preflight.",
+      "A direct authenticated owner instruction to tell or have Omni Dev perform development must be delegated. If the language model twice returns text without a tool call, host code passes the exact owner command and linked owner attachments through the same scoped delegate tool; Omni Dev confidence preflight still decides whether implementation can start.",
       "Omni Dev performs a disposable confidence preflight before implementation. If it asks a question, forward the owner's answer with respond_to_development_job so the existing job can plan again; do not create a replacement job.",
       "A queued job is asynchronous; use the status tool for follow-ups and distinguish queued, planning, awaiting_owner_input, running, validating, deploying, no_change, succeeded, failed, and rolled-back states.",
       "Routine owner-requested work does not require dashboard approval. Only destructive or security-boundary work pauses for an explicit owner confirmation, which can be supplied through the assistant or dashboard."

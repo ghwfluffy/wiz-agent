@@ -2155,18 +2155,8 @@ describe("agent task execution", () => {
     }, "owner");
     const modelClient = new MockModelClient({
       tools: [
-        { responseText: "I couldn’t submit the Omni Dev job in this response." },
-        {
-          toolName: "delegate_development_task",
-          arguments: {
-            objective: "Make My Notes list controls smaller and make list reordering more intuitive.",
-            acceptanceCriteria: [
-              "List buttons use smaller text and less padding.",
-              "Reordering is clear and mobile-friendly."
-            ],
-            rationale: "The owner directly requested the development change."
-          }
-        }
+        { responseText: "Please submit these changes to Omni Dev." },
+        { responseText: "I couldn’t submit the Omni Dev job in this response." }
       ]
     });
     const runWithTools = vi.spyOn(modelClient, "runWithTools");
@@ -2199,13 +2189,28 @@ describe("agent task execution", () => {
     expect(result.conversationThreadId).not.toBe(priorThread.id);
     expect(runWithTools).toHaveBeenCalledTimes(2);
     expect(runWithTools.mock.calls[1]?.[0].prompt).toContain("Fresh trusted owner task context.");
-    expect(runWithTools.mock.calls[1]?.[0].prompt).not.toContain("I couldn’t submit");
+    expect(runWithTools.mock.calls[1]?.[0].prompt).not.toContain("Please submit these changes");
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const delegationBody = JSON.parse(String((fetchImpl.mock.calls[0]?.[1] as RequestInit).body));
+    expect(delegationBody).toMatchObject({
+      objective: message.bodyText,
+      origin: "owner_command",
+      context: {
+        threadId: result.conversationThreadId
+      }
+    });
     await expect(store.listOutboundMessages(context)).resolves.toEqual([]);
     await expect(store.listAudit(context, false)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({
         action: "agent_context.trusted_handoff",
-        details: expect.objectContaining({ trigger: "action_refusal" })
+        details: expect.objectContaining({ trigger: "omni_dev_no_tool" })
+      }),
+      expect.objectContaining({
+        action: "agent_context.owner_delegation_fallback",
+        details: expect.objectContaining({
+          tool_name: "delegate_development_task",
+          confidence_boundary: "omni_dev_preflight_required"
+        })
       })
     ]));
   });

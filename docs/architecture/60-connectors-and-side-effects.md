@@ -105,6 +105,15 @@ registered tools but no bypass of tool validation, scoped integration tokens,
 MCP allowlists, approval rules, burst limits, or runtime budgets. Question-only
 research follow-ups cannot trigger this privilege transition.
 
+For the narrower case where the authenticated owner directly says to tell or
+have Omni Dev perform a development change, returning prose twice is not a valid
+completion. After the fresh trusted retry, host code may run the normal delegate
+tool deterministically with the exact owner command, current thread id, and
+generic validation criteria. The tool remains owner-initiated and scoped, and
+Omni Dev must still complete confidence preflight before opening an
+implementation checkout. Questions about Omni Dev and owner answers to an
+existing preflight are not matched by this fallback.
+
 Inbound de-duplication happens before any side effect. Provider message ids are
 trimmed and normalized for matching; when a provider id is missing or blank,
 the store uses a deterministic fallback key from source, normalized sender,

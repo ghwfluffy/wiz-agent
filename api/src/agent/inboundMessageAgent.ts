@@ -19,7 +19,10 @@ import {
 } from "./ownerIntentClassifier.js";
 import { formatWebResearchSessionsForPrompt } from "../research/webResearchSafety.js";
 import { ownerExplicitlyAuthorizedMutation } from "./externalResearchPolicy.js";
-import { trustedContextHandoffTrigger } from "./trustedContextHandoff.js";
+import {
+  ownerDirectlyRequestsOmniDevDelegation,
+  trustedContextHandoffTrigger
+} from "./trustedContextHandoff.js";
 
 export type OwnerInboundAgentResult = AgentTaskResult & {
   conversationThreadId?: string;
@@ -375,21 +378,78 @@ async function runOwnerTaskWithTrustedContextHandoff(options: {
     fetchImpl: options.fetchImpl,
     now: options.now
   });
+  let finalResult = resumedResult;
+  if (
+    resumedResult.status === "completed"
+    && resumedResult.toolStatus === "none"
+    && ownerDirectlyRequestsOmniDevDelegation(options.request.ownerCommandText)
+  ) {
+    const objective = options.request.ownerCommandText?.normalize("NFKC").trim().slice(0, 12_000) ?? "";
+    const conversationThreadId = options.request.replyToMessage?.conversationThreadId;
+    const deterministicModelClient: AgentModelClient = {
+      runStructured: (request) => options.modelClient.runStructured(request),
+      runWithTools: async () => ({
+        toolName: "delegate_development_task",
+        arguments: {
+          objective,
+          acceptanceCriteria: [
+            "Implement the authenticated owner's requested development changes faithfully.",
+            "Run appropriate validation and report the outcome through the existing Omni Dev workflow."
+          ],
+          ...(conversationThreadId ? { conversationThreadId } : {}),
+          rationale: "The authenticated owner directly instructed the assistant to delegate this development request to Omni Dev."
+        }
+      }),
+      runText: (request) => options.modelClient.runText(request),
+      transcribeAudio: (request) => options.modelClient.transcribeAudio(request),
+      repairToolArguments: (request) => options.modelClient.repairToolArguments(request)
+    };
+    finalResult = await runAgentTask({
+      context: options.context,
+      store: options.store,
+      modelClient: deterministicModelClient,
+      request: {
+        ...options.request,
+        prompt: trustedPrompt,
+        externalResearchContext: false,
+        allowedTools: ["delegate_development_task"]
+      },
+      settings: options.settings,
+      integrationTokenProvider: options.integrationTokenProvider,
+      fetchImpl: options.fetchImpl,
+      now: options.now
+    });
+    await options.store.recordAudit(
+      options.context,
+      "agent_context.owner_delegation_fallback",
+      "agent_run",
+      finalResult.runId || resumedResult.runId || initialResult.runId || null,
+      {
+        source_run_id: initialResult.runId || null,
+        resumed_run_id: resumedResult.runId || null,
+        target_run_id: finalResult.runId || null,
+        tool_name: "delegate_development_task",
+        copied_context: ["exact_authenticated_owner_request", "conversation_thread_id", "owner_attachment_linkage"],
+        confidence_boundary: "omni_dev_preflight_required"
+      }
+    );
+  }
   await options.store.recordAudit(
     options.context,
     "agent_context.trusted_handoff",
     "agent_run",
-    resumedResult.runId || initialResult.runId || null,
+    finalResult.runId || resumedResult.runId || initialResult.runId || null,
     {
       source_run_id: initialResult.runId || null,
-      target_run_id: resumedResult.runId || null,
+      resumed_run_id: resumedResult.runId || null,
+      target_run_id: finalResult.runId || null,
       trigger,
       copied_context: ["current_authenticated_owner_request", "recent_authenticated_owner_messages", "active_task_metadata", "owner_attachment_metadata", "host_capability_registry"],
       excluded_context: ["assistant_model_text", "web_research", "newsletter_evidence", "thread_summaries", "outbound_messages", "task_prompt_bodies", "previous_response_id"],
       source_external_research_context: Boolean(options.request.externalResearchContext)
     }
   );
-  return resumedResult;
+  return finalResult;
 }
 
 export async function buildOwnerInboundPrompt(options: {

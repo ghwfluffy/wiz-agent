@@ -3,7 +3,11 @@ import type { AgentTaskResult } from "./runAgentTask.js";
 
 export const TRUSTED_CONTEXT_HANDOFF_SIGNAL = "TRUSTED_CONTEXT_HANDOFF_REQUIRED";
 
-export type TrustedContextHandoffTrigger = "explicit_signal" | "restriction_refusal" | "action_refusal";
+export type TrustedContextHandoffTrigger =
+  | "explicit_signal"
+  | "restriction_refusal"
+  | "action_refusal"
+  | "omni_dev_no_tool";
 
 const restrictionRefusalPatterns = [
   /\b(?:can(?:not|'t)|unable to)\b.{0,180}\b(?:tool[- ]restricted|restricted)\s+context\b/is,
@@ -35,6 +39,19 @@ function ownerClearlyStartedAction(ownerCommand: string | undefined): boolean {
   );
 }
 
+export function ownerDirectlyRequestsOmniDevDelegation(ownerCommand: string | undefined): boolean {
+  const normalized = (ownerCommand ?? "")
+    .normalize("NFKC")
+    .replace(/[’‘]/g, "'")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 4000);
+  return /^(?:please\s+)?(?:tell|have)\s+(?:omni\s*dev|the\s+(?:development|coding)\s+agent)\b/i.test(normalized)
+    || /^(?:please\s+)?ask\s+(?:omni\s*dev|the\s+(?:development|coding)\s+agent)\s+to\b/i.test(normalized)
+    || /^(?:please\s+)?(?:send|submit|queue|delegate|pass)\b.{0,100}\b(?:to\s+)?(?:omni\s*dev|the\s+(?:development|coding)\s+agent)\b/i.test(normalized)
+    || /\b(?:can|could|would|will)\s+you\s+(?:please\s+)?(?:(?:tell|have)\s+(?:omni\s*dev|the\s+(?:development|coding)\s+agent)|ask\s+(?:omni\s*dev|the\s+(?:development|coding)\s+agent)\s+to)\b/i.test(normalized);
+}
+
 export function trustedContextHandoffTrigger(options: {
   result: AgentTaskResult;
   ownerCommand: string | undefined;
@@ -45,6 +62,10 @@ export function trustedContextHandoffTrigger(options: {
     || !ownerClearlyStartedAction(options.ownerCommand)
   ) {
     return undefined;
+  }
+
+  if (ownerDirectlyRequestsOmniDevDelegation(options.ownerCommand)) {
+    return "omni_dev_no_tool";
   }
 
   const response = options.result.responseText

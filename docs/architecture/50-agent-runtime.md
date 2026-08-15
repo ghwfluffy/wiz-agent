@@ -235,6 +235,16 @@ source and resumed run ids in `agent_context.trusted_handoff`. Only the resumed
 result is delivered, so a recoverable restriction refusal does not become the
 owner-visible answer.
 
+Direct owner instructions to tell, have, or ask Omni Dev to perform a concrete
+change have a narrower deterministic completion rule. If both the original run
+and fresh trusted run return text without attempting a tool, host code starts a
+third, tool-forced run whose only allowed tool is `delegate_development_task`.
+Its objective is the exact authenticated owner command; the host adds only
+generic validation criteria and the current conversation-thread id so linked
+sanitized owner images remain available. This does not authorize code changes
+directly: the normal scoped integration token, MCP validation, Omni Dev signed
+intent, and disposable confidence preflight still apply before implementation.
+
 The local in-process executor remains only as `LocalToolClient`, a
 compatibility wrapper for deterministic tests and emergency fallback. It is not
 the default runtime path.

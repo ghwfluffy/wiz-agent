@@ -216,6 +216,12 @@ other prompt body. The absence of this event alongside a restriction response
 means the owner text did not pass the host action check, a tool had already been
 attempted, or the run was not eligible for the one-shot recovery.
 
+When a direct Omni Dev instruction needs the deterministic no-tool fallback,
+the host also records `agent_context.owner_delegation_fallback`. It contains the
+source, trusted-retry, and forced-run ids; the fixed tool name; fixed copied
+context labels; and the `omni_dev_preflight_required` confidence boundary. It
+does not store the owner command or attachment contents.
+
 Runaway guardrails are safety limits for accidental loops and provider abuse.
 They fail closed before side effects, record non-secret counts and limits in
 audit details, and show up in the Jobs/Workers status surface. They are not
