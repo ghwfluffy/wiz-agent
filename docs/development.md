@@ -37,6 +37,23 @@ administrator. OAuth callback failures redirect back to the UI with an
 `oauth_error` token; the web store converts that token into a friendly message
 and removes it from the URL.
 
+The authenticated workspace is conversation-first and route-backed. Chat is the
+default focused surface. Top-level sections use `?tab=<section>`, while sections
+with multiple tools add `&view=<surface>`. Only the selected surface is mounted;
+switching to a tool does not leave unrelated tables, forms, or status panels in
+the page below it. Legacy tab links such as `tab=overview`, `tab=inbox`,
+`tab=approvals`, `tab=outbox`, and `tab=admin` continue to resolve to their
+corresponding focused surfaces.
+
+At mobile widths, desktop tab rows are replaced by a small collapsed control on
+the left edge. It opens a modal off-canvas navigation drawer with expandable
+second-level tool menus, traps keyboard focus while open, closes with Escape or
+the backdrop, restores focus to the trigger, and locks background scrolling.
+The mobile Chat surface removes the dashboard/card nesting, fills the viewport
+below the shared banner, and keeps its compact composer at the bottom with safe
+area spacing. Non-chat tools retain bounded horizontal scrolling for wide data
+tables.
+
 The Attention surface is backed in part by `GET /api/v1/dashboard`, a read-only
 owner-scoped insight aggregate. It summarizes active tasks, pending approvals,
 recent decision and feedback notes, recent memory changes, active threads,

@@ -160,8 +160,9 @@ Current tests cover:
 - agent runtime deadline handling for slow model responses, slow argument
   repair, abort propagation to model calls, tool-call rejection persistence, and
   voice transcription timeout before run creation.
-- tabbed Carbon dashboard rendering, URL-backed active tabs, and focused tab
-  polling.
+- focused Carbon workspace rendering, route-backed section/tool selection,
+  legacy tab aliases, collapsed mobile drawer navigation and focus restoration,
+  and focused section polling.
 - markdown RAG chunking determinism, section metadata preservation, and
   deterministic point IDs.
 - markdown path normalization, fenced-code-aware section parsing,

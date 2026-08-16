@@ -6,7 +6,7 @@ import {
   parseFederatedSites,
   type FederatedBannerUser
 } from "@ghwiz/federated-banner";
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import {
   api,
@@ -63,6 +63,28 @@ const tabs = [
   { id: "settings", label: "Settings" }
 ] as const;
 type TabId = typeof tabs[number]["id"];
+type ViewId =
+  | "chat"
+  | "summary"
+  | "approvals"
+  | "inbox"
+  | "outbound"
+  | "tasks"
+  | "create"
+  | "history"
+  | "browser"
+  | "changes"
+  | "legacy"
+  | "senders"
+  | "connectors"
+  | "status"
+  | "jobs"
+  | "logs"
+  | "ai";
+type NavigationView = {
+  id: ViewId;
+  label: string;
+};
 type ChatMessage = {
   id: string;
   role: "user" | "agent";
@@ -81,6 +103,56 @@ const legacyTabAliases: Record<string, TabId> = {
   workers: "operations",
   logs: "operations",
   admin: "settings"
+};
+const tabViews: Record<TabId, NavigationView[]> = {
+  chat: [{ id: "chat", label: "Chat" }],
+  attention: [
+    { id: "summary", label: "Summary" },
+    { id: "approvals", label: "Approvals" },
+    { id: "inbox", label: "Inbox" },
+    { id: "outbound", label: "Outbound" }
+  ],
+  work: [
+    { id: "tasks", label: "Tasks" },
+    { id: "create", label: "Add task" },
+    { id: "history", label: "Outbox history" }
+  ],
+  knowledge: [
+    { id: "browser", label: "Browser" },
+    { id: "changes", label: "Changes" },
+    { id: "legacy", label: "Legacy" }
+  ],
+  integrations: [
+    { id: "senders", label: "Sender trust" },
+    { id: "connectors", label: "Connectors" }
+  ],
+  operations: [
+    { id: "status", label: "Status" },
+    { id: "jobs", label: "Jobs" },
+    { id: "logs", label: "Logs" }
+  ],
+  settings: [{ id: "ai", label: "AI configuration" }]
+};
+const defaultViewByTab: Record<TabId, ViewId> = {
+  chat: "chat",
+  attention: "summary",
+  work: "tasks",
+  knowledge: "browser",
+  integrations: "senders",
+  operations: "status",
+  settings: "ai"
+};
+const legacyViewAliases: Record<string, ViewId> = {
+  overview: "chat",
+  inbox: "inbox",
+  approvals: "approvals",
+  outbox: "outbound",
+  tasks: "tasks",
+  memory: "browser",
+  senders: "senders",
+  workers: "jobs",
+  logs: "logs",
+  admin: "ai"
 };
 const personalDashboardTabs = new Set<TabId>(["attention"]);
 const configuredBannerSites = parseFederatedSites(import.meta.env.VITE_FEDERATED_APPS);
@@ -115,6 +187,13 @@ let dashboardPollHandle: number | null = null;
 let activeTabRefreshInFlight = false;
 let chatMessageSequence = 0;
 const activeTab = ref<TabId>(tabFromRoute(route.query.tab));
+const activeView = ref<ViewId>(viewFromRoute(activeTab.value, route.query.view, route.query.tab));
+const mobileNavOpen = ref(false);
+const expandedMobileTab = ref<TabId | null>(activeTab.value);
+const mobileNavToggle = ref<HTMLButtonElement | null>(null);
+const mobileNavDrawer = ref<HTMLElement | null>(null);
+const mobileNavClose = ref<HTMLButtonElement | null>(null);
+const activeNavigationViews = computed(() => tabViews[activeTab.value]);
 
 const tasks = ref<Task[]>([]);
 const inbox = ref<InboundMessage[]>([]);
@@ -354,6 +433,19 @@ function tabFromRoute(value: unknown): TabId {
     return "chat";
   }
   return legacyTabAliases[tab] ?? (tabIds.has(tab as TabId) ? tab as TabId : "chat");
+}
+
+function routeValue(value: unknown): string | undefined {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  return typeof candidate === "string" ? candidate : undefined;
+}
+
+function viewFromRoute(tab: TabId, value: unknown, legacyTabValue?: unknown): ViewId {
+  const candidate = routeValue(value) ?? legacyViewAliases[routeValue(legacyTabValue) ?? ""];
+  if (candidate && tabViews[tab].some((view) => view.id === candidate)) {
+    return candidate as ViewId;
+  }
+  return defaultViewByTab[tab];
 }
 
 function applyAiConfig(config: AiConfig | null): void {
@@ -745,9 +837,78 @@ async function refreshApprovals(): Promise<void> {
   approvals.value = (await api.listApprovals("pending,approved,rejected,expired")).approvals;
 }
 
-function setActiveTab(tabId: TabId): void {
+function navigateToView(tabId: TabId, viewId: ViewId): void {
+  const nextView = tabViews[tabId].some((view) => view.id === viewId)
+    ? viewId
+    : defaultViewByTab[tabId];
   activeTab.value = tabId;
-  void router.replace({ query: { ...route.query, tab: tabId } });
+  activeView.value = nextView;
+  expandedMobileTab.value = tabId;
+  void router.replace({ query: { ...route.query, tab: tabId, view: nextView } });
+}
+
+function setActiveTab(tabId: TabId): void {
+  navigateToView(tabId, defaultViewByTab[tabId]);
+}
+
+function setActiveView(viewId: ViewId): void {
+  navigateToView(activeTab.value, viewId);
+}
+
+async function openMobileNav(): Promise<void> {
+  expandedMobileTab.value = activeTab.value;
+  mobileNavOpen.value = true;
+  await nextTick();
+  mobileNavClose.value?.focus();
+}
+
+async function closeMobileNav(): Promise<void> {
+  mobileNavOpen.value = false;
+  await nextTick();
+  mobileNavToggle.value?.focus();
+}
+
+function handleMobileNavKeydown(event: KeyboardEvent): void {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    void closeMobileNav();
+    return;
+  }
+  if (event.key !== "Tab") {
+    return;
+  }
+
+  const focusable = Array.from(mobileNavDrawer.value?.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  ) ?? []);
+  if (focusable.length === 0) {
+    event.preventDefault();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last?.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first?.focus();
+  }
+}
+
+function toggleMobileNavTab(tabId: TabId): void {
+  if (tabViews[tabId].length === 1) {
+    navigateToView(tabId, defaultViewByTab[tabId]);
+    closeMobileNav();
+    return;
+  }
+  expandedMobileTab.value = expandedMobileTab.value === tabId ? null : tabId;
+}
+
+function selectMobileView(tabId: TabId, viewId: ViewId): void {
+  navigateToView(tabId, viewId);
+  closeMobileNav();
 }
 
 function clampPages(): void {
@@ -1443,15 +1604,24 @@ watch(
   },
 );
 
-watch(() => route.query.tab, (tab) => {
+watch(() => [route.query.tab, route.query.view] as const, ([tab, view]) => {
   const nextTab = tabFromRoute(tab);
+  const nextView = viewFromRoute(nextTab, view, tab);
   if (nextTab !== activeTab.value) {
     activeTab.value = nextTab;
   }
+  if (nextView !== activeView.value) {
+    activeView.value = nextView;
+  }
+  expandedMobileTab.value = nextTab;
 });
 
 watch(activeTab, () => {
   void loadActiveTab();
+});
+
+watch(mobileNavOpen, (open) => {
+  document.body.classList.toggle("mobile-nav-open", open);
 });
 
 watch([memoryChangePathFilter, memoryChangeActionFilter], () => {
@@ -1462,6 +1632,7 @@ watch([memoryChangePathFilter, memoryChangeActionFilter], () => {
 
 onUnmounted(() => {
   stopDashboardPolling();
+  document.body.classList.remove("mobile-nav-open");
 });
 </script>
 
@@ -1502,6 +1673,68 @@ onUnmounted(() => {
     </section>
 
     <section v-else class="dashboard" aria-label="Agent dashboard">
+      <button
+        id="mobile-nav-toggle"
+        ref="mobileNavToggle"
+        class="mobile-nav-toggle"
+        type="button"
+        aria-label="Open assistant navigation"
+        aria-controls="mobile-assistant-nav"
+        :aria-expanded="mobileNavOpen"
+        @click="openMobileNav"
+      >
+        <span class="mobile-nav-toggle__icon" aria-hidden="true"><span /><span /><span /></span>
+      </button>
+
+      <div v-if="mobileNavOpen" class="mobile-nav-backdrop" aria-hidden="true" @click="closeMobileNav" />
+      <aside
+        v-if="mobileNavOpen"
+        id="mobile-assistant-nav"
+        ref="mobileNavDrawer"
+        class="mobile-nav-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Assistant navigation"
+        @keydown="handleMobileNavKeydown"
+      >
+        <header class="mobile-nav-header">
+          <div>
+            <p class="eyebrow">AI Assistant</p>
+            <p class="mobile-nav-title">Choose a view</p>
+          </div>
+          <button ref="mobileNavClose" class="mobile-nav-close" type="button" aria-label="Close assistant navigation" @click="closeMobileNav">×</button>
+        </header>
+        <nav aria-label="Mobile assistant sections">
+          <ul class="mobile-nav-list">
+            <li v-for="tab in tabs" :key="`mobile-${tab.id}`">
+              <button
+                class="mobile-nav-section"
+                :class="{ 'mobile-nav-section--active': activeTab === tab.id }"
+                type="button"
+                :aria-expanded="tabViews[tab.id].length > 1 ? expandedMobileTab === tab.id : undefined"
+                @click="toggleMobileNavTab(tab.id)"
+              >
+                <span>{{ tab.label }}</span>
+                <span v-if="tabViews[tab.id].length > 1" aria-hidden="true">{{ expandedMobileTab === tab.id ? '−' : '+' }}</span>
+              </button>
+              <ul v-if="tabViews[tab.id].length > 1 && expandedMobileTab === tab.id" class="mobile-nav-submenu">
+                <li v-for="view in tabViews[tab.id]" :key="`mobile-${tab.id}-${view.id}`">
+                  <button
+                    class="mobile-nav-view"
+                    :class="{ 'mobile-nav-view--active': activeTab === tab.id && activeView === view.id }"
+                    type="button"
+                    :aria-current="activeTab === tab.id && activeView === view.id ? 'page' : undefined"
+                    @click="selectMobileView(tab.id, view.id)"
+                  >
+                    {{ view.label }}
+                  </button>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        </nav>
+      </aside>
+
       <div v-if="dashboardError" class="cds--inline-notification cds--inline-notification--error" role="alert">
         <div class="cds--inline-notification__details">
           <div class="cds--inline-notification__text-wrapper">
@@ -1511,7 +1744,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <nav class="cds--tabs" aria-label="Assistant sections">
+      <nav class="cds--tabs desktop-navigation" aria-label="Assistant sections">
         <div class="cds--tab--list" role="tablist">
           <button
             v-for="tab in tabs"
@@ -1530,14 +1763,22 @@ onUnmounted(() => {
         </div>
       </nav>
 
-      <section v-show="activeTab === 'attention'" id="panel-attention" class="tab-panel" role="tabpanel" aria-labelledby="tab-attention">
-        <nav class="section-nav" aria-label="Attention views">
-          <a class="section-nav-link" href="#attention-summary">Summary</a>
-          <a class="section-nav-link" href="#attention-approvals">Approvals</a>
-          <a class="section-nav-link" href="#attention-inbox">Inbox</a>
-          <a class="section-nav-link" href="#attention-outbound">Outbound</a>
-        </nav>
-        <div class="metric-grid" aria-label="Operational summary">
+      <nav v-if="activeNavigationViews.length > 1" class="section-nav desktop-section-nav" :aria-label="`${tabs.find((tab) => tab.id === activeTab)?.label} views`">
+        <button
+          v-for="view in activeNavigationViews"
+          :key="view.id"
+          class="section-nav-link"
+          :class="{ 'section-nav-link--active': activeView === view.id }"
+          type="button"
+          :aria-current="activeView === view.id ? 'page' : undefined"
+          @click="setActiveView(view.id)"
+        >
+          {{ view.label }}
+        </button>
+      </nav>
+
+      <section v-if="activeTab === 'attention' && (activeView === 'summary' || activeView === 'outbound')" id="panel-attention" class="tab-panel" role="tabpanel" aria-labelledby="tab-attention">
+        <div v-if="activeView === 'summary'" class="metric-grid" aria-label="Operational summary">
           <section class="metric-card">
             <p class="label">Active tasks</p>
             <p class="metric-value">{{ dashboardMetrics.activeTasks }}</p>
@@ -1560,7 +1801,7 @@ onUnmounted(() => {
           </section>
         </div>
 
-        <section id="attention-summary" class="insight-grid" aria-label="Personal assistant insights">
+        <section v-if="activeView === 'summary'" id="attention-summary" class="insight-grid" aria-label="Personal assistant insights">
           <article class="activity-section insight-panel">
             <div class="section-heading">
               <h2>Attention queue</h2>
@@ -1601,7 +1842,7 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <section class="insight-grid insight-grid-wide" aria-label="Operational work surfaces">
+        <section v-if="activeView === 'summary'" class="insight-grid insight-grid-wide" aria-label="Operational work surfaces">
           <article class="activity-section insight-panel">
             <div class="section-heading">
               <h2>Active tasks</h2>
@@ -1638,7 +1879,7 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <section class="insight-grid insight-grid-wide" aria-label="Assistant memory and decision surfaces">
+        <section v-if="activeView === 'summary'" class="insight-grid insight-grid-wide" aria-label="Assistant memory and decision surfaces">
           <article class="activity-section insight-panel">
             <div class="section-heading">
               <h2>Recent decisions</h2>
@@ -1675,7 +1916,7 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <section class="insight-grid insight-grid-wide" aria-label="Conversation and memory list surfaces">
+        <section v-if="activeView === 'summary'" class="insight-grid insight-grid-wide" aria-label="Conversation and memory list surfaces">
           <article class="activity-section insight-panel">
             <div class="section-heading">
               <h2>Active threads</h2>
@@ -1712,7 +1953,7 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <section class="insight-grid insight-grid-wide" aria-label="Feedback and safety surfaces">
+        <section v-if="activeView === 'summary'" class="insight-grid insight-grid-wide" aria-label="Feedback and safety surfaces">
           <article class="activity-section insight-panel">
             <div class="section-heading">
               <h2>Owner feedback</h2>
@@ -1765,7 +2006,7 @@ onUnmounted(() => {
           </article>
         </section>
 
-        <section id="attention-outbound" class="activity-section" aria-label="Active outbound queue">
+        <section v-if="activeView === 'outbound'" id="attention-outbound" class="activity-section" aria-label="Active outbound queue">
           <div class="section-heading">
             <h2>Needs attention</h2>
           </div>
@@ -1808,16 +2049,16 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'chat'" id="panel-chat" class="tab-panel" role="tabpanel" aria-labelledby="tab-chat">
+      <section v-if="activeTab === 'chat'" id="panel-chat" class="tab-panel chat-workspace" role="tabpanel" aria-labelledby="tab-chat">
         <section class="activity-section chat-panel" aria-label="Agent chat">
           <div class="section-heading chat-heading">
-            <h2>Agent chat</h2>
+            <h2>Chat</h2>
             <button class="cds--btn cds--btn--secondary cds--btn--sm" type="button" :disabled="chatMessages.length === 0 && !chatDraft.trim()" @click="clearChat">
               Clear chat
             </button>
           </div>
           <div class="chat-thread" role="log" aria-live="polite" aria-label="Conversation">
-            <p v-if="chatMessages.length === 0" class="chat-empty">No messages yet.</p>
+            <p v-if="chatMessages.length === 0" class="chat-empty">How can I help?</p>
             <article
               v-for="message in chatMessages"
               :key="message.id"
@@ -1839,7 +2080,7 @@ onUnmounted(() => {
               v-model="chatDraft"
               class="cds--text-area"
               required
-              rows="3"
+              rows="1"
               placeholder="Message the agent"
               @keydown="handleChatKeydown"
             />
@@ -1852,7 +2093,7 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'attention'" id="panel-attention-inbox" class="tab-panel" aria-labelledby="tab-attention">
+      <section v-if="activeTab === 'attention' && activeView === 'inbox'" id="panel-attention-inbox" class="tab-panel" role="tabpanel" aria-labelledby="tab-attention">
         <section id="attention-inbox" class="activity-section" aria-label="Agent inbox">
           <div class="section-heading">
             <h2>Agent Inbox</h2>
@@ -1930,7 +2171,7 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'attention'" id="panel-attention-approvals" class="tab-panel" aria-labelledby="tab-attention">
+      <section v-if="activeTab === 'attention' && activeView === 'approvals'" id="panel-attention-approvals" class="tab-panel" role="tabpanel" aria-labelledby="tab-attention">
         <section id="attention-approvals" class="activity-section" aria-label="Approval inbox">
           <div class="section-heading">
             <div>
@@ -2001,13 +2242,8 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'work'" id="panel-work" class="tab-panel" role="tabpanel" aria-labelledby="tab-work">
-        <nav class="section-nav" aria-label="Work views">
-          <a class="section-nav-link" href="#work-create">Add task</a>
-          <a class="section-nav-link" href="#work-tasks">Tasks</a>
-          <a class="section-nav-link" href="#work-outbox">Outbox history</a>
-        </nav>
-        <section id="work-create" class="activity-section" aria-label="Create task">
+      <section v-if="activeTab === 'work'" id="panel-work" class="tab-panel" role="tabpanel" aria-labelledby="tab-work">
+        <section v-if="activeView === 'create'" id="work-create" class="activity-section" aria-label="Create task">
           <div class="section-heading">
             <h2>Add task</h2>
           </div>
@@ -2036,7 +2272,7 @@ onUnmounted(() => {
           </form>
         </section>
 
-        <section id="work-tasks" class="activity-section" aria-label="Tasks">
+        <section v-if="activeView === 'tasks'" id="work-tasks" class="activity-section" aria-label="Tasks">
           <div class="section-heading">
             <h2>Tasks</h2>
             <p class="label">{{ tasks.length }} total</p>
@@ -2091,7 +2327,7 @@ onUnmounted(() => {
           </template>
         </section>
 
-        <section id="work-outbox" class="activity-section" aria-label="Outbox history">
+        <section v-if="activeView === 'history'" id="work-outbox" class="activity-section" aria-label="Outbox history">
           <div class="section-heading">
             <h2>Outbox</h2>
             <p class="label">{{ outboxHistory.length }} sent or failed</p>
@@ -2141,13 +2377,8 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'knowledge'" id="panel-knowledge" class="tab-panel" role="tabpanel" aria-labelledby="tab-knowledge">
-        <nav class="section-nav" aria-label="Knowledge views">
-          <a class="section-nav-link" href="#knowledge-changes">Changes</a>
-          <a class="section-nav-link" href="#knowledge-browser">Browser</a>
-          <a class="section-nav-link" href="#knowledge-legacy">Legacy</a>
-        </nav>
-        <section id="knowledge-changes" class="activity-section" aria-label="Recent memory changes">
+      <section v-if="activeTab === 'knowledge'" id="panel-knowledge" class="tab-panel" role="tabpanel" aria-labelledby="tab-knowledge">
+        <section v-if="activeView === 'changes'" id="knowledge-changes" class="activity-section" aria-label="Recent memory changes">
           <div class="section-heading">
             <h2>Recent memory changes</h2>
             <p class="label">{{ memoryChanges.length }} changes</p>
@@ -2231,7 +2462,7 @@ onUnmounted(() => {
             </article>
           </div>
         </section>
-        <section id="knowledge-browser" class="activity-section" aria-label="Agent memory">
+        <section v-if="activeView === 'browser'" id="knowledge-browser" class="activity-section" aria-label="Agent memory">
           <div class="section-heading">
             <h2>Memory and knowledge</h2>
             <p class="label">{{ knowledgeFileEntries.length }} markdown files</p>
@@ -2335,7 +2566,7 @@ onUnmounted(() => {
           </section>
         </section>
 
-        <section v-if="memoryDocuments.length > 0" id="knowledge-legacy" class="activity-section" aria-label="Legacy memory records">
+        <section v-if="activeView === 'legacy' && memoryDocuments.length > 0" id="knowledge-legacy" class="activity-section" aria-label="Legacy memory records">
           <div class="section-heading">
             <h2>Legacy memory records</h2>
             <p class="label">{{ memoryDocuments.length }} documents</p>
@@ -2377,11 +2608,7 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'integrations'" id="panel-integrations" class="tab-panel" role="tabpanel" aria-labelledby="tab-integrations">
-        <nav class="section-nav" aria-label="Integration views">
-          <a class="section-nav-link" href="#integrations-senders">Sender trust</a>
-          <a class="section-nav-link" href="#integrations-connectors">Connectors</a>
-        </nav>
+      <section v-if="activeTab === 'integrations' && activeView === 'senders'" id="panel-integrations" class="tab-panel" role="tabpanel" aria-labelledby="tab-integrations">
         <section id="integrations-senders" class="activity-section" aria-label="Sender trust">
           <div class="section-heading">
             <h2>Sender trust</h2>
@@ -2439,13 +2666,8 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'operations'" id="panel-operations" class="tab-panel" role="tabpanel" aria-labelledby="tab-operations">
-        <nav class="section-nav" aria-label="Operations views">
-          <a class="section-nav-link" href="#operations-status">Status</a>
-          <a class="section-nav-link" href="#operations-jobs">Jobs</a>
-          <a class="section-nav-link" href="#operations-logs">Logs</a>
-        </nav>
-        <section id="operations-status" class="activity-section" aria-label="RAG index status">
+      <section v-if="activeTab === 'operations' && (activeView === 'status' || activeView === 'jobs')" id="panel-operations" class="tab-panel" role="tabpanel" aria-labelledby="tab-operations">
+        <section v-if="activeView === 'status'" id="operations-status" class="activity-section" aria-label="RAG index status">
           <div class="section-heading">
             <h2>RAG and index status</h2>
             <p class="label">{{ knowledgeDocument ? knowledgeDocument.path : "No file selected" }}</p>
@@ -2564,7 +2786,7 @@ onUnmounted(() => {
           </table>
         </section>
 
-        <section id="operations-jobs" class="activity-section" aria-label="Worker jobs">
+        <section v-if="activeView === 'jobs'" id="operations-jobs" class="activity-section" aria-label="Worker jobs">
           <div class="section-heading">
             <h2>Worker jobs</h2>
           </div>
@@ -2596,7 +2818,7 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'operations'" id="panel-operations-logs" class="tab-panel" aria-labelledby="tab-operations">
+      <section v-if="activeTab === 'operations' && activeView === 'logs'" id="panel-operations-logs" class="tab-panel" role="tabpanel" aria-labelledby="tab-operations">
         <section id="operations-logs" class="activity-section" aria-label="Agent runs">
           <div class="section-heading">
             <h2>Agent runs</h2>
@@ -2685,7 +2907,7 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'integrations'" id="panel-integrations-connectors" class="tab-panel" aria-labelledby="tab-integrations">
+      <section v-if="activeTab === 'integrations' && activeView === 'connectors'" id="panel-integrations-connectors" class="tab-panel" role="tabpanel" aria-labelledby="tab-integrations">
         <section id="integrations-connectors" class="activity-section" aria-label="Connector configuration">
           <div class="section-heading">
             <h2>Connector configuration</h2>
@@ -2835,7 +3057,7 @@ onUnmounted(() => {
         </section>
       </section>
 
-      <section v-show="activeTab === 'settings'" id="panel-settings" class="tab-panel" role="tabpanel" aria-labelledby="tab-settings">
+      <section v-if="activeTab === 'settings' && activeView === 'ai'" id="panel-settings" class="tab-panel" role="tabpanel" aria-labelledby="tab-settings">
         <section v-if="aiConfig" class="activity-section" aria-label="AI configuration">
           <div class="section-heading">
             <h2>AI configuration</h2>

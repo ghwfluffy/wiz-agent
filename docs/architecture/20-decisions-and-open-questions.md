@@ -10,6 +10,13 @@
 - Zod owns runtime schemas for config, API payloads, and tool contracts.
 - Vitest is used for backend and frontend tests.
 - Frontend is Vue 3, Vite, TypeScript, Pinia, Vue Router, and Carbon.
+- The authenticated web workspace uses route-backed focused surfaces. `tab`
+  selects Chat, Attention, Work, Knowledge, Integrations, Operations, or
+  Settings, and `view` selects one tool within that section; inactive tools are
+  unmounted instead of composing one long dashboard page.
+- Mobile workspace navigation is a collapsed left-edge trigger and modal
+  off-canvas drawer with expandable second-level tool menus. Desktop presents
+  the same route model with visible section and tool selectors.
 - Local development starts in `AUTH_MODE=standalone`.
 - Standalone mode has one development user.
 - Standalone sign-in uses a development-only endpoint, not passwords.

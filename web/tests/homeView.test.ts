@@ -1,10 +1,12 @@
-import { mount, flushPromises } from "@vue/test-utils";
+import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
 import { createPinia, setActivePinia } from "pinia";
 import { createMemoryHistory, createRouter } from "vue-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import HomeView from "../src/views/HomeView.vue";
 
 describe("home view", () => {
+  const mountedWrappers: VueWrapper[] = [];
+
   beforeEach(() => {
     setActivePinia(createPinia());
     vi.unstubAllGlobals();
@@ -12,10 +14,13 @@ describe("home view", () => {
   });
 
   afterEach(() => {
+    for (const wrapper of mountedWrappers.splice(0)) {
+      wrapper.unmount();
+    }
     vi.useRealTimers();
   });
 
-  async function mountHome(path = "/") {
+  async function mountHome(path = "/", attachToDocument = false) {
     const router = createRouter({
       history: createMemoryHistory(),
       routes: [{ path: "/", component: HomeView }]
@@ -23,14 +28,16 @@ describe("home view", () => {
     router.push(path);
     await router.isReady();
     const wrapper = mount(HomeView, {
+      ...(attachToDocument ? { attachTo: document.body } : {}),
       global: {
         plugins: [router]
       }
     });
+    mountedWrappers.push(wrapper);
     return { router, wrapper };
   }
 
-  it("loads operational dashboard data after restoring an authenticated session", async () => {
+  it("opens a focused chat after restoring an authenticated session", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({
         ok: true,
@@ -136,9 +143,10 @@ describe("home view", () => {
     await flushPromises();
 
     expect(wrapper.get("#tab-chat").attributes("aria-selected")).toBe("true");
-    expect(wrapper.text()).toContain("Check in");
-    expect(wrapper.text()).toContain("sms");
-    expect(wrapper.text()).toContain("sms@example.test");
+    expect(wrapper.get("#mobile-nav-toggle").attributes("aria-expanded")).toBe("false");
+    expect(wrapper.find("#mobile-assistant-nav").exists()).toBe(false);
+    expect(wrapper.find("#panel-chat").exists()).toBe(true);
+    expect(wrapper.text()).toContain("How can I help?");
     expect(wrapper.text()).toContain("Chat");
     expect(wrapper.text()).toContain("Attention");
     expect(wrapper.text()).toContain("Work");
@@ -146,16 +154,9 @@ describe("home view", () => {
     expect(wrapper.text()).toContain("Integrations");
     expect(wrapper.text()).toContain("Operations");
     expect(wrapper.text()).toContain("Settings");
-    expect(wrapper.text()).toContain("Memory changes");
-    expect(wrapper.text()).toContain("owner@example.test");
-    expect(wrapper.text()).toContain("AI configuration");
-    expect(wrapper.text()).toContain("Connector configuration");
-    expect(wrapper.text()).toContain("please approve");
-    expect(wrapper.text()).toContain("Owner review not sent");
-    expect(wrapper.text()).toContain("Notify owner");
-    expect(wrapper.text()).toContain("sent@example.test");
-    expect(wrapper.text()).toContain("SMTP error");
-    expect(wrapper.text()).toContain("Newsletter Preferences");
+    expect(wrapper.text()).not.toContain("Check in");
+    expect(wrapper.text()).not.toContain("Connector configuration");
+    expect(wrapper.text()).not.toContain("Newsletter Preferences");
   });
 
   it("preserves edited AI config values across admin refreshes before saving", async () => {
@@ -347,7 +348,7 @@ describe("home view", () => {
     expect(wrapper.find("#overview-agent-prompt").exists()).toBe(false);
   });
 
-  it("keeps the active dashboard tab in the route query", async () => {
+  it("keeps the focused dashboard view in the route query", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes("/auth/me")) {
@@ -391,12 +392,110 @@ describe("home view", () => {
     await flushPromises();
 
     expect(wrapper.get("#tab-attention").attributes("aria-selected")).toBe("true");
+    expect(wrapper.find("#attention-outbound").exists()).toBe(true);
+    expect(wrapper.find("#attention-summary").exists()).toBe(false);
 
     await wrapper.get("#tab-work").trigger("click");
     await flushPromises();
 
     expect(router.currentRoute.value.query.tab).toBe("work");
+    expect(router.currentRoute.value.query.view).toBe("tasks");
     expect(wrapper.get("#tab-work").attributes("aria-selected")).toBe("true");
+    expect(wrapper.find("#work-tasks").exists()).toBe(true);
+    expect(wrapper.find("#work-create").exists()).toBe(false);
+    expect(wrapper.find("#work-outbox").exists()).toBe(false);
+  });
+
+  it("drills through the collapsed mobile navigator to one focused view", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/tasks")) {
+        return { ok: true, json: async () => ({ tasks: [] }) };
+      }
+      if (url.includes("/messages") || url.includes("/outbox")) {
+        return { ok: true, json: async () => ({ messages: [] }) };
+      }
+      if (url.includes("/audit")) {
+        return { ok: true, json: async () => ({ events: [] }) };
+      }
+      if (url.includes("/senders")) {
+        return { ok: true, json: async () => ({ senders: [] }) };
+      }
+      if (url.includes("/connectors")) {
+        return { ok: true, json: async () => ({ connectors: [] }) };
+      }
+      if (url.includes("/admin/ai-config")) {
+        return { ok: true, json: async () => null };
+      }
+      if (url.includes("/jobs")) {
+        return { ok: true, json: async () => ({ jobs: [] }) };
+      }
+      if (url.includes("/memory")) {
+        return { ok: true, json: async () => ({ documents: [] }) };
+      }
+      return { ok: true, json: async () => ({}) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const { router, wrapper } = await mountHome("/", true);
+    await flushPromises();
+
+    expect(wrapper.find("#mobile-assistant-nav").exists()).toBe(false);
+    await wrapper.get("#mobile-nav-toggle").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.get("#mobile-nav-toggle").attributes("aria-expanded")).toBe("true");
+    expect(wrapper.get("#mobile-assistant-nav").text()).toContain("Choose a view");
+    expect(document.activeElement).toBe(wrapper.get(".mobile-nav-close").element);
+    expect(document.body.classList.contains("mobile-nav-open")).toBe(true);
+
+    const workButton = wrapper.findAll(".mobile-nav-section").find((button) => button.text().includes("Work"));
+    expect(workButton).toBeTruthy();
+    await workButton!.trigger("click");
+
+    const createButton = wrapper.findAll(".mobile-nav-view").find((button) => button.text() === "Add task");
+    expect(createButton).toBeTruthy();
+    await createButton!.trigger("click");
+    await flushPromises();
+
+    expect(router.currentRoute.value.query).toMatchObject({ tab: "work", view: "create" });
+    expect(wrapper.find("#mobile-assistant-nav").exists()).toBe(false);
+    expect(wrapper.find("#work-create").exists()).toBe(true);
+    expect(wrapper.find("#work-tasks").exists()).toBe(false);
+    expect(wrapper.find("#work-outbox").exists()).toBe(false);
+    expect(document.activeElement).toBe(wrapper.get("#mobile-nav-toggle").element);
+    expect(document.body.classList.contains("mobile-nav-open")).toBe(false);
+  });
+
+  it("closes the mobile navigator with Escape and restores trigger focus", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/auth/me")) {
+        return { ok: true, json: async () => ({ authenticated: true, user: { id: "u1", email: "u@example.test", displayName: "User", isAdmin: true } }) };
+      }
+      if (url.includes("/tasks")) return { ok: true, json: async () => ({ tasks: [] }) };
+      if (url.includes("/messages") || url.includes("/outbox")) return { ok: true, json: async () => ({ messages: [] }) };
+      if (url.includes("/audit")) return { ok: true, json: async () => ({ events: [] }) };
+      if (url.includes("/senders")) return { ok: true, json: async () => ({ senders: [] }) };
+      if (url.includes("/connectors")) return { ok: true, json: async () => ({ connectors: [] }) };
+      if (url.includes("/jobs")) return { ok: true, json: async () => ({ jobs: [] }) };
+      if (url.includes("/memory")) return { ok: true, json: async () => ({ documents: [] }) };
+      return { ok: true, json: async () => ({}) };
+    }));
+
+    const { wrapper } = await mountHome("/", true);
+    await flushPromises();
+    await wrapper.get("#mobile-nav-toggle").trigger("click");
+    await flushPromises();
+    await wrapper.get("#mobile-assistant-nav").trigger("keydown", { key: "Escape" });
+    await flushPromises();
+
+    expect(wrapper.find("#mobile-assistant-nav").exists()).toBe(false);
+    expect(document.activeElement).toBe(wrapper.get("#mobile-nav-toggle").element);
+    expect(document.body.classList.contains("mobile-nav-open")).toBe(false);
   });
 
   it("keeps account connector settings on the integrations tab", async () => {
@@ -422,7 +521,7 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=integrations");
+    const { wrapper } = await mountHome("/?tab=integrations&view=connectors");
     await flushPromises();
 
     expect(wrapper.get("#tab-integrations").attributes("aria-selected")).toBe("true");
@@ -474,7 +573,7 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=knowledge");
+    const { wrapper } = await mountHome("/?tab=knowledge&view=legacy");
     await flushPromises();
 
     expect(wrapper.get("#tab-knowledge").attributes("aria-selected")).toBe("true");
@@ -565,7 +664,7 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=knowledge");
+    const { wrapper } = await mountHome("/?tab=knowledge&view=changes");
     await flushPromises();
 
     expect(wrapper.text()).toContain("Recent memory changes");
@@ -627,7 +726,7 @@ describe("home view", () => {
     vi.stubGlobal("fetch", fetchMock);
     vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    const { wrapper } = await mountHome("/?tab=integrations");
+    const { wrapper } = await mountHome("/?tab=integrations&view=senders");
     await flushPromises();
 
     await wrapper.get("#sender-address").setValue("friend@example.test");
@@ -716,7 +815,7 @@ describe("home view", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
 
-    const { wrapper } = await mountHome("/?tab=integrations");
+    const { wrapper } = await mountHome("/?tab=integrations&view=connectors");
     await flushPromises();
 
     const testButton = wrapper.findAll("button").find((button) => button.text() === "Test IMAP");
