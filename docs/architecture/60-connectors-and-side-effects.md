@@ -236,9 +236,16 @@ the app is reading the owner's private personal mailbox.
 IMAP progress is stored on the per-user IMAP connector. The poller records
 `last_received_at` and `last_uid` after handled messages, then uses that progress
 on the next tick so it searches only newer mailbox entries instead of repeatedly
-walking old unread mail. IMAP `SINCE` is only day-granular, so the poller also
-checks each parsed message timestamp locally and skips messages that are not
-strictly newer than the stored `last_received_at`.
+walking old unread mail. Once `last_uid` exists, that UID cursor is authoritative:
+every fetched UID above the poll-start cursor is processed regardless of the
+message's RFC `Date`. This prevents delayed mail and messages with equal or
+out-of-order timestamps from being marked seen and lost. The timestamp watermark
+is only a legacy fallback for connectors that do not yet have a UID cursor. In
+that fallback mode, IMAP `SINCE` is day-granular, so the poller also checks each
+parsed message timestamp locally and skips messages that are not strictly newer
+than the stored `last_received_at`. Progress updates keep both watermarks
+monotonic, and normal inbound provider-id deduplication remains the final defense
+against repeated side effects.
 
 The worker entrypoint must start whether Node receives an absolute or relative
 script path from `npm run worker:start`; otherwise queued outbox records and IMAP

@@ -82,7 +82,12 @@ Current tests cover:
 - live config seeding from ignored connector files.
 - user-managed connector configuration with API-redacted credentials.
 - IMAP settings tests with redacted provider errors.
-- incremental IMAP search criteria from stored mailbox progress.
+- incremental IMAP search criteria from stored mailbox progress, including UID
+  cursor precedence over older or equal RFC message dates.
+- end-to-end delayed-newsletter polling coverage that verifies a UID-new trusted
+  message is recorded as `newsletter`/`accepted_newsletter`, written under
+  `/newsletters` with pending RAG indexing, marked seen only after ingestion,
+  and never routed as an owner instruction or immediate owner action.
 - IMAP attachment metadata extraction without raw attachment persistence.
 - worker IMAP failure audit visibility.
 - sender-table owner classification.

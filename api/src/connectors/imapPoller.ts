@@ -97,6 +97,12 @@ function numberFromConfig(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function validUidCursor(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.trunc(value)
+    : undefined;
+}
+
 function validDate(value: string | undefined): Date | undefined {
   if (!value) {
     return undefined;
@@ -106,8 +112,9 @@ function validDate(value: string | undefined): Date | undefined {
 }
 
 export function buildImapSearchCriteria(config: Pick<ImapConfig, "lastReceivedAt" | "lastUid">): SearchObject {
-  if (typeof config.lastUid === "number" && Number.isFinite(config.lastUid) && config.lastUid > 0) {
-    return { uid: `${Math.trunc(config.lastUid) + 1}:*` };
+  const lastUid = validUidCursor(config.lastUid);
+  if (lastUid !== undefined) {
+    return { uid: `${lastUid + 1}:*` };
   }
   const lastReceivedAt = validDate(config.lastReceivedAt);
   if (lastReceivedAt) {
@@ -361,6 +368,7 @@ export async function processImapInbox(options: {
   if (!config.host || !config.username || !config.password) {
     return { configured: false, attempted: 0, recorded: 0, failed: 0 };
   }
+  const uidCursor = validUidCursor(config.lastUid);
 
   const client = new ImapFlow({
     host: config.host,
@@ -416,7 +424,10 @@ export async function processImapInbox(options: {
               ? await sanitizedOwnerAttachments(parsed)
               : metadataForParsedAttachments(parsed)
           };
-          if (!isNewerThanLastReceived(inbound.receivedAt ?? "", config.lastReceivedAt)) {
+          const isAlreadyConsumed = uidCursor !== undefined
+            ? message.uid <= uidCursor
+            : !isNewerThanLastReceived(inbound.receivedAt ?? "", config.lastReceivedAt);
+          if (isAlreadyConsumed) {
             await updateImapProgress({
               store: options.store,
               context: options.context,
