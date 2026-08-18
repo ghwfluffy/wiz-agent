@@ -13,7 +13,13 @@ import {
   OUTBOUND_CONVERSATION_THREAD_MIGRATION_ID,
   OUTBOUND_CONVERSATION_THREAD_SQL,
   WEB_RESEARCH_SESSIONS_MIGRATION_ID,
-  WEB_RESEARCH_SESSIONS_SQL
+  WEB_RESEARCH_SESSIONS_SQL,
+  OUTBOUND_PROACTIVE_ORIGIN_MIGRATION_ID,
+  OUTBOUND_PROACTIVE_ORIGIN_SQL,
+  RAG_JOB_COALESCING_MIGRATION_ID,
+  RAG_JOB_COALESCING_SQL,
+  OUTBOUND_DEDUPE_KEY_MIGRATION_ID,
+  OUTBOUND_DEDUPE_KEY_SQL
 } from "../src/db/migrations.js";
 import { INITIAL_SCHEMA_SQL } from "../src/db/schema.js";
 
@@ -80,6 +86,11 @@ describe("initial schema", () => {
     expect(INITIAL_SCHEMA_SQL).toContain("conversation_thread_id TEXT REFERENCES conversation_threads(id)");
     expect(INITIAL_SCHEMA_SQL).toContain("bundle_json JSONB NOT NULL");
     expect(INITIAL_SCHEMA_SQL).toContain("idx_web_research_sessions_thread_created");
+    expect(INITIAL_SCHEMA_SQL).toContain("origin TEXT NOT NULL DEFAULT 'legacy'");
+    expect(INITIAL_SCHEMA_SQL).toContain("is_proactive BOOLEAN NOT NULL DEFAULT false");
+    expect(INITIAL_SCHEMA_SQL).toContain("dedupe_key TEXT");
+    expect(INITIAL_SCHEMA_SQL).toContain("delivery_attempts INTEGER NOT NULL DEFAULT 0");
+    expect(INITIAL_SCHEMA_SQL).toContain("next_delivery_attempt_at TIMESTAMPTZ");
   });
 
   it("defines the tenant-collapse migration", () => {
@@ -128,5 +139,27 @@ describe("initial schema", () => {
     expect(WEB_RESEARCH_SESSIONS_SQL).toContain("CREATE TABLE IF NOT EXISTS web_research_sessions");
     expect(WEB_RESEARCH_SESSIONS_SQL).toContain("taint TEXT NOT NULL DEFAULT 'external_web'");
     expect(WEB_RESEARCH_SESSIONS_SQL).toContain("idx_web_research_sessions_thread_created");
+  });
+
+  it("persists outbound origin and proactive classification", () => {
+    expect(OUTBOUND_PROACTIVE_ORIGIN_MIGRATION_ID).toBe("0012_outbound_proactive_origin");
+    expect(OUTBOUND_PROACTIVE_ORIGIN_SQL).toContain("ADD COLUMN IF NOT EXISTS origin TEXT");
+    expect(OUTBOUND_PROACTIVE_ORIGIN_SQL).toContain("ADD COLUMN IF NOT EXISTS is_proactive BOOLEAN");
+    expect(OUTBOUND_PROACTIVE_ORIGIN_SQL).toContain("idx_outbound_messages_user_proactive_created");
+  });
+
+  it("coalesces superseded pending RAG index jobs", () => {
+    expect(RAG_JOB_COALESCING_MIGRATION_ID).toBe("0013_rag_job_coalescing");
+    expect(RAG_JOB_COALESCING_SQL).toContain("DELETE FROM rag_index_jobs");
+    expect(RAG_JOB_COALESCING_SQL).toContain("idx_rag_index_jobs_active_document_request");
+  });
+
+  it("adds idempotent, retryable daily outbound delivery metadata", () => {
+    expect(OUTBOUND_DEDUPE_KEY_MIGRATION_ID).toBe("0014_outbound_dedupe_key");
+    expect(OUTBOUND_DEDUPE_KEY_SQL).toContain("ADD COLUMN IF NOT EXISTS dedupe_key TEXT");
+    expect(OUTBOUND_DEDUPE_KEY_SQL).toContain("ADD COLUMN IF NOT EXISTS delivery_attempts INTEGER");
+    expect(OUTBOUND_DEDUPE_KEY_SQL).toContain("idx_outbound_messages_user_dedupe_key");
+    expect(OUTBOUND_DEDUPE_KEY_SQL).toContain("idx_outbound_messages_delivery_retry");
+    expect(INITIAL_SCHEMA_SQL).not.toContain("idx_outbound_messages_user_dedupe_key");
   });
 });

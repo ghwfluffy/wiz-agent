@@ -184,7 +184,10 @@ Owner-visible outbox records use the dedicated
 thread. The older `conversation_id` column remains reserved for legacy generic
 conversations; thread ids must never be written into that column. This keeps
 outbound transcript context linked without crossing the two conversation
-models.
+models. Outbox rows also persist origin and proactive classification for
+cadence/budget accounting. Daily check-ins add a unique per-user/local-date
+dedupe key plus delivery-attempt and next-attempt fields for bounded retry on
+one durable row.
 
 Model-facing thread mutations go through controlled tools. The host resolves
 user scope from the MCP session and validates linked tasks, messages, and
@@ -236,9 +239,13 @@ handling state. Unknown newsletter-like senders start as `untrusted` and queue
 owner review. Owner replies can mark the sender as `newsletter` or `blocked`.
 Accepted newsletters create markdown knowledge records under
 `/newsletters/YYYY-MM-DD/*.md`; they enqueue normal RAG indexing but do not
-create immediate owner notifications. A separate scheduled newsletter interest
-check may later run isolated public research for a high-interest item and queue
-only the sanitized cited result to MMS, or stay quiet and record an observation.
+create immediate owner notifications. A separate daily conversational check-in
+may later run isolated public research for a high-interest item and use the
+sanitized cited result as an icebreaker. Host code always includes a casual
+"What's up?" invitation, prefers MMS with SMS/email fallback, and otherwise uses
+a fixed generic check-in. Its validated per-owner/local-date dedupe key bypasses
+only the generic rolling proactive budget, preventing unrelated outreach from
+suppressing the required daily row while preserving all other delivery controls.
 
 Sender trust rows are explicit user-owned classifications for known addresses.
 They can be created, updated, listed, and deleted through the API and operations
@@ -255,10 +262,10 @@ writes enqueue `rag_index_jobs` so derived vector state can be reconciled later.
 No actual filesystem files are created.
 
 Markdown paths are user-owned and scoped by `users.id`, for example
-`/personal/profile.md`, `/preferences/newsletters.md`,
+`/personal/profile.md`, `/assistant/preferences/newsletters.md`,
 `/assistant/schedule.md`, `/assistant/notification-policy.md`,
 `/tasks/schedule-rationale.md`, `/projects/<project>/decisions.md`, and
-`/newsletters/YYYY-MM-DD/source.md`. Directory listing and tree APIs are virtual
+`/newsletters/YYYY-MM-DD/source-0123abcd.md`. Directory listing and tree APIs are virtual
 views over those path strings. Deleted markdown rows are omitted from directory
 and tree reads.
 
@@ -329,6 +336,11 @@ existing rows:
 - `agent-schedule` -> `/assistant/schedule.md`
 - `newsletters-YYYY-MM-DD-*` -> `/newsletters/YYYY-MM-DD/*.md`
 - other slugs -> `/legacy/<slug>.md`
+
+The `/preferences/newsletters.md` mapping above is retained only for historical
+legacy-memory backfill compatibility. New controlled newsletter-preference
+writes use `/assistant/preferences/newsletters.md`, which is the canonical path
+read by scheduled newsletter selection and owner-conversation personalization.
 
 Owner messages can update durable memory only through controlled host-owned
 workflows or MCP/tool calls. Trusted newsletter content is knowledge input, not

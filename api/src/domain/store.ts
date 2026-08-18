@@ -465,6 +465,13 @@ function outboundFromRow(row: Record<string, unknown>): OutboundMessageRecord {
     approvalId: row.approval_id ? String(row.approval_id) : null,
     channel: row.channel as OutboundMessageRecord["channel"],
     status: row.status as OutboundMessageRecord["status"],
+    origin: row.origin ? String(row.origin) : "legacy",
+    isProactive: row.is_proactive === true,
+    dedupeKey: row.dedupe_key ? String(row.dedupe_key) : null,
+    deliveryAttempts: Number(row.delivery_attempts ?? 0),
+    nextDeliveryAttemptAt: row.next_delivery_attempt_at instanceof Date
+      ? row.next_delivery_attempt_at.toISOString()
+      : row.next_delivery_attempt_at ? String(row.next_delivery_attempt_at) : null,
     toAddr: String(row.to_addr),
     subject: row.subject ? String(row.subject) : null,
     bodyText: String(row.body_text),
@@ -778,6 +785,7 @@ function contextForAgentSession(session: AgentMcpSession): RequestContext {
         id: session.userId,
         email: "",
         displayName: "Agent MCP Session",
+        timezone: "UTC",
         isAdmin: false
       },
       createdAt: nowIso(),
@@ -827,6 +835,7 @@ function userFromRow(row: Record<string, unknown>): AuthenticatedUser {
     id: String(row.id),
     email: String(row.email),
     displayName: String(row.display_name),
+    timezone: row.timezone ? String(row.timezone) : "UTC",
     isAdmin: Boolean(row.is_admin)
   };
 }
@@ -916,7 +925,8 @@ async function enqueueMarkdownIndexJob(
   await queryable.query(
     `INSERT INTO rag_index_jobs
       (id, user_id, document_id, requested_version, requested_content_hash, job_type)
-     VALUES ($1, $2, $3, $4, $5, 'index_markdown')`,
+     VALUES ($1, $2, $3, $4, $5, 'index_markdown')
+     ON CONFLICT DO NOTHING`,
     [randomUUID(), context.userId, document.id, document.version, document.contentHash]
   );
 }
@@ -1094,15 +1104,17 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
       const expiresAt = new Date(now.getTime() + settings.sessionDurationMinutes * 60_000);
       const sessionId = randomUUID();
       const userId = `oauth:${input.identityProvider}:${input.subject}`;
-      await pool.query(
-        `INSERT INTO users (id, email, display_name, is_admin)
-         VALUES ($1, lower($2), $3, $4)
+      const userResult = await pool.query(
+        `INSERT INTO users (id, email, display_name, timezone, is_admin)
+         VALUES ($1, lower($2), $3, COALESCE(NULLIF($5, ''), 'UTC'), $4)
          ON CONFLICT (id) DO UPDATE
            SET email = EXCLUDED.email,
                display_name = EXCLUDED.display_name,
+               timezone = CASE WHEN NULLIF($5, '') IS NULL THEN users.timezone ELSE EXCLUDED.timezone END,
                is_admin = EXCLUDED.is_admin,
-               updated_at = now()`,
-        [userId, input.email, input.displayName, input.isAdmin]
+               updated_at = now()
+         RETURNING timezone`,
+        [userId, input.email, input.displayName, input.isAdmin, input.timezone ?? null]
       );
       await pool.query(
         `INSERT INTO identities (id, user_id, kind, value, verified_at, is_primary)
@@ -1137,6 +1149,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
           id: userId,
           email: input.email,
           displayName: input.displayName,
+          timezone: userResult.rows[0]?.timezone ? String(userResult.rows[0].timezone) : "UTC",
           isAdmin: input.isAdmin
         },
         createdAt: now.toISOString(),
@@ -1155,6 +1168,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
            u.id AS user_id,
            u.email,
            u.display_name,
+           u.timezone,
            u.is_admin
          FROM sessions s
          JOIN users u ON u.id = s.user_id
@@ -1174,6 +1188,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
           id: String(row.user_id),
           email: String(row.email),
           displayName: String(row.display_name),
+          timezone: row.timezone ? String(row.timezone) : "UTC",
           isAdmin: Boolean(row.is_admin)
         },
         createdAt: row.created_at instanceof Date ? row.created_at.toISOString() : String(row.created_at),
@@ -1796,7 +1811,8 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
         await client.query(
           `INSERT INTO rag_index_jobs
             (id, user_id, document_id, requested_version, requested_content_hash, job_type)
-           VALUES ($1, $2, $3, $4, $5, 'delete_markdown')`,
+           VALUES ($1, $2, $3, $4, $5, 'delete_markdown')
+           ON CONFLICT DO NOTHING`,
           [randomUUID(), context.userId, row.id, row.version, row.content_hash]
         );
         await client.query("COMMIT");
@@ -2152,21 +2168,41 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
         [context.userId, documentId]
       );
       const row = document.rows[0] as Record<string, unknown> | undefined;
+      const params = [
+        randomUUID(),
+        context.userId,
+        documentId,
+        row?.version ?? null,
+        row?.content_hash ?? null,
+        jobType
+      ];
       const result = await pool.query(
         `INSERT INTO rag_index_jobs
           (id, user_id, document_id, requested_version, requested_content_hash, job_type)
          VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT DO NOTHING
          RETURNING *`,
-        [
-          randomUUID(),
-          context.userId,
-          documentId,
-          row?.version ?? null,
-          row?.content_hash ?? null,
-          jobType
-        ]
+        params
       );
-      return ragIndexJobFromRow(result.rows[0]);
+      if (result.rows[0]) {
+        return ragIndexJobFromRow(result.rows[0]);
+      }
+      const existing = await pool.query(
+        `SELECT *
+         FROM rag_index_jobs
+         WHERE user_id = $1
+           AND document_id = $2
+           AND job_type = $3
+           AND requested_version IS NOT DISTINCT FROM $4
+           AND requested_content_hash IS NOT DISTINCT FROM $5
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [context.userId, documentId, jobType, row?.version ?? null, row?.content_hash ?? null]
+      );
+      if (!existing.rows[0]) {
+        throw new Error("RAG index job could not be enqueued or resolved.");
+      }
+      return ragIndexJobFromRow(existing.rows[0]);
     },
 
     async claimRagIndexJobs(limit, now) {
@@ -2224,22 +2260,65 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
 
     async retryRagIndexJob(context, jobId, includeAllUsers = false) {
       const includeAll = includeAllUsers && context.permissions.includes("admin");
-      const result = await pool.query(
-        `UPDATE rag_index_jobs
+      let record: RagIndexJobRecord | undefined;
+      try {
+        const result = await pool.query(
+          `UPDATE rag_index_jobs target
          SET status = 'pending',
              available_at = now(),
              started_at = NULL,
              completed_at = NULL,
              last_error = NULL
-         WHERE id = $1
-           AND ($2 = true OR user_id = $3)
-           AND status IN ('failed', 'dead')
+         WHERE target.id = $1
+           AND ($2 = true OR target.user_id = $3)
+           AND target.status IN ('failed', 'dead')
+           AND NOT EXISTS (
+             SELECT 1
+             FROM rag_index_jobs active
+             WHERE active.id <> target.id
+               AND active.user_id = target.user_id
+               AND active.document_id = target.document_id
+               AND active.job_type = target.job_type
+               AND active.requested_version IS NOT DISTINCT FROM target.requested_version
+               AND active.requested_content_hash IS NOT DISTINCT FROM target.requested_content_hash
+               AND active.status IN ('pending', 'claimed')
+           )
          RETURNING *`,
-        [jobId, includeAll, context.userId]
-      );
-      const record = result.rows[0] ? ragIndexJobFromRow(result.rows[0]) : undefined;
+          [jobId, includeAll, context.userId]
+        );
+        record = result.rows[0] ? ragIndexJobFromRow(result.rows[0]) : undefined;
+      } catch (error) {
+        const code = typeof error === "object" && error !== null && "code" in error
+          ? String((error as { code?: unknown }).code ?? "")
+          : "";
+        if (code !== "23505") {
+          throw error;
+        }
+      }
+      if (!record) {
+        const existing = await pool.query(
+          `SELECT candidate.*
+           FROM rag_index_jobs requested
+           JOIN rag_index_jobs candidate
+             ON candidate.user_id = requested.user_id
+            AND candidate.document_id = requested.document_id
+            AND candidate.job_type = requested.job_type
+            AND candidate.requested_version IS NOT DISTINCT FROM requested.requested_version
+            AND candidate.requested_content_hash IS NOT DISTINCT FROM requested.requested_content_hash
+           WHERE requested.id = $1
+             AND ($2 = true OR requested.user_id = $3)
+             AND candidate.status IN ('pending', 'claimed', 'completed')
+           ORDER BY (candidate.id = requested.id) DESC, candidate.created_at DESC, candidate.id DESC
+           LIMIT 1`,
+          [jobId, includeAll, context.userId]
+        );
+        record = existing.rows[0] ? ragIndexJobFromRow(existing.rows[0]) : undefined;
+      }
       if (record) {
-        await recordAudit(pool, context, "rag.index_job.retry", "rag_index_job", record.id, {
+        await recordAudit(pool, context, "rag.index_job.retry", "rag_index_job", jobId, {
+          requested_job_id: jobId,
+          active_job_id: record.id,
+          reused_active_job: record.id !== jobId,
           target_user_id: record.userId,
           document_id: record.documentId,
           job_type: record.jobType,
@@ -2867,8 +2946,20 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
     async queueOutboundMessage(context, input) {
       const result = await pool.query(
         `INSERT INTO outbound_messages
-          (id, user_id, conversation_id, conversation_thread_id, approval_id, channel, status, to_addr, subject, body_text)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, lower($8), $9, $10)
+          (id, user_id, conversation_id, conversation_thread_id, approval_id, channel, status, origin,
+           is_proactive, dedupe_key, to_addr, subject, body_text)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, lower($11), $12, $13)
+         ON CONFLICT (user_id, dedupe_key) WHERE dedupe_key IS NOT NULL DO UPDATE
+           SET channel = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN EXCLUDED.channel ELSE outbound_messages.channel END,
+               status = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN 'pending' ELSE outbound_messages.status END,
+               origin = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN EXCLUDED.origin ELSE outbound_messages.origin END,
+               is_proactive = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN EXCLUDED.is_proactive ELSE outbound_messages.is_proactive END,
+               to_addr = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN EXCLUDED.to_addr ELSE outbound_messages.to_addr END,
+               subject = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN EXCLUDED.subject ELSE outbound_messages.subject END,
+               body_text = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN EXCLUDED.body_text ELSE outbound_messages.body_text END,
+               failure_message = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN NULL ELSE outbound_messages.failure_message END,
+               next_delivery_attempt_at = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN NULL ELSE outbound_messages.next_delivery_attempt_at END,
+               updated_at = CASE WHEN outbound_messages.status = 'failed' AND outbound_messages.delivery_attempts < 5 THEN now() ELSE outbound_messages.updated_at END
          RETURNING *`,
         [
           randomUUID(),
@@ -2878,6 +2969,9 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
           input.approvalId ?? null,
           input.channel,
           input.status,
+          input.origin ?? "unspecified",
+          input.isProactive ?? false,
+          input.dedupeKey?.trim() || null,
           input.toAddr,
           input.subject ?? null,
           input.bodyText
@@ -2886,7 +2980,10 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
       const record = outboundFromRow(result.rows[0]);
       await recordAudit(pool, context, "outbound.queue", "outbound_message", record.id, {
         channel: record.channel,
-        status: record.status
+        status: record.status,
+        origin: record.origin,
+        is_proactive: record.isProactive,
+        dedupe_key: record.dedupeKey
       });
       return record;
     },
@@ -2913,6 +3010,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
          FROM outbound_messages
          WHERE user_id = $1
            AND created_at >= $2
+           AND is_proactive = true
            AND status = ANY($3::text[])`,
         [
           context.userId,
@@ -2932,16 +3030,17 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
       return result.rows.map(userFromRow);
     },
 
-    async updateOutboundMessageStatus(context, messageId, status, failureMessage = null) {
+    async updateOutboundMessageStatus(context, messageId, status, failureMessage = null, nextDeliveryAttemptAt = null) {
       const result = await pool.query(
         `UPDATE outbound_messages
          SET status = $3,
              failure_message = $4,
+             next_delivery_attempt_at = $5,
              sent_at = CASE WHEN $3 = 'sent' THEN now() ELSE sent_at END,
              updated_at = now()
          WHERE id = $1 AND user_id = $2
          RETURNING *`,
-        [messageId, context.userId, status, failureMessage]
+        [messageId, context.userId, status, failureMessage, nextDeliveryAttemptAt]
       );
       const record = result.rows[0] ? outboundFromRow(result.rows[0]) : undefined;
       if (record) {
@@ -2957,6 +3056,8 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
         `UPDATE outbound_messages
          SET status = 'sending',
              failure_message = NULL,
+             next_delivery_attempt_at = NULL,
+             delivery_attempts = delivery_attempts + 1,
              updated_at = now()
          WHERE id = $1
            AND user_id = $2
@@ -3348,12 +3449,14 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
     async createOauthSession(settings, input) {
       const now = new Date();
       const expiresAt = new Date(now.getTime() + settings.sessionDurationMinutes * 60_000);
+      const userId = `oauth:${input.identityProvider}:${input.subject}`;
       const session: Session = {
         id: randomUUID(),
         user: {
-          id: `oauth:${input.identityProvider}:${input.subject}`,
+          id: userId,
           email: input.email,
           displayName: input.displayName,
+          timezone: input.timezone ?? users.get(userId)?.timezone ?? "UTC",
           isAdmin: input.isAdmin
         },
         createdAt: now.toISOString(),
@@ -4089,18 +4192,33 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       if (!job) {
         return undefined;
       }
-      job.status = "pending";
-      job.availableAt = nowIso();
-      job.startedAt = null;
-      job.completedAt = null;
-      job.lastError = null;
-      pushAudit(context, "rag.index_job.retry", "rag_index_job", job.id, {
-        target_user_id: job.userId,
-        document_id: job.documentId,
-        job_type: job.jobType,
-        attempts: job.attempts
+      const active = markdownIndexJobs.find((entry) => {
+        return entry.id !== job.id
+          && entry.userId === job.userId
+          && entry.documentId === job.documentId
+          && entry.jobType === job.jobType
+          && entry.requestedVersion === job.requestedVersion
+          && entry.requestedContentHash === job.requestedContentHash
+          && ["pending", "claimed"].includes(entry.status);
       });
-      return { ...job };
+      const record = active ?? job;
+      if (!active) {
+        job.status = "pending";
+        job.availableAt = nowIso();
+        job.startedAt = null;
+        job.completedAt = null;
+        job.lastError = null;
+      }
+      pushAudit(context, "rag.index_job.retry", "rag_index_job", job.id, {
+        requested_job_id: job.id,
+        active_job_id: record.id,
+        reused_active_job: record.id !== job.id,
+        target_user_id: record.userId,
+        document_id: record.documentId,
+        job_type: record.jobType,
+        attempts: record.attempts
+      });
+      return { ...record };
     },
     async completeRagIndexJob(jobId) {
       const job = markdownIndexJobs.find((entry) => entry.id === jobId);
@@ -4491,10 +4609,46 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
     },
     async queueOutboundMessage(context, input) {
       const now = nowIso();
+      const dedupeKey = input.dedupeKey?.trim() || null;
+      const existing = dedupeKey
+        ? [...outboundMessages.values()].find((message) =>
+            message.userId === context.userId && message.dedupeKey === dedupeKey
+          )
+        : undefined;
+      if (existing) {
+        if (existing.status !== "failed" || existing.deliveryAttempts >= 5) {
+          return existing;
+        }
+        const retried: OutboundMessageRecord = {
+          ...existing,
+          channel: input.channel,
+          status: "pending",
+          origin: input.origin ?? existing.origin,
+          isProactive: input.isProactive ?? existing.isProactive,
+          toAddr: input.toAddr,
+          subject: input.subject ?? null,
+          bodyText: input.bodyText,
+          failureMessage: null,
+          nextDeliveryAttemptAt: null,
+          updatedAt: now
+        };
+        outboundMessages.set(existing.id, retried);
+        pushAudit(context, "outbound.queue_reused", "outbound_message", retried.id, {
+          dedupe_key: dedupeKey,
+          previous_status: existing.status,
+          status: retried.status
+        });
+        return retried;
+      }
       const message: OutboundMessageRecord = {
         ...input,
         id: randomUUID(),
         userId: context.userId,
+        origin: input.origin ?? "unspecified",
+        isProactive: input.isProactive ?? false,
+        dedupeKey,
+        deliveryAttempts: 0,
+        nextDeliveryAttemptAt: null,
         conversationId: input.conversationId ?? null,
         conversationThreadId: input.conversationThreadId ?? null,
         approvalId: input.approvalId ?? null,
@@ -4507,7 +4661,10 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       outboundMessages.set(message.id, message);
       pushAudit(context, "outbound.queue", "outbound_message", message.id, {
         channel: message.channel,
-        status: message.status
+        status: message.status,
+        origin: message.origin,
+        is_proactive: message.isProactive,
+        dedupe_key: message.dedupeKey
       });
       return message;
     },
@@ -4525,6 +4682,7 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       return [...outboundMessages.values()]
         .filter((message) =>
           message.userId === context.userId &&
+          message.isProactive &&
           statuses.has(message.status) &&
           Date.parse(message.createdAt) >= since.getTime()
         )
@@ -4534,7 +4692,7 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
       return [...users.values()]
         .sort((a, b) => a.email.localeCompare(b.email));
     },
-    async updateOutboundMessageStatus(context, messageId, status, failureMessage = null) {
+    async updateOutboundMessageStatus(context, messageId, status, failureMessage = null, nextDeliveryAttemptAt = null) {
       const message = outboundMessages.get(messageId);
       if (!message || message.userId !== context.userId) {
         return undefined;
@@ -4544,7 +4702,8 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
         status,
         updatedAt: nowIso(),
         sentAt: status === "sent" ? nowIso() : message.sentAt,
-        failureMessage
+        failureMessage,
+        nextDeliveryAttemptAt
       };
       outboundMessages.set(messageId, updated);
       pushAudit(context, `outbound.${status}`, "outbound_message", messageId, {
@@ -4565,7 +4724,9 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
         ...message,
         status: "sending" as const,
         updatedAt: nowIso(),
-        failureMessage: null
+        failureMessage: null,
+        nextDeliveryAttemptAt: null,
+        deliveryAttempts: message.deliveryAttempts + 1
       };
       outboundMessages.set(messageId, updated);
       pushAudit(context, "outbound.sending", "outbound_message", messageId, {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildScheduledTaskPrompt } from "../src/scheduler/autonomousTasks.js";
+import { buildScheduledTaskPrompt, DAILY_CHECK_IN_TITLE } from "../src/scheduler/autonomousTasks.js";
 import { createAgentSimulation } from "./helpers/agentSimulation.js";
 
 describe("agent simulation harness", () => {
@@ -61,17 +61,21 @@ describe("agent simulation harness", () => {
 
     expect(inbound).toMatchObject({ classification: "newsletter", action: "accepted_newsletter" });
     expect((await sim.snapshot()).inbound[0]).toMatchObject({ source: "email" });
-    await sim.expectMarkdown("/newsletters/2026-06-13/infra-weekly.md", /knowledge input only/);
+    const newsletterFiles = await sim.store.listMarkdownDirectory(sim.ownerContext, "/newsletters/2026-06-13");
+    expect(newsletterFiles).toHaveLength(1);
+    const newsletterPath = newsletterFiles[0]!.path;
+    expect(newsletterPath).toMatch(/^\/newsletters\/2026-06-13\/infra-weekly-[a-f0-9]{12}\.md$/);
+    await sim.expectMarkdown(newsletterPath, /knowledge input only/);
     let snapshot = await sim.snapshot();
     expect(snapshot.runs).toHaveLength(0);
     expect(snapshot.outbound).toHaveLength(0);
 
     await sim.runWorkerTick();
     sim.advanceTime(5 * 60 * 60 * 1000);
-    await sim.makeTaskDue("Newsletter interest check");
+    await sim.makeTaskDue(DAILY_CHECK_IN_TITLE);
     sim.model.stageToolCall("web_research", {
       query: "What caused the database outage and what safeguards did the recovery add?",
-      sourceNewsletterPaths: ["/newsletters/2026-06-13/infra-weekly.md"],
+      sourceNewsletterPaths: [newsletterPath],
       rationale: "The incident analysis is specific and likely useful to the owner."
     });
 
@@ -91,7 +95,7 @@ describe("agent simulation harness", () => {
     expect(await sim.store.listWebResearchSessions(sim.ownerContext, { includeExpired: true })).toEqual([
       expect.objectContaining({
         purpose: "newsletter_enrichment",
-        sourceMarkdownPaths: ["/newsletters/2026-06-13/infra-weekly.md"],
+        sourceMarkdownPaths: [newsletterPath],
         outboundMessageId: snapshot.outbound[0]?.id
       })
     ]);

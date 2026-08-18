@@ -41,27 +41,44 @@ review from the last 48 hours. Host code, not the model, updates sender trust.
 
 Trusted newsletter messages are written directly to the markdown knowledge
 filesystem under absolute dated paths such as
-`/newsletters/2026-06-13/forbes.md`. Source ingestion stores the normalized
-newsletter content plus trust-boundary metadata and enqueues normal markdown/RAG
-indexing. It does not run owner-command tools, does not run the generic trusted
-message memory extractor, and does not queue an immediate owner message. Owner
+`/newsletters/2026-06-13/forbes-<source-fingerprint>.md`. The stable fingerprint
+comes from the provider message identity plus normalized sender, so retries are
+idempotent while two editions with the same subject on the same day remain
+separate documents. Source ingestion stores the normalized newsletter content
+plus trust-boundary metadata and enqueues normal markdown/RAG indexing. HTML
+anchor destinations are preserved in normalized message text. Host code also
+builds bounded deterministic `Summary`, `Extracted Links`, and `Candidate
+Interesting Items` sections without a model call. Link extraction keeps only
+public-looking HTTP(S) article URLs, removes tracking and sensitive query
+parameters, and excludes subscription-management boilerplate. Raw content is
+quoted and HTML-escaped so newsletter headings or markup cannot reshape the
+trusted document structure. The compact sections come first in that order and
+raw `Content` comes last, keeping links and candidates inside bounded scheduled
+prompt excerpts. It does not run owner-command tools, does not run
+the generic trusted message memory extractor, and does not queue an immediate
+owner message. Owner
 `ONCE` replies ingest only the reviewed message without trusting future
 messages. Owner `YES` replies mark the sender as `newsletter` and ingest the
 reviewed message. Owner `NO` replies mark the sender as `blocked`.
 Sender review decisions normalize display-name addresses before writing sender
 trust rows, so `Name <sender@example>` stores and later matches
-`sender@example`.
+`sender@example`. Explicit owner statements about newsletter interests are
+written to the canonical `/assistant/preferences/newsletters.md` document used
+by scheduled selection; generic statements containing only "I like" are not
+treated as newsletter preferences. Preference and linked-conversation reaction
+writes share one owner-message marker; readers also recognize both older marker
+names so one authenticated message cannot produce duplicate evidence entries.
 
-A newsletter interest check is a scheduled agent task, not an inbound side
-effect. That task reviews newsletter knowledge, newsletter preferences,
-communication preferences, recent owner response timing, pending approvals, and
-recent bot activity evidence. It then decides whether one or two specific
-discoveries justify an isolated public-web research call, or whether to stay
-quiet and record rationale. It is not a rigid daily digest.
+A daily conversational check-in is a scheduled agent task, not an inbound side
+effect. At 17:00 in the owner's configured timezone (UTC fallback), it reviews
+newsletter knowledge and preferences before optionally selecting one specific
+discovery for isolated public-web research. It is not a rigid daily digest; the
+host queues a fixed casual check-in when research is unnecessary or unsafe.
 
-When newsletter research fits the notification policy, only its sanitized cited
-result is sent directly through the configured owner MMS gateway; it does not
-create a web approval backlog. Other autonomous messages that require approval queue an
+When newsletter research fits the notification policy, its sanitized cited
+result is paired with a host-owned "What's up?" invitation and queued with MMS
+preference plus SMS/email fallback; it does not create a web approval backlog.
+Other autonomous messages that require approval queue an
 approval notice through that same owner connector. The owner can reply `YES`,
 `NO`, `LATER`, `DETAILS`, or `EDIT ...`; the web approval screen is optional.
 
@@ -76,9 +93,13 @@ id, label, confidence, generic evidence strings, source, and classifier version.
 It is not a side-effect trigger and does not replace sender trust, approval,
 task, memory, or integration policy. The agent path creates or reuses a
 user-owned conversation thread, then builds a prompt with current active tasks,
-bounded recent owner context, recent thread summaries, saved memory, and the
+bounded recent owner context, recent thread summaries, canonical profile and
+preference memory, bounded recent newsletter titles/content excerpts, and the
 intent envelope so the model can decide whether the message is a continuation
-of ongoing work or new work. The model has MCP-backed tools to list ongoing
+of ongoing work or new work. Newsletter excerpts are labeled external data,
+flattened to keep their content inside the prompt boundary, and explicitly
+cannot authorize actions; authenticated owner text remains the authority. The
+model has MCP-backed tools to list ongoing
 tasks, inspect recent owner conversations, inspect and update
 conversation threads, inspect recent bot activity/contact cadence, append a
 prompt to an existing task, write memory, create/schedule a new task, queue an
@@ -91,9 +112,23 @@ the inbox record.
 A short subjectless owner message is not automatically a continuation. Thread
 reuse requires an explicit reply subject or a strong conversational cue such as
 an acknowledgement, ordinal answer, status request, temporal reference, or
-pronoun-based change to the prior object. A concrete app or Omni Dev instruction
-without those cues starts a new thread, preventing old research restrictions
-and unrelated task context from following it.
+pronoun-based change to the prior object. Natural reactions that evaluate the
+prior item, such as "that's interesting", "I love that", "not interested", or
+"more like this", are also continuation cues so newsletter-interest feedback
+stays linked to the conversation that supplied the item. A concrete app or Omni
+Dev instruction without those cues starts a new thread, preventing old research
+restrictions and unrelated task context from following it.
+
+When one of those narrow, explicit reactions belongs to a thread already linked
+to newsletter markdown or newsletter-enrichment research, host code records a
+positive or negative direct-conversation signal in
+`/assistant/preferences/newsletters.md` before the model runs. The write is
+idempotent by authenticated inbound-message id and carries owner-message
+provenance plus host-validated source paths. It records the owner's reaction but
+never copies newsletter text into preference memory, and the same wording in an
+unrelated thread does not create a newsletter preference. This deterministic
+capture still works when linked external research correctly limits the model to
+read-only tools.
 
 When a no-tool run nevertheless says a clearly actionable owner request cannot
 continue in its current tool context, owner-command entry points make one
@@ -126,8 +161,14 @@ Owner SMS/MMS follow-ups often refer to older messages or completed tasks in a
 conversational way. The owner inbound prompt therefore includes bounded recent
 memory: active tasks, recently completed/cancelled/failed tasks, recent prior
 owner messages, recent outbound messages, and recent active/waiting/resolved
-conversation threads. It also includes the host-detected intent envelope for the
-current message, including likely categories such as memory/list offload, task
+conversation threads. It also includes canonical markdown personalization from
+`/personal/profile.md`, `/assistant/preferences/communication.md`, and
+`/assistant/preferences/newsletters.md`, plus no more than six newsletter title
+and excerpt pairs from the three newest dated newsletter directories. Newest
+arrivals within a day are selected first, and deterministic summary/candidate
+sections take precedence over raw content. It also includes the host-detected
+intent envelope for the current message, including likely categories such as
+memory/list offload, task
 creation/update, question/answer request, approval-style response, preference
 correction, app action request, casual conversation, clarification response, or
 unknown. This context is excerpted and owner-scoped so the agent can recognize
@@ -182,9 +223,9 @@ The older markdown personal-list tools remain for assistant-internal memory,
 legacy entries, and fallback when My Notes is unavailable. Indirect recall
 should search My Notes first and identify uncertain matches as uncertain.
 
-The worker also maintains autonomous scheduled tasks. A newsletter interest
-check reviews accumulated newsletter knowledge and decides whether to mention a
-small number of unusually interesting items conversationally or stay quiet. A
+The worker also maintains autonomous scheduled tasks. A daily conversational
+check-in reviews accumulated newsletter knowledge for an optional icebreaker;
+host code always queues either the safe researched icebreaker or a fixed casual fallback. A
 three-hour wake task reviews long-term memory, active tasks, and schedule
 rationale so the agent can decide whether anything needs action or whether a
 task should be rescheduled. A twice-daily assistant self-review task inspects
@@ -194,13 +235,15 @@ weekly memory quality review inspects recent memory writes, owner feedback
 signals, personal lists, task outcomes, newsletter-interest notes, and
 self-review notes, then writes compact curation findings to
 `/assistant/memory-review/YYYY-MM.md`.
-The newsletter interest check runs from the schedule, not directly from inbound
+The daily check-in runs from the schedule, not directly from inbound
 newsletter delivery. It receives newsletter excerpts as trusted knowledge data,
 and receives only `web_research` and `record_observation`. For a selected item,
 the research query can include public links and exact newsletter markdown
 provenance paths. Host code creates a conversation thread and queues the safe
-result only through the MMS outbox and owner-visible budget controls. Unsafe
-research is not sent. Quiet decisions use `record_observation`. Autonomous wakes can update task
+result through the outbox with MMS preference and SMS/email fallback. The
+validated per-owner/local-date daily key bypasses only the generic rolling
+proactive budget; all other proactive messages retain it. Unsafe research is not sent, but the generic
+check-in still is. Autonomous wakes can update task
 schedule, status, waiting/blocked state, follow-up tasks, and schedule rationale
 only through MCP tools that require rationale and write task events. Self-review
 writes compact operational notes under `/assistant/self-review/YYYY-MM-DD.md`
@@ -236,27 +279,58 @@ the app is reading the owner's private personal mailbox.
 IMAP progress is stored on the per-user IMAP connector. The poller records
 `last_received_at` and `last_uid` after handled messages, then uses that progress
 on the next tick so it searches only newer mailbox entries instead of repeatedly
-walking old unread mail. Once `last_uid` exists, that UID cursor is authoritative:
-every fetched UID above the poll-start cursor is processed regardless of the
-message's RFC `Date`. This prevents delayed mail and messages with equal or
-out-of-order timestamps from being marked seen and lost. The timestamp watermark
-is only a legacy fallback for connectors that do not yet have a UID cursor. In
-that fallback mode, IMAP `SINCE` is day-granular, so the poller also checks each
-parsed message timestamp locally and skips messages that are not strictly newer
-than the stored `last_received_at`. Progress updates keep both watermarks
-monotonic, and normal inbound provider-id deduplication remains the final defense
-against repeated side effects.
+walking old unread mail. UID is authoritative once available; every fetched UID
+above the poll-start cursor is processed regardless of its RFC `Date`.
+`last_received_at` is an observation and date-based bootstrap hint only. IMAP
+`SINCE` is day-granular, so bootstrap candidates are not rejected merely because
+their parsed `Date` header is older, equal, or out of order. Search results are filtered
+above the stored UID, deduplicated, and processed in ascending UID order. The
+poller commits progress and only then tries to set `\Seen` after successful
+ingestion. A deterministic source parsing or normalization failure stops at
+that UID without setting `\Seen` or advancing past it, so a later UID cannot
+make the failed message unreachable. Each such attempt is audited as
+`connector.imap_message_error`, and the UID, UID validity, and bounded retry
+count are persisted on the connector. On the third deterministic source
+failure the poller audits `connector.imap_message_quarantined`, explicitly
+advances and marks that UID Seen, clears its retry state, and continues with
+later UIDs. Policy, database, model, integration, and progress-write failures
+are classified as transient: they are audited and retried with connector
+backoff without incrementing the quarantine counter or advancing the cursor.
+This prevents one permanently malformed source from blocking the mailbox
+forever without discarding a valid owner message during a downstream outage. A
+post-commit Seen failure is audited as `connector.imap_seen_error`. The
+connector also persists the mailbox
+`uid_validity`. If the provider reports a different UID validity after a mailbox
+reset, the poller clears the stale UID/date cursor before searching and audits
+`connector.imap_uidvalidity_reset`. If an earlier attempt recorded a newsletter
+message but failed before setting its handling action, the duplicate retry
+resumes the deterministic newsletter write instead of treating the partial row
+as fully handled. Trusted-message memory integration is also resumable. Owner
+agent routing resumes only when no durable evidence shows that the production
+owner runner started. Because that runner links the inbound message into its
+conversation thread before model or tool work, a partial owner row with that
+thread link (or another stored result link) is treated as ambiguous
+recovery-required state and is not rerun automatically; this favors avoiding
+duplicate owner-authorized side effects. Once a handling action is stored,
+further provider deliveries are ordinary duplicates and do not rerun work.
+
+The connector defaults to one provider poll every five minutes even though the
+worker may tick more frequently. Connector JSON records
+`poll_interval_seconds`, `next_poll_at`, and `consecutive_failures`; the interval
+is bounded from one minute to one hour. Successful polls reset the failure
+count. Provider and message failures use exponential backoff from the configured
+interval up to one hour, preventing a 20-second worker loop from repeatedly
+opening a failing mailbox. Poll timing and backoff live with each user's IMAP
+connector and therefore survive worker restarts.
 
 The worker entrypoint must start whether Node receives an absolute or relative
 script path from `npm run worker:start`; otherwise queued outbox records and IMAP
 polling can appear healthy at the container level while no worker ticks occur.
 Worker ticks deliver pending/approved outbox records before polling IMAP. IMAP
 polling has bounded connection/socket timeouts and consumes provider socket error
-events so late transport errors do not crash the worker process. If an IMAP
-poll times out before any message is attempted, the worker treats it as a quiet
-idle timeout instead of recording or logging it as an actionable connector
-failure. A mailbox outage that fails an attempted poll must still be visible as
-a worker IMAP error. A mailbox outage must not prevent owner-review notifications
+events so late transport errors do not crash the worker process. A connection,
+socket, or mailbox failure remains visible as a worker IMAP error and schedules
+the connector's persisted retry backoff. A mailbox outage must not prevent owner-review notifications
 or other queued outbound messages from being delivered.
 
 The Integrations tab includes an IMAP test action. The test saves the current
@@ -350,6 +424,19 @@ outbox row by moving it to `sending`. A stale worker snapshot that can no longer
 claim the row must not deliver it, which keeps concurrent or repeated worker
 ticks from sending the same owner message twice.
 
+Outbox rows persist their origin and proactive classification. Cadence and
+autonomous-message budgets count proactive attempts only, so ordinary replies
+to owner messages do not suppress the next daily check-in. Daily check-ins also
+use one unique per-user/local-date dedupe key and reuse the original conversation
+thread on replay. Host code recognizes only the two daily-check-in origins paired
+with a validated daily key for exemption from the generic rolling proactive
+budget; the row remains proactive and every other autonomous message remains
+guarded. Transient SMTP provider errors are retried up to five times
+with persistent exponential backoff. SMTP cannot guarantee exactly-once
+delivery across a crash after provider acceptance but before local status is
+saved; stale daily `sending` rows deliberately favor bounded retry over a missed
+day, so that narrow failure window can produce a duplicate.
+
 Deployment-owned secrets are limited to platform-level configuration:
 
 - `openai.txt`: OpenAI API key when selected by `AGENT_OPENAI_API_KEY_FILE`.
@@ -396,8 +483,8 @@ than exposing internal failure details or leaving the owner without a response.
 For proactive messages
 without an inbound message context, the host uses the current user's
 owner-contact connector, preferring SMS gateway, then MMS gateway, then email.
-Newsletter research is narrower: it requires the configured MMS gateway and
-does not fall back to SMS or email.
+Daily newsletter research prefers the configured MMS gateway and safely falls
+back to SMS or email.
 SMTP delivery fails closed unless the final recipient is a configured or
 sender-table owner address. Legacy queued SMS/MMS records containing only the
 owner mobile number are mapped to the configured carrier gateway before SMTP

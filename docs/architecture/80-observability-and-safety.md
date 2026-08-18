@@ -164,7 +164,13 @@ RAG indexing is derived from the current markdown document version and content
 hash. If a worker finishes an older indexing attempt after a newer markdown
 write, the store does not replace current chunk rows or mark the newer document
 indexed from that stale result. The newer queued job remains responsible for
-the current index state.
+the current index state. Active index requests are unique per user, document,
+job type, requested version, and content hash; deployment migration
+`0013_rag_job_coalescing` prunes historical active duplicates and obsolete
+versions before enabling the production worker. Retrying a failed or dead job
+does not revive it when an equivalent request is already pending or claimed;
+the retry operation returns and audits that active request instead, preserving
+the uniqueness guard under concurrent reconciliation.
 
 MCP sessions remain short-lived, user/run scoped, and allowlisted. Stored
 allowlists must be JSON arrays of non-empty tool names; malformed stored

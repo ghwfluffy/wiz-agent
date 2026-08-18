@@ -10,7 +10,7 @@ stayed quiet, deferred work, requested approval, or changed a schedule.
 - Add host-side helper(s) for appending decisions under:
   - `/assistant/decisions/YYYY-MM.md`.
 - Record decisions from meaningful autonomous paths:
-  - scheduled newsletter interest checks;
+  - scheduled daily conversational check-ins and optional newsletter icebreakers;
   - autonomous wake reviews;
   - self-review and memory-review outcomes;
   - owner-visible outbound proposals;
@@ -63,4 +63,3 @@ Commit message:
 ```text
 Add assistant decision ledger
 ```
-

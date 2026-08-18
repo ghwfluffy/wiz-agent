@@ -87,6 +87,17 @@ function ownerConfigValue(config: Record<string, unknown>, key: string): string 
 
 const SMS_GATEWAY_SAFE_TEXT_LENGTH = 140;
 const MAX_SMTP_FAILURE_MESSAGE_LENGTH = 240;
+export const DAILY_CHECK_IN_MAX_DELIVERY_ATTEMPTS = 5;
+const DAILY_CHECK_IN_RETRY_BASE_MS = 60_000;
+
+function isDailyCheckInMessage(message: OutboundMessageRecord): boolean {
+  return Boolean(message.dedupeKey?.startsWith("daily-check-in:"));
+}
+
+export function dailyCheckInRetryAt(attempts: number, now = new Date()): Date {
+  const delay = DAILY_CHECK_IN_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1);
+  return new Date(now.getTime() + delay);
+}
 
 function shouldPreferMmsGateway(message: OutboundMessageRecord): boolean {
   return message.channel === "sms" && message.bodyText.length > SMS_GATEWAY_SAFE_TEXT_LENGTH;
@@ -199,6 +210,7 @@ export async function sendOutboundMessage(options: {
   settings: Settings;
   message: OutboundMessageRecord;
   transport?: MailTransport;
+  now?: Date;
 }): Promise<OutboundMessageRecord | undefined> {
   if (!options.settings.agentOutboundEnabled) {
     return options.store.updateOutboundMessageStatus(
@@ -250,11 +262,24 @@ export async function sendOutboundMessage(options: {
     });
     return options.store.updateOutboundMessageStatus(options.context, options.message.id, "sent");
   } catch (error) {
+    const failureMessage = redactProviderFailureMessage(error, "SMTP send failed.");
+    if (
+      isDailyCheckInMessage(claimed) &&
+      claimed.deliveryAttempts < DAILY_CHECK_IN_MAX_DELIVERY_ATTEMPTS
+    ) {
+      return options.store.updateOutboundMessageStatus(
+        options.context,
+        options.message.id,
+        "pending",
+        failureMessage,
+        dailyCheckInRetryAt(claimed.deliveryAttempts, options.now).toISOString()
+      );
+    }
     return options.store.updateOutboundMessageStatus(
       options.context,
       options.message.id,
       "failed",
-      redactProviderFailureMessage(error, "SMTP send failed.")
+      failureMessage
     );
   }
 }
@@ -265,8 +290,11 @@ export async function processOutboundQueue(options: {
   settings: Settings;
   limit?: number;
   transport?: MailTransport;
+  now?: Date;
 }): Promise<{ attempted: number; sent: number; failed: number }> {
+  const now = options.now ?? new Date();
   const messages = (await options.store.listOutboundMessages(options.context, ["pending", "approved"]))
+    .filter((message) => !message.nextDeliveryAttemptAt || Date.parse(message.nextDeliveryAttemptAt) <= now.getTime())
     .slice(0, options.limit ?? 1);
   let sent = 0;
   let failed = 0;
@@ -276,11 +304,12 @@ export async function processOutboundQueue(options: {
       context: options.context,
       settings: options.settings,
       message,
-      transport: options.transport
+      transport: options.transport,
+      now
     });
     if (updated?.status === "sent") {
       sent += 1;
-    } else if (updated?.status === "failed") {
+    } else if (updated?.status === "failed" || (updated?.status === "pending" && updated.failureMessage)) {
       failed += 1;
     }
   }

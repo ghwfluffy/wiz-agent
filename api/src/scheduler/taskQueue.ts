@@ -2,13 +2,18 @@ import type { AgentStore, RequestContext, TaskRecord } from "../domain/types.js"
 import type { AgentModelClient } from "../agent/modelClient.js";
 import { runAgentTask } from "../agent/runAgentTask.js";
 import type { Settings } from "../config/settings.js";
-import { processOutboundQueue, type MailTransport } from "../connectors/smtpSender.js";
+import {
+  DAILY_CHECK_IN_MAX_DELIVERY_ATTEMPTS,
+  processOutboundQueue,
+  type MailTransport
+} from "../connectors/smtpSender.js";
 import { SignedIntegrationTokenProvider } from "../integrations/tokenProvider.js";
 import {
   buildScheduledTaskPrompt,
   ensureAutonomousTasks,
   isAutonomousRecurringTask,
   isNewsletterInterestTask,
+  ownerLocalDate,
   scheduleNextAutonomousTask
 } from "./autonomousTasks.js";
 import { executeApprovedCrossAppApprovals } from "./approvalExecutor.js";
@@ -25,6 +30,7 @@ const WORKER_STUCK_STATE_GRACE_MS = 30 * 60 * 1000;
 const STALE_TASK_FAILURE_MESSAGE = "Worker claim expired before completion.";
 const STALE_OUTBOUND_FAILURE_MESSAGE = "Outbound delivery attempt expired before completion.";
 const STALE_APPROVAL_EXECUTION_ERROR = "approval_execution_expired";
+export const DAILY_CHECK_IN_FALLBACK_MESSAGE = "Hey! What's up?";
 
 export async function claimDueTasks(options: {
   store: AgentStore;
@@ -48,9 +54,73 @@ function isBefore(value: string | null | undefined, cutoff: Date): boolean {
   return Number.isFinite(parsed) && parsed < cutoff.getTime();
 }
 
+function dailyCheckInDedupeKey(context: RequestContext, now: Date): string {
+  return `daily-check-in:${ownerLocalDate(now, context.session.user.timezone)}`;
+}
+
+async function queueDailyCheckInMessage(options: {
+  store: AgentStore;
+  context: RequestContext;
+  settings?: Settings;
+  task: TaskRecord;
+  now: Date;
+  body: string;
+  origin: "daily_check_in_fallback" | "daily_check_in_newsletter_research";
+  preferredChannel: "sms" | "mms";
+  title: string;
+  linkedMemoryPaths?: string[];
+}) {
+  const dedupeKey = dailyCheckInDedupeKey(options.context, options.now);
+  const existing = (await options.store.listOutboundMessages(options.context))
+    .find((message) => message.dedupeKey === dedupeKey);
+  const existingThread = existing?.conversationThreadId
+    ? await options.store.getConversationThread(options.context, existing.conversationThreadId)
+    : undefined;
+  const thread = existing
+    ? existingThread
+    : await options.store.createConversationThread(options.context, {
+        title: options.title,
+        status: "active",
+        linkedTaskIds: [options.task.id],
+        linkedMemoryPaths: options.linkedMemoryPaths ?? []
+      });
+  const queued = await queueOwnerVisibleMessage({
+    context: options.context,
+    store: options.store,
+    settings: options.settings,
+    source: options.origin,
+    isProactive: true,
+    body: options.body,
+    conversationThreadId: thread?.id ?? existing?.conversationThreadId ?? null,
+    preferredChannel: options.preferredChannel,
+    dedupeKey
+  });
+  if (!queued.message) {
+    throw new Error("The owner's SMS, MMS, and email destinations are unavailable for the daily check-in.");
+  }
+  if (queued.message.status === "failed") {
+    throw new Error("The daily check-in reached its bounded delivery retry limit.");
+  }
+  await options.store.recordTaskEvent(options.context, options.task.id, "daily_check_in.queued", {
+    outbound_message_id: queued.message.id,
+    conversation_thread_id: queued.message.conversationThreadId ?? thread?.id ?? null,
+    channel: queued.message.channel,
+    origin: options.origin,
+    dedupe_key: queued.message.dedupeKey,
+    summary: options.origin === "daily_check_in_newsletter_research"
+      ? "Sanitized newsletter research was queued as today's conversational check-in."
+      : "The fixed casual fallback was queued as today's conversational check-in."
+  });
+  return {
+    message: queued.message,
+    conversationThreadId: queued.message.conversationThreadId ?? thread?.id ?? null
+  };
+}
+
 export async function recoverStuckWorkerState(options: {
   store: AgentStore;
   context: RequestContext;
+  settings?: Settings;
   now?: Date;
   staleAfterMs?: number;
 }): Promise<{
@@ -98,6 +168,26 @@ export async function recoverStuckWorkerState(options: {
       taskId: task.id,
       now
     });
+    if (isNewsletterInterestTask(task)) {
+      try {
+        await queueDailyCheckInMessage({
+          store: options.store,
+          context: options.context,
+          settings: options.settings,
+          task,
+          now,
+          body: DAILY_CHECK_IN_FALLBACK_MESSAGE,
+          origin: "daily_check_in_fallback",
+          preferredChannel: "sms",
+          title: "Daily check-in recovery"
+        });
+      } catch (error) {
+        await options.store.recordTaskEvent(options.context, task.id, "daily_check_in.recovery_failed", {
+          failure_message: error instanceof Error ? error.message : String(error),
+          summary: "Could not ensure the stale daily task's fallback outbox before rolling recurrence."
+        });
+      }
+    }
     if (isAutonomousRecurringTask(task)) {
       await scheduleNextAutonomousTask({
         store: options.store,
@@ -139,16 +229,25 @@ export async function recoverStuckWorkerState(options: {
   const sendingMessages = (await options.store.listOutboundMessages(options.context, ["sending"]))
     .filter((message) => isBefore(message.updatedAt, staleBefore));
   for (const message of sendingMessages) {
+    const retryDailyCheckIn = Boolean(
+      message.dedupeKey?.startsWith("daily-check-in:") &&
+      message.deliveryAttempts < DAILY_CHECK_IN_MAX_DELIVERY_ATTEMPTS
+    );
     const failed = await options.store.updateOutboundMessageStatus(
       options.context,
       message.id,
-      "failed",
-      STALE_OUTBOUND_FAILURE_MESSAGE
+      retryDailyCheckIn ? "pending" : "failed",
+      STALE_OUTBOUND_FAILURE_MESSAGE,
+      null
     );
     if (failed) {
-      await options.store.recordAudit(options.context, "worker.recovered_outbound_send", "outbound_message", message.id, {
+      await options.store.recordAudit(options.context, retryDailyCheckIn
+        ? "worker.retried_stale_daily_check_in"
+        : "worker.recovered_outbound_send", "outbound_message", message.id, {
         stale_before: staleBefore.toISOString(),
-        failure_message: STALE_OUTBOUND_FAILURE_MESSAGE
+        failure_message: STALE_OUTBOUND_FAILURE_MESSAGE,
+        retry_scheduled: retryDailyCheckIn,
+        delivery_attempts: message.deliveryAttempts
       });
       totals.recoveredOutbound += 1;
     }
@@ -206,6 +305,7 @@ export async function daemonOnce(options: {
   const recovery = await recoverStuckWorkerState({
     store: options.store,
     context: options.context,
+    settings: options.settings,
     now: options.now
   });
   if (modelClient) {
@@ -227,6 +327,28 @@ export async function daemonOnce(options: {
   if (modelClient) {
     for (const task of claimed) {
       let runFailed = false;
+      const dailyCheckInTask = isNewsletterInterestTask(task);
+      let dailyCheckInQueueAttempted = false;
+      let dailyCheckInOutboundMessageId: string | undefined;
+      const queueDailyCheckIn = async (message: {
+        body: string;
+        origin: "daily_check_in_fallback" | "daily_check_in_newsletter_research";
+        preferredChannel: "sms" | "mms";
+        title: string;
+        linkedMemoryPaths?: string[];
+      }) => {
+        dailyCheckInQueueAttempted = true;
+        const queued = await queueDailyCheckInMessage({
+          store: options.store,
+          context: options.context,
+          settings: options.settings,
+          task,
+          now: options.now ?? new Date(),
+          ...message
+        });
+        dailyCheckInOutboundMessageId = queued.message.id;
+        return queued;
+      };
       try {
         const scheduledOwnerMessage = parseScheduledOwnerMessageTask(task);
         if (scheduledOwnerMessage) {
@@ -276,7 +398,6 @@ export async function daemonOnce(options: {
             now: options.now
           })
           : task.prompt;
-        const newsletterInterestTask = isNewsletterInterestTask(task);
         const result = await runAgentTask({
           context: options.context,
           store: options.store,
@@ -288,50 +409,51 @@ export async function daemonOnce(options: {
           request: {
             taskId: task.id,
             prompt,
-            allowedTools: newsletterInterestTask ? ["web_research", "record_observation"] : undefined
+            allowedTools: dailyCheckInTask ? ["web_research", "record_observation"] : undefined
           },
           now: options.now
         });
         runFailed = result.status === "failed";
-        let newsletterOutboundMessageId: string | undefined;
-        if (!runFailed && newsletterInterestTask && result.toolName === "web_research") {
+        let researchSessionId: string | undefined;
+        let researchQuery: string | undefined;
+        let researchSourcePaths: string[] = [];
+        let dailyCheckInBody = DAILY_CHECK_IN_FALLBACK_MESSAGE;
+        if (!runFailed && dailyCheckInTask && result.toolName === "web_research") {
           const researchStatus = payloadString(result.executionResult ?? {}, "status");
-          const researchSessionId = payloadString(result.executionResult ?? {}, "research_session_id");
-          const query = payloadString(result.executionResult ?? {}, "query") ?? "Newsletter research";
+          researchSessionId = payloadString(result.executionResult ?? {}, "research_session_id");
+          researchQuery = payloadString(result.executionResult ?? {}, "query") ?? "Newsletter research";
           if ((researchStatus === "ok" || researchStatus === "partial") && result.responseText && researchSessionId) {
-            const sourcePaths = Array.isArray(result.executionResult?.source_markdown_paths)
+            researchSourcePaths = Array.isArray(result.executionResult?.source_markdown_paths)
               ? result.executionResult.source_markdown_paths.filter((path): path is string => typeof path === "string")
               : [];
-            const thread = await options.store.createConversationThread(options.context, {
-              title: `Newsletter research: ${query.replace(/\s+/g, " ").slice(0, 120)}`,
-              status: "active",
-              linkedTaskIds: [task.id],
-              linkedMemoryPaths: sourcePaths
-            });
-            const queued = await queueOwnerVisibleMessage({
-              context: options.context,
-              store: options.store,
-              settings: options.settings,
-              source: "newsletter_web_research",
-              body: result.responseText,
-              conversationThreadId: thread.id,
-              preferredChannel: "mms",
-              requirePreferredChannel: true
-            });
-            if (!queued.message) {
-              throw new Error("The owner's MMS destination is unavailable for newsletter research.");
+            dailyCheckInBody = `${result.responseText.trim()}\n\nWhat's up?`;
+          }
+        }
+        if (dailyCheckInTask) {
+          const usedResearch = Boolean(researchSessionId && dailyCheckInBody !== DAILY_CHECK_IN_FALLBACK_MESSAGE);
+          const queued = await queueDailyCheckIn({
+            body: dailyCheckInBody,
+            origin: usedResearch ? "daily_check_in_newsletter_research" : "daily_check_in_fallback",
+            preferredChannel: usedResearch ? "mms" : "sms",
+            title: usedResearch
+              ? `Newsletter icebreaker: ${(researchQuery ?? "Newsletter research").replace(/\s+/g, " ").slice(0, 120)}`
+              : "Daily check-in",
+            linkedMemoryPaths: researchSourcePaths
+          });
+          if (usedResearch && researchSessionId) {
+            if (!queued.conversationThreadId) {
+              throw new Error("The daily check-in outbox is missing its conversation thread.");
             }
-            newsletterOutboundMessageId = queued.message.id;
             await options.store.linkWebResearchSession(options.context, researchSessionId, {
-              conversationThreadId: thread.id,
+              conversationThreadId: queued.conversationThreadId,
               outboundMessageId: queued.message.id
             });
             await options.store.recordTaskEvent(options.context, task.id, "newsletter_research.queued", {
               research_session_id: researchSessionId,
               outbound_message_id: queued.message.id,
-              conversation_thread_id: thread.id,
+              conversation_thread_id: queued.conversationThreadId,
               channel: queued.message.channel,
-              summary: "Sanitized newsletter research was queued to the owner through MMS without approval."
+              summary: "Sanitized newsletter research was queued through the preferred MMS channel with safe SMS/email fallback."
             });
           }
         }
@@ -355,11 +477,11 @@ export async function daemonOnce(options: {
             now: options.now
           });
         } else {
-          const outcome = newsletterOutboundMessageId || (result.sideEffect && result.sideEffect !== "none") ? "acted" : "observed";
+          const outcome = dailyCheckInOutboundMessageId || (result.sideEffect && result.sideEffect !== "none") ? "acted" : "observed";
           await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.outcome", {
             outcome,
             tool_name: result.toolName ?? null,
-            outbound_message_id: newsletterOutboundMessageId ?? null,
+            outbound_message_id: dailyCheckInOutboundMessageId ?? null,
             summary: `Scheduled task outcome: ${outcome}.`
           });
           await recordScheduledTaskDecision({
@@ -380,12 +502,27 @@ export async function daemonOnce(options: {
         });
       } catch (error) {
         runFailed = true;
+        let failureMessage = error instanceof Error ? error.message : String(error);
+        if (dailyCheckInTask && !dailyCheckInQueueAttempted) {
+          try {
+            await queueDailyCheckIn({
+              body: DAILY_CHECK_IN_FALLBACK_MESSAGE,
+              origin: "daily_check_in_fallback",
+              preferredChannel: "sms",
+              title: "Daily check-in"
+            });
+          } catch (fallbackError) {
+            failureMessage = `${failureMessage} Daily check-in fallback also failed: ${
+              fallbackError instanceof Error ? fallbackError.message : String(fallbackError)
+            }`;
+          }
+        }
         await options.store.updateTask(options.context, task.id, {
           status: "failed",
           lastAgentReviewAt: (options.now ?? new Date()).toISOString()
         });
         await options.store.recordTaskEvent(options.context, task.id, "scheduled_task.failed", {
-          failure_message: error instanceof Error ? error.message : String(error),
+          failure_message: failureMessage,
           summary: "Scheduled task run failed; recurrence will still be scheduled."
         });
         await recordScheduledTaskDecision({
@@ -393,7 +530,7 @@ export async function daemonOnce(options: {
           context: options.context,
           taskId: task.id,
           outcome: "failed",
-          failureMessage: error instanceof Error ? error.message : String(error),
+          failureMessage,
           now: options.now
         });
         await recordTaskOutcomeMemory({
@@ -431,6 +568,7 @@ export async function daemonOnce(options: {
         context: options.context,
         settings: options.settings,
         transport: options.mailTransport,
+        now: options.now,
         limit: Math.min(
           options.outboundLimit ?? runtimeSafetyPolicy(options.settings).outboundMessagesPerWorkerTick,
           runtimeSafetyPolicy(options.settings).outboundMessagesPerWorkerTick

@@ -82,6 +82,8 @@ export async function createOutboundApproval(options: {
   toAddr: string;
   subject?: string | null;
   bodyText: string;
+  origin?: string;
+  isProactive?: boolean;
 }): Promise<{ approval: ApprovalRecord; outbound: OutboundMessageRecord }> {
   const proposedPayload = {
     channel: options.channel,
@@ -105,6 +107,8 @@ export async function createOutboundApproval(options: {
     toAddr: options.toAddr,
     subject: options.subject ?? null,
     bodyText: options.bodyText,
+    origin: options.origin ?? "propose_outbound_message",
+    isProactive: options.isProactive ?? true,
     approvalId: approval.id
   });
   const updated = await options.store.updateApprovalPayload(options.context, approval.id, {
@@ -217,6 +221,8 @@ export async function editApproval(options: {
         toAddr,
         subject: payloadString(payload, "subject") ?? null,
         bodyText: options.text,
+        origin: outbound?.origin ?? "propose_outbound_message",
+        isProactive: outbound?.isProactive ?? true,
         approvalId: approval.id
       });
       current = await options.store.updateApprovalPayload(options.context, approval.id, {

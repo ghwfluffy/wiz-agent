@@ -100,7 +100,9 @@ export async function queueOwnerReviewNotification(options: {
     channel: target.channel,
     status: "pending",
     toAddr: target.toAddr,
-    bodyText: summarizeUntrustedMessage(options.message)
+    bodyText: summarizeUntrustedMessage(options.message),
+    origin: "sender_review_notification",
+    isProactive: false
   });
 }
 
@@ -133,6 +135,44 @@ export async function classifySender(
   return "untrusted";
 }
 
+async function ownerHandlingStartEvidence(options: {
+  context: RequestContext;
+  store: AgentStore;
+  message: InboundMessageRecord;
+}): Promise<{
+  started: boolean;
+  linkedThreadId: string | null;
+  linkedFields: string[];
+}> {
+  const linkedFields = [
+    ["conversation_thread_id", options.message.conversationThreadId],
+    ["task_id", options.message.taskId],
+    ["task_event_id", options.message.taskEventId],
+    ["agent_run_id", options.message.agentRunId],
+    ["outbound_message_id", options.message.outboundMessageId]
+  ]
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0)
+    .map(([name]) => name);
+  if (linkedFields.length > 0) {
+    return {
+      started: true,
+      linkedThreadId: options.message.conversationThreadId,
+      linkedFields
+    };
+  }
+
+  // The production owner runner creates or links the conversation thread before
+  // it asks the model to act. That durable message link is therefore the earliest
+  // available boundary proving a retry could duplicate an owner-authorized side effect.
+  const linkedThread = (await options.store.listConversationThreads(options.context, undefined, 100))
+    .find((thread) => thread.linkedMessageIds.includes(options.message.id));
+  return {
+    started: Boolean(linkedThread),
+    linkedThreadId: linkedThread?.id ?? null,
+    linkedFields
+  };
+}
+
 export async function handleInboundMessage(
   options: {
     context: RequestContext;
@@ -154,7 +194,7 @@ export async function handleInboundMessage(
     }>;
   }
 ): Promise<InboundHandlingResult> {
-  const classification = await classifySender({
+  let classification = await classifySender({
     context: options.context,
     settings: options.settings,
     store: options.store,
@@ -162,11 +202,48 @@ export async function handleInboundMessage(
   });
   const recorded = await options.store.recordInboundMessage(options.context, options.message, classification);
   if (recorded.duplicate) {
-    return {
-      classification,
-      action: "duplicate",
-      messageId: recorded.id
-    };
+    if (recorded.handlingAction === null && recorded.classification === "owner") {
+      const startEvidence = await ownerHandlingStartEvidence({
+        context: options.context,
+        store: options.store,
+        message: recorded
+      });
+      if (startEvidence.started) {
+        await options.store.recordAudit(
+          options.context,
+          "message.inbound.recovery_required",
+          "message",
+          recorded.id,
+          {
+            classification: recorded.classification,
+            provider_message_id: recorded.providerMessageId,
+            reason: "owner_processing_start_is_ambiguous",
+            linked_thread_id: startEvidence.linkedThreadId,
+            linked_fields: startEvidence.linkedFields
+          }
+        );
+        return {
+          classification: recorded.classification,
+          action: "duplicate",
+          messageId: recorded.id
+        };
+      }
+    }
+    const resumablePartial = recorded.handlingAction === null
+      && ["owner", "trusted", "newsletter"].includes(recorded.classification);
+    if (resumablePartial) {
+      classification = recorded.classification;
+      await options.store.recordAudit(options.context, "message.inbound.resume", "message", recorded.id, {
+        classification: recorded.classification,
+        provider_message_id: recorded.providerMessageId
+      });
+    } else {
+      return {
+        classification: recorded.classification,
+        action: "duplicate",
+        messageId: recorded.id
+      };
+    }
   }
   if (classification === "blocked") {
     await options.store.updateInboundMessageHandling(options.context, recorded.id, {

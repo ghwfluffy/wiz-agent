@@ -7,6 +7,7 @@ export type AuthenticatedUser = {
   id: string;
   email: string;
   displayName: string;
+  timezone: string;
   isAdmin: boolean;
 };
 
@@ -46,6 +47,7 @@ export function createSessionFromSettings(settings: Settings): Session {
       id: settings.devUserId,
       email: settings.devUserEmail,
       displayName: settings.devUserDisplayName,
+      timezone: "UTC",
       isAdmin: settings.devUserIsAdmin
     },
     createdAt: now.toISOString(),

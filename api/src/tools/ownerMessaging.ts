@@ -18,6 +18,11 @@ export const OWNER_SCHEDULED_MESSAGE_RECURRENCE = "owner-requested scheduled mes
 export const MAX_RUNTIME_CPU_MODEL_CHARS = 200;
 
 const OWNER_SCHEDULED_MESSAGE_PROMPT_PREFIX = "OWNER_SCHEDULED_MESSAGE_V1\n";
+const DAILY_CHECK_IN_DEDUPE_KEY_PATTERN = /^daily-check-in:\d{4}-\d{2}-\d{2}$/;
+const DAILY_CHECK_IN_ORIGINS = new Set([
+  "daily_check_in_fallback",
+  "daily_check_in_newsletter_research"
+]);
 
 export type OwnerMessageDestination = {
   channel: "email" | "sms" | "mms";
@@ -161,26 +166,42 @@ export async function queueOwnerVisibleMessage(options: {
   replyToMessage?: Pick<InboundMessageRecord, "fromAddr" | "source" | "subject" | "conversationThreadId">;
   source: string;
   ownerInitiated?: boolean;
+  isProactive?: boolean;
   subject?: string | null;
   body: string;
   conversationThreadId?: string | null;
   preferredChannel?: "email" | "sms" | "mms";
   requirePreferredChannel?: boolean;
+  dedupeKey?: string | null;
 }): Promise<{
   message?: OutboundMessageRecord;
   destination?: OwnerMessageDestination;
   reason?: "owner_reply_destination_unavailable";
 }> {
+  const dedupeKey = options.dedupeKey?.trim() || null;
+  if (dedupeKey) {
+    const existing = (await options.store.listOutboundMessages(options.context))
+      .find((message) => message.dedupeKey === dedupeKey);
+    if (existing && existing.status !== "failed") {
+      return { message: existing };
+    }
+  }
   const destination = await resolveOwnerMessageDestination(options);
   if (!destination) {
     return { reason: "owner_reply_destination_unavailable" };
   }
+  const isProactive = options.isProactive ?? (
+    options.ownerInitiated !== true && options.source !== "scheduled_owner_message"
+  );
+  const isHostOwnedDailyCheckIn = isProactive &&
+    DAILY_CHECK_IN_ORIGINS.has(options.source) &&
+    Boolean(dedupeKey && DAILY_CHECK_IN_DEDUPE_KEY_PATTERN.test(dedupeKey));
   await assertOwnerVisibleOutboundBudget({
     context: options.context,
     store: options.store,
     settings: options.settings,
     source: options.source,
-    enforceBudget: options.ownerInitiated !== true && options.source !== "scheduled_owner_message"
+    enforceBudget: isProactive && !isHostOwnedDailyCheckIn
   });
   const message = await options.store.queueOutboundMessage(options.context, {
     channel: destination.channel,
@@ -188,6 +209,9 @@ export async function queueOwnerVisibleMessage(options: {
     toAddr: destination.toAddr,
     subject: options.subject ?? null,
     bodyText: options.body,
+    origin: options.source,
+    isProactive,
+    dedupeKey,
     conversationThreadId: options.conversationThreadId ?? options.replyToMessage?.conversationThreadId ?? null
   });
   return { message, destination };

@@ -1049,7 +1049,9 @@ describe("agent task execution", () => {
       channel: "sms",
       status: "requires_approval",
       toAddr: "owner-sms@example.test",
-      bodyText: "Existing owner-visible proposal."
+      bodyText: "Existing owner-visible proposal.",
+      origin: "propose_outbound_message",
+      isProactive: true
     });
 
     const result = await runAgentTask({
@@ -1114,7 +1116,9 @@ describe("agent task execution", () => {
       channel: "sms",
       status: "requires_approval",
       toAddr: "owner-sms@example.test",
-      bodyText: "Existing autonomous owner-visible proposal."
+      bodyText: "Existing autonomous owner-visible proposal.",
+      origin: "propose_outbound_message",
+      isProactive: true
     });
 
     const result = await runAgentTask({
@@ -1153,7 +1157,9 @@ describe("agent task execution", () => {
     expect(outbox).toEqual(expect.arrayContaining([
       expect.objectContaining({
         status: "pending",
-        bodyText: "Direct owner reply should still queue."
+        bodyText: "Direct owner reply should still queue.",
+        origin: "propose_outbound_message",
+        isProactive: false
       })
     ]));
     await expect(store.listAudit(context, true)).resolves.not.toEqual(expect.arrayContaining([
@@ -2806,7 +2812,9 @@ describe("agent task execution", () => {
         channel: "sms",
         status: "sent",
         toAddr: "owner-sms@example.test",
-        bodyText
+        bodyText,
+        origin: "owner_reply",
+        isProactive: false
       });
     }
     await store.createApproval(context, {
@@ -2844,13 +2852,14 @@ describe("agent task execution", () => {
       executionResult: {
         lookback_hours: 24,
         counts: expect.objectContaining({
-          owner_visible_contact_attempts: 4,
+          owner_visible_contact_attempts: 0,
+          non_proactive_owner_replies: 4,
           owner_inbound_messages: 1,
           pending_approvals: 1
         }),
         contact_cadence: expect.objectContaining({
-          level: "high",
-          outbound_attempts_per_day: 4
+          level: "quiet",
+          outbound_attempts_per_day: 0
         }),
         recent_outbound: expect.arrayContaining([
           expect.objectContaining({

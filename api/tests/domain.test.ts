@@ -1446,4 +1446,53 @@ describe("domain and user ownership APIs", () => {
       })
     ]));
   });
+
+  it("reuses an equivalent active RAG request instead of reviving a conflicting failed job", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      DEV_USER_IS_ADMIN: "true"
+    });
+    const session = await store.createDevelopmentSession(settings, "rag-retry-coalescing-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "admin" as const,
+      permissions: ["user", "admin"],
+      requestId: "rag-retry-coalescing-test",
+      session
+    };
+    const document = await store.writeMarkdownDocument(context, {
+      path: "/personal/retry-coalescing.md",
+      markdown: "# Retry coalescing\n\nOnly one active request should remain."
+    });
+    if ("code" in document) {
+      throw new Error("unexpected markdown conflict");
+    }
+    const [failed] = await store.claimRagIndexJobs(1, new Date());
+    await store.markRagIndexJobDead(failed.id, "first request exhausted retries");
+    const active = await store.enqueueRagJob(context, document.id, "index_markdown");
+
+    await expect(store.retryRagIndexJob(context, failed.id, true)).resolves.toMatchObject({
+      id: active.id,
+      status: "pending"
+    });
+    const jobs = await store.listRagIndexJobs(context, true);
+    expect(jobs.filter((job) => (
+      job.documentId === document.id && ["pending", "claimed"].includes(job.status)
+    ))).toHaveLength(1);
+    expect(jobs.find((job) => job.id === failed.id)).toMatchObject({ status: "dead" });
+    const audit = await store.listAudit(context, true);
+    expect(audit).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        action: "rag.index_job.retry",
+        entityId: failed.id,
+        details: expect.objectContaining({
+          requested_job_id: failed.id,
+          active_job_id: active.id,
+          reused_active_job: true
+        })
+      })
+    ]));
+  });
 });

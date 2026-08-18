@@ -74,10 +74,11 @@ Phase 08 approvals are visible in the Attention tab approval inbox. Autonomous
 cross-app write proposals, self-review contact, and memory-review contact
 create approval records instead of executing immediately. Direct owner commands
 from web chat, mobile voice, or owner-classified inbound messages execute
-through scoped app tokens without an extra approval hop. Newsletter interest
-checks may research genuinely useful material and send only the sanitized cited
-result through the owner's MMS chain; otherwise they record an observation and
-stay quiet. This path does not create an approval. The owner can approve,
+through scoped app tokens without an extra approval hop. The daily conversational
+check-in may research genuinely useful newsletter material and use only the
+sanitized cited result as an icebreaker, preferring MMS with SMS/email fallback.
+If research is unnecessary or fails safely, host code queues a fixed casual
+"What's up?" fallback. This path does not create an approval. The owner can approve,
 reject, edit outbound text, or bulk reject stale approvals from the UI.
 Owner-classified SMS/email replies of `YES`, `NO`, `EDIT <text>`, `LATER`, or
 `DETAILS` are parsed by host code against the most recent pending approval; the
@@ -244,18 +245,23 @@ window seconds, and non-secret reasons. They should be treated as operational
 safety events, not prompt-quality feedback.
 
 Scheduled task intelligence is worker-owned. The worker maintains a daily
-newsletter interest check, an autonomous wake task that recurs roughly every
+conversational check-in, an autonomous wake task that recurs roughly every
 three hours, a twice-daily assistant self-review task, and a weekly memory
 quality review task. Before each recurring run, host code refreshes the model
 prompt with active tasks, `/assistant/schedule.md`,
 `/tasks/schedule-rationale.md`, `/assistant/notification-policy.md`, recent
 owner messages, and recent newsletter knowledge. Schedule-changing tools require
 rationale and write task events; failed recurring wake runs still create the
-next wake. When newsletter material fits the notification policy, the daily task
+next wake. At 17:00 in the owner's configured timezone (UTC fallback), the daily task
 may run one isolated public-web research call with exact newsletter provenance
-paths. The host sends only the sanitized cited result directly through the
-configured MMS gateway and outbound budget; the daily check does not create a
-web approval backlog. Quiet decisions use `record_observation`.
+paths. The host appends a casual question and queues the sanitized result while
+preferring MMS and falling back to SMS or email; otherwise it queues the fixed
+casual fallback. One per-user/local-date dedupe key prevents replayed tasks from
+creating another message or conversation thread. Proactive origin metadata makes
+the outbound budget exclude ordinary owner replies. The host-owned daily row
+remains proactively classified but its validated daily key bypasses the generic
+rolling budget; unrelated proactive messages remain guarded. The daily check does not
+create a web approval backlog.
 Inbound task continuations are requeued as pending worker work after the owner
 message run completes. Approval-gated autonomous actions send their approval
 notice through the configured owner SMS/MMS or email connector, where owner
@@ -381,6 +387,11 @@ Markdown documents in Postgres are the source of truth. Writes enqueue
 `rag_index_jobs`; the `rag-worker` derives chunks and Qdrant vectors from those
 rows. Qdrant is rebuildable and uses one host-chosen collection per user, so MCP
 tools and model calls must never provide collection names.
+
+Migration `0013_rag_job_coalescing` removes obsolete active jobs, restores one
+current job for each document that still needs indexing, and installs an
+active-request uniqueness guard. Queue writers use conflict-safe inserts so a
+reconciliation loop cannot create an unbounded duplicate backlog.
 
 Local RAG services:
 

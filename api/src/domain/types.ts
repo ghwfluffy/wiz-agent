@@ -129,14 +129,22 @@ export type OutboundMessageInput = {
   toAddr: string;
   subject?: string | null;
   bodyText: string;
+  origin?: string;
+  isProactive?: boolean;
+  dedupeKey?: string | null;
   approvalId?: string | null;
   conversationId?: string | null;
   conversationThreadId?: string | null;
 };
 
-export type OutboundMessageRecord = OutboundMessageInput & {
+export type OutboundMessageRecord = Omit<OutboundMessageInput, "origin" | "isProactive" | "dedupeKey"> & {
   id: string;
   userId: string;
+  origin: string;
+  isProactive: boolean;
+  dedupeKey: string | null;
+  deliveryAttempts: number;
+  nextDeliveryAttemptAt: string | null;
   createdAt: string;
   updatedAt: string;
   sentAt?: string | null;
@@ -628,6 +636,7 @@ export type AgentStore = {
     subject: string;
     email: string;
     displayName: string;
+    timezone?: string;
     isAdmin: boolean;
     identityProvider: string;
     requestId: string;
@@ -837,7 +846,8 @@ export type AgentStore = {
     context: RequestContext,
     messageId: string,
     status: OutboundMessageInput["status"],
-    failureMessage?: string | null
+    failureMessage?: string | null,
+    nextDeliveryAttemptAt?: string | null
   ): Promise<OutboundMessageRecord | undefined>;
   claimOutboundMessageForSending(context: RequestContext, messageId: string): Promise<OutboundMessageRecord | undefined>;
   createApproval(context: RequestContext, input: ApprovalInput): Promise<ApprovalRecord>;

@@ -164,6 +164,52 @@ when the message reaches the agent, and passed as context only. It never creates
 tasks, writes memory, approves messages, updates sender trust, calls apps, or
 selects tools by itself; the model still decides and all side effects continue
 through validated MCP/tool contracts.
+
+Normal authenticated owner SMS/email and web prompts receive bounded
+personalization context from the canonical markdown files
+`/personal/profile.md`, `/assistant/preferences/communication.md`, and
+`/assistant/preferences/newsletters.md`. Long files retain bounded excerpts
+from both the beginning and the newest appended content. External newsletter
+documents enter a model turn only when a separate host classifier identifies
+casual conversation, a question, a current-information/news request, or a
+conversation follow-up. An explicit mutation request receives no newsletter
+documents.
+
+Eligible turns receive at most six conversation-linked or recent newsletter
+documents from the three newest dated `/newsletters/` directories, with newest
+arrivals selected first within each day. Deterministic summary and
+candidate-item sections are preferred over raw source content. A topical
+eligible turn may additionally receive at most three older semantic matches.
+That read-only lookup checks Qdrant health before embedding, uses
+`/newsletters` as both the Qdrant and relational-store path restriction, applies
+an exact `/newsletters/YYYY-MM-DD/*.md` result filter, and has one three-second
+deadline around the complete lookup. Missing dependencies and Qdrant,
+embedding, search, or timeout failures return an internal
+`{ status: "unavailable", executed: false }` result; the owner turn continues
+and the prompt does not claim that semantic retrieval happened.
+
+All included newsletter text is flattened inside an explicit external-data
+boundary. The run is marked as carrying external research context, so mutation
+tools are unavailable and the MCP session receives the same read-only allowlist
+as other non-authorizing external evidence. Newsletter text may support small
+talk or factual leads, but it is never an instruction or authority for a write
+or cross-app action. A genuinely separate owner action can use only the existing
+trusted-context handoff, which copies the authenticated owner command and
+explicitly excludes newsletter evidence. Trusted-context handoffs never copy
+newsletter evidence.
+
+For a conversation thread already linked to newsletter markdown or a
+newsletter-enrichment research session, host code recognizes a deliberately
+narrow set of owner reactions such as "I love that", "not interested", "more
+like this", and "remember that I love infrastructure stories". Before the model
+turn, it idempotently appends the positive or negative signal, the authenticated
+owner wording, and host-validated newsletter source paths to
+`/assistant/preferences/newsletters.md`. It does not copy newsletter text into
+preferences or generalize the signal into a topic claim. This preserves direct
+interest evidence even when external-research policy removes write tools from
+the model turn, while the stored signal remains tentative preference evidence
+for later synthesis.
+
 Accepted tool calls execute through the server-owned MCP boundary by default:
 
 1. host code creates an agent run;
@@ -633,18 +679,18 @@ goal updates, or cross-app actions.
 The worker reconciles every signed-in user when a model client is configured so
 recurring scheduler tasks are created even before that user has due work,
 outbound delivery, or an enabled inbox connector. The worker maintains
-recurring agent wake tasks. A newsletter interest check
-reviews ingested newsletter knowledge, newsletter preferences, communication
-preferences, recent owner response timing, pending approvals, and recent bot
-activity evidence before deciding whether now is a good time to mention one or
-two genuinely interesting discoveries. This is not a rigid digest; staying
-quiet and recording the rationale is a successful outcome. For a selected
-discovery, the scheduled run has only `web_research` and `record_observation`.
+recurring agent wake tasks. A daily conversational check-in runs at 17:00 in
+the owner's configured timezone (UTC fallback) and reviews ingested newsletter
+knowledge, newsletter preferences, communication preferences, and recent bot
+activity before choosing an optional icebreaker. This is not a rigid digest.
+For a selected discovery, the scheduled run has only `web_research` and
+`record_observation`.
 The isolated researcher may follow public newsletter links and search for
-corroborating detail. After sanitization, host code creates a conversation
-thread and queues the cited answer directly to the configured MMS gateway as a
-normal pending outbox record; no web approval is created. Unsafe research stays
-quiet. Owner replies reuse the linked sanitized research session, so follow-up
+corroborating detail. After sanitization, host code appends a casual "What's
+up?" invitation, creates a conversation thread, and queues the cited answer
+while preferring MMS and falling back to SMS or email. If research is
+unnecessary or unsafe, the host queues a fixed generic check-in instead; no web
+approval is created. Owner replies reuse the linked sanitized research session, so follow-up
 questions feel like the same assistant conversation. A three-hour
 autonomous wake task reviews memory, active tasks, and schedule rationale so the
 agent can decide whether to act or adjust future work timing through controlled
@@ -657,15 +703,32 @@ from active tasks, `/assistant/schedule.md`, `/tasks/schedule-rationale.md`,
 under `/tasks/outcomes/YYYY-MM.md`, recent owner messages, recent bot activity
 evidence, and recent newsletter knowledge. This gives the model current
 schedule context without letting newsletter content become instructions or
-loading full task logs into prompts. Newsletter timing rationale may also be
+loading full task logs into prompts. Preference excerpts retain both their
+beginning and recently appended tail, and same-day newsletter candidates are
+ordered by newest update before prompt limits are applied. Newsletter timing rationale may also be
 stored under `/assistant/newsletter-interest/YYYY-MM.md`; memory review
 rationale is stored under `/assistant/memory-review/YYYY-MM.md`.
 The next recurring wake is created in a `finally` path, so failed wake runs
-still schedule the next roughly-three-hour review. Newsletter interest,
+still schedule the next roughly-three-hour review. Daily check-in,
 self-review, and memory-review tasks use the same failure-rescheduling pattern.
 If a worker process exits after claiming a recurring task but before the
 `finally` path runs, the next tick marks the stale claim failed after a grace
-window and schedules the next recurrence without rerunning the old claim.
+window, ensures the current owner-local day's fixed fallback outbox exists, and
+schedules the next recurrence without rerunning the old claim. Active recurring
+duplicates are reconciled, and the stable schedule template is rewritten only
+when its meaning changes rather than on every worker tick.
+
+Daily outbox rows carry a per-user/local-date dedupe key, origin, proactive
+classification, delivery-attempt count, and next-attempt time. Replays reuse the
+same row and thread; ordinary replies are non-proactive and do not consume the
+autonomous cadence budget. A host-owned daily row remains proactive for cadence
+reporting but its validated daily dedupe key bypasses the generic rolling
+proactive budget, so unrelated autonomous outreach cannot suppress that day's
+check-in. All other proactive messages retain the guardrail. Transient SMTP failures retry up to five times with
+exponential backoff. SMTP cannot provide true exactly-once delivery—a crash after
+the provider accepts a message but before local status is saved can duplicate a
+retry—so stale daily `sending` rows favor a bounded retry over silently missing
+the required daily check-in.
 
 ## Task Outcome Memory
 

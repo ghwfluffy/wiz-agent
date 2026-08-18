@@ -8,6 +8,9 @@ export const CONVERSATION_THREADING_MIGRATION_ID = "0008_conversation_threading"
 export const SANITIZED_INBOUND_IMAGES_MIGRATION_ID = "0009_sanitized_inbound_images";
 export const OUTBOUND_CONVERSATION_THREAD_MIGRATION_ID = "0010_outbound_conversation_thread";
 export const WEB_RESEARCH_SESSIONS_MIGRATION_ID = "0011_web_research_sessions";
+export const OUTBOUND_PROACTIVE_ORIGIN_MIGRATION_ID = "0012_outbound_proactive_origin";
+export const RAG_JOB_COALESCING_MIGRATION_ID = "0013_rag_job_coalescing";
+export const OUTBOUND_DEDUPE_KEY_MIGRATION_ID = "0014_outbound_dedupe_key";
 
 const tenantOwnedTables = [
   "identities",
@@ -254,4 +257,101 @@ CREATE INDEX IF NOT EXISTS idx_web_research_sessions_user_created
 CREATE INDEX IF NOT EXISTS idx_web_research_sessions_thread_created
   ON web_research_sessions(user_id, conversation_thread_id, created_at DESC)
   WHERE conversation_thread_id IS NOT NULL;
+`;
+
+export const OUTBOUND_PROACTIVE_ORIGIN_SQL = `
+ALTER TABLE outbound_messages
+  ADD COLUMN IF NOT EXISTS origin TEXT NOT NULL DEFAULT 'legacy',
+  ADD COLUMN IF NOT EXISTS is_proactive BOOLEAN NOT NULL DEFAULT false;
+
+CREATE INDEX IF NOT EXISTS idx_outbound_messages_user_proactive_created
+  ON outbound_messages(user_id, is_proactive, created_at DESC);
+`;
+
+export const RAG_JOB_COALESCING_SQL = `
+DELETE FROM rag_index_jobs j
+WHERE j.job_type = 'index_markdown'
+  AND j.status IN ('pending', 'claimed')
+  AND NOT EXISTS (
+    SELECT 1
+    FROM markdown_documents d
+    WHERE d.id = j.document_id
+      AND d.user_id = j.user_id
+      AND d.deleted_at IS NULL
+      AND d.version = j.requested_version
+      AND d.content_hash = j.requested_content_hash
+  );
+
+UPDATE rag_index_jobs
+SET status = 'pending',
+    started_at = NULL,
+    available_at = now()
+WHERE status = 'claimed';
+
+WITH ranked_active_jobs AS (
+  SELECT id,
+         row_number() OVER (
+           PARTITION BY user_id, document_id, job_type,
+             COALESCE(requested_version, -1), COALESCE(requested_content_hash, '')
+           ORDER BY created_at DESC, id DESC
+         ) AS duplicate_rank
+  FROM rag_index_jobs
+  WHERE status IN ('pending', 'claimed')
+)
+DELETE FROM rag_index_jobs j
+USING ranked_active_jobs ranked
+WHERE j.id = ranked.id
+  AND ranked.duplicate_rank > 1;
+
+INSERT INTO rag_index_jobs
+  (id, user_id, document_id, requested_version, requested_content_hash, job_type)
+SELECT
+  md5(random()::text || clock_timestamp()::text),
+  d.user_id,
+  d.id,
+  d.version,
+  d.content_hash,
+  'index_markdown'
+FROM markdown_documents d
+WHERE d.deleted_at IS NULL
+  AND (
+    d.index_status <> 'indexed'
+    OR d.indexed_version IS DISTINCT FROM d.version
+    OR d.indexed_content_hash IS DISTINCT FROM d.content_hash
+  )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM rag_index_jobs j
+    WHERE j.user_id = d.user_id
+      AND j.document_id = d.id
+      AND j.job_type = 'index_markdown'
+      AND j.requested_version = d.version
+      AND j.requested_content_hash = d.content_hash
+      AND j.status IN ('pending', 'claimed')
+  );
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_rag_index_jobs_active_document_request
+  ON rag_index_jobs(
+    user_id,
+    document_id,
+    job_type,
+    COALESCE(requested_version, -1),
+    COALESCE(requested_content_hash, '')
+  )
+  WHERE status IN ('pending', 'claimed');
+`;
+
+export const OUTBOUND_DEDUPE_KEY_SQL = `
+ALTER TABLE outbound_messages
+  ADD COLUMN IF NOT EXISTS dedupe_key TEXT,
+  ADD COLUMN IF NOT EXISTS delivery_attempts INTEGER NOT NULL DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS next_delivery_attempt_at TIMESTAMPTZ;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_messages_user_dedupe_key
+  ON outbound_messages(user_id, dedupe_key)
+  WHERE dedupe_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_outbound_messages_delivery_retry
+  ON outbound_messages(user_id, status, next_delivery_attempt_at)
+  WHERE status IN ('pending', 'approved');
 `;

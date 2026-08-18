@@ -21,7 +21,13 @@ import {
   OUTBOUND_CONVERSATION_THREAD_MIGRATION_ID,
   OUTBOUND_CONVERSATION_THREAD_SQL,
   WEB_RESEARCH_SESSIONS_MIGRATION_ID,
-  WEB_RESEARCH_SESSIONS_SQL
+  WEB_RESEARCH_SESSIONS_SQL,
+  OUTBOUND_PROACTIVE_ORIGIN_MIGRATION_ID,
+  OUTBOUND_PROACTIVE_ORIGIN_SQL,
+  RAG_JOB_COALESCING_MIGRATION_ID,
+  RAG_JOB_COALESCING_SQL,
+  OUTBOUND_DEDUPE_KEY_MIGRATION_ID,
+  OUTBOUND_DEDUPE_KEY_SQL
 } from "./migrations.js";
 
 export async function runMigrations(): Promise<void> {
@@ -250,6 +256,66 @@ export async function runMigrations(): Promise<void> {
         await client.query(WEB_RESEARCH_SESSIONS_SQL);
         await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
           WEB_RESEARCH_SESSIONS_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const outboundProactiveOriginApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      OUTBOUND_PROACTIVE_ORIGIN_MIGRATION_ID
+    ]);
+    if (outboundProactiveOriginApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(OUTBOUND_PROACTIVE_ORIGIN_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          OUTBOUND_PROACTIVE_ORIGIN_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const ragJobCoalescingApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      RAG_JOB_COALESCING_MIGRATION_ID
+    ]);
+    if (ragJobCoalescingApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(RAG_JOB_COALESCING_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          RAG_JOB_COALESCING_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const outboundDedupeKeyApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      OUTBOUND_DEDUPE_KEY_MIGRATION_ID
+    ]);
+    if (outboundDedupeKeyApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(OUTBOUND_DEDUPE_KEY_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          OUTBOUND_DEDUPE_KEY_MIGRATION_ID
         ]);
         await client.query("COMMIT");
       } catch (error) {

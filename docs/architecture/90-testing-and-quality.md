@@ -107,17 +107,19 @@ Current tests cover:
   outbound proposals, cross-app approvals, scheduled quiet/acted/failure
   outcomes, linked ids, duplicate-safe markers, user scoping, audit, and RAG
   enqueueing.
-- recurring newsletter interest check and three-hour autonomous wake task
-  scheduling with durable schedule rationale.
+- recurring owner-timezone-aware daily conversational check-in and three-hour
+  autonomous wake task scheduling with durable schedule rationale.
 - isolated web-search provider envelopes, no-tool injection detection and
   sanitization, public-URL/DNS filtering, query redaction, source-ID validation,
   terminalized results, durable follow-up sessions, and mutation-tool gating
   based only on the current owner command.
-- newsletter research delivery through MMS without approval, including
-  research/thread/task/outbox linkage and quiet `record_observation` outcomes.
-- worker reconciliation for signed-in users without preexisting due work, stale
-  claimed task failure with recurrence rescheduling, stale sending outbox
-  failure without delivery retry, stale running approval execution failure, and
+- newsletter research delivery with MMS preference and SMS/email fallback,
+  including research/thread/task/outbox linkage, a host-owned casual question,
+  and the fixed generic fallback when no research icebreaker is selected.
+- worker reconciliation for signed-in users without preexisting due work,
+  stable schedule-memory bootstrap, recurring-task duplicate cleanup, stale
+  claimed daily fallback recovery, bounded daily delivery retry, stale running
+  approval execution failure, and
   expired approval cancellation of linked outbox records.
 - scheduled memory quality review task scheduling, bounded prompt context from
   recent memory/list/outcome/self-review notes, monthly review-note writes

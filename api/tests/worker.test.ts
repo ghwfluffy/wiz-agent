@@ -3,14 +3,23 @@ import type { ToolModelRequest } from "../src/agent/modelClient.js";
 import { MockModelClient } from "../src/agent/modelClient.js";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
-import { buildScheduledTaskPrompt } from "../src/scheduler/autonomousTasks.js";
-import { daemonOnce } from "../src/scheduler/taskQueue.js";
+import {
+  buildScheduledTaskPrompt,
+  DAILY_CHECK_IN_TITLE,
+  ensureAutonomousTasks,
+  nextDailyCheckInTime
+} from "../src/scheduler/autonomousTasks.js";
+import {
+  DAILY_CHECK_IN_FALLBACK_MESSAGE,
+  daemonOnce,
+  recoverStuckWorkerState
+} from "../src/scheduler/taskQueue.js";
 import { recordTaskOutcomeMemory } from "../src/memory/taskOutcomeMemory.js";
 import {
   OWNER_SCHEDULED_MESSAGE_RECURRENCE,
   scheduledOwnerMessagePrompt
 } from "../src/tools/ownerMessaging.js";
-import { isWorkerEntrypoint, workerTick } from "../src/worker.js";
+import { createNonOverlappingRunner, isWorkerEntrypoint, workerTick } from "../src/worker.js";
 import type { WebResearchClient } from "../src/research/openAiWebResearchClient.js";
 
 function stubWebResearch(answer: string): WebResearchClient {
@@ -41,7 +50,65 @@ describe("worker loop", () => {
     expect(isWorkerEntrypoint(new URL("../src/worker.ts", import.meta.url).href, "src/worker.ts")).toBe(true);
   });
 
-  it("keeps newsletter interest, autonomous wake, self-review, and memory-review tasks scheduled with durable rationale", async () => {
+  it("does not overlap worker ticks", async () => {
+    let release: (() => void) | undefined;
+    const work = vi.fn(() => new Promise<void>((resolve) => {
+      release = resolve;
+    }));
+    const run = createNonOverlappingRunner(work);
+
+    const first = run();
+    await Promise.resolve();
+    await expect(run()).resolves.toBe(false);
+    expect(work).toHaveBeenCalledTimes(1);
+
+    release?.();
+    await expect(first).resolves.toBe(true);
+  });
+
+  it("schedules the daily check-in at 17:00 in the owner's timezone with UTC fallback", () => {
+    expect(nextDailyCheckInTime(
+      new Date("2026-08-17T21:59:00.000Z"),
+      "America/Chicago"
+    ).toISOString()).toBe("2026-08-17T22:00:00.000Z");
+    expect(nextDailyCheckInTime(
+      new Date("2026-08-17T22:00:00.000Z"),
+      "America/Chicago"
+    ).toISOString()).toBe("2026-08-18T22:00:00.000Z");
+    expect(nextDailyCheckInTime(
+      new Date("2026-08-17T12:00:00.000Z"),
+      "not/a-timezone"
+    ).toISOString()).toBe("2026-08-17T17:00:00.000Z");
+  });
+
+  it("uses the timezone carried on the authenticated owner when reconciling daily work", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" });
+    const session = await store.createDevelopmentSession(settings, "worker-owner-timezone-login");
+    session.user.timezone = "America/Chicago";
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-owner-timezone-test",
+      session
+    };
+
+    await ensureAutonomousTasks({
+      store,
+      context,
+      now: new Date("2026-08-17T21:59:00.000Z")
+    });
+
+    await expect(store.listTasks(context)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        title: DAILY_CHECK_IN_TITLE,
+        dueAt: "2026-08-17T22:00:00.000Z"
+      })
+    ]));
+  });
+
+  it("keeps the daily check-in, autonomous wake, self-review, and memory-review tasks scheduled with durable rationale", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
       APP_ENV: "test",
@@ -67,10 +134,10 @@ describe("worker loop", () => {
     const tasks = await store.listTasks(context);
     expect(tasks).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        title: "Newsletter interest check",
+        title: DAILY_CHECK_IN_TITLE,
         prompt: expect.stringContaining("not a daily digest"),
-        scheduleRationale: "Default preference-aware newsletter interest check.",
-        recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
+        scheduleRationale: "Default daily conversational owner check-in with an optional newsletter-derived icebreaker.",
+        recurrencePolicy: "daily conversational check-in around 17:00 in the owner's configured timezone"
       }),
       expect.objectContaining({
         title: "Autonomous agent wake review",
@@ -103,6 +170,92 @@ describe("worker loop", () => {
     await expect(store.getMarkdownDocument(context, "/assistant/preferences/newsletters.md")).resolves.toMatchObject({
       markdown: expect.stringContaining("Newsletter Preferences")
     });
+  });
+
+  it("keeps schedule bootstrap idempotent instead of rewriting schedule markdown every reconciliation", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" });
+    const session = await store.createDevelopmentSession(settings, "worker-stable-schedule-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-stable-schedule-test",
+      session
+    };
+
+    await ensureAutonomousTasks({
+      store,
+      context,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    });
+    const firstDocument = await store.getMarkdownDocument(context, "/assistant/schedule.md");
+    const firstJobs = (await store.listRagIndexJobs(context, false))
+      .filter((job) => job.documentId === firstDocument?.id);
+
+    await ensureAutonomousTasks({
+      store,
+      context,
+      now: new Date("2026-06-13T12:00:20.000Z")
+    });
+    const secondDocument = await store.getMarkdownDocument(context, "/assistant/schedule.md");
+    const secondJobs = (await store.listRagIndexJobs(context, false))
+      .filter((job) => job.documentId === secondDocument?.id);
+
+    expect(secondDocument).toMatchObject({
+      id: firstDocument?.id,
+      version: firstDocument?.version,
+      updatedAt: firstDocument?.updatedAt
+    });
+    expect(secondJobs).toHaveLength(firstJobs.length);
+    expect(secondDocument?.markdown).not.toContain("Last host schedule reconciliation");
+  });
+
+  it("cancels duplicate pending recurring tasks and leaves one active task per recurrence", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" });
+    const session = await store.createDevelopmentSession(settings, "worker-recurring-dedupe-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-recurring-dedupe-test",
+      session
+    };
+    await store.createTask(context, {
+      title: "Newsletter interest check",
+      prompt: "Old check-in.",
+      dueAt: "2026-06-13T17:00:00.000Z"
+    });
+    await store.createTask(context, {
+      title: DAILY_CHECK_IN_TITLE,
+      prompt: "Duplicate new check-in.",
+      dueAt: "2026-06-14T17:00:00.000Z"
+    });
+    await store.createTask(context, {
+      title: "Autonomous agent wake review",
+      prompt: "First wake.",
+      dueAt: "2026-06-13T15:00:00.000Z"
+    });
+    await store.createTask(context, {
+      title: "Autonomous agent wake review",
+      prompt: "Duplicate wake.",
+      dueAt: "2026-06-13T16:00:00.000Z"
+    });
+
+    await expect(ensureAutonomousTasks({
+      store,
+      context,
+      now: new Date("2026-06-13T12:00:00.000Z")
+    })).resolves.toMatchObject({ cancelledDuplicates: 2 });
+
+    const tasks = await store.listTasks(context);
+    expect(tasks.filter((task) =>
+      ["Newsletter interest check", DAILY_CHECK_IN_TITLE].includes(task.title) && task.status === "pending"
+    )).toHaveLength(1);
+    expect(tasks.filter((task) => task.title === "Autonomous agent wake review" && task.status === "pending"))
+      .toHaveLength(1);
+    expect(tasks.filter((task) => task.status === "cancelled")).toHaveLength(2);
   });
 
   it("bounds scheduled agent runs claimed in one worker tick", async () => {
@@ -180,7 +333,7 @@ describe("worker loop", () => {
 
     expect(result.users).toBe(1);
     await expect(store.listTasks(context)).resolves.toEqual(expect.arrayContaining([
-      expect.objectContaining({ title: "Newsletter interest check", status: "pending" }),
+      expect.objectContaining({ title: DAILY_CHECK_IN_TITLE, status: "pending" }),
       expect.objectContaining({ title: "Autonomous agent wake review", status: "pending" }),
       expect.objectContaining({ title: "Assistant self-review", status: "pending" }),
       expect.objectContaining({ title: "Memory quality review", status: "pending" })
@@ -292,6 +445,50 @@ describe("worker loop", () => {
     ]));
   });
 
+  it("ensures today's fallback outbox before rolling a stale claimed daily task", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" });
+    const session = await store.createDevelopmentSession(settings, "worker-stale-daily-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-stale-daily-test",
+      session
+    };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
+    const createdAt = new Date("2026-08-18T17:00:00.000Z");
+    const task = await store.createTask(context, {
+      title: DAILY_CHECK_IN_TITLE,
+      prompt: "Stale daily check-in.",
+      dueAt: createdAt.toISOString()
+    });
+    await store.claimDueTasks(context, 1, createdAt);
+
+    await recoverStuckWorkerState({
+      store,
+      context,
+      settings,
+      now: new Date("2026-08-18T17:31:00.000Z")
+    });
+
+    await expect(store.getTask(context, task.id)).resolves.toMatchObject({ status: "failed" });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        status: "pending",
+        bodyText: DAILY_CHECK_IN_FALLBACK_MESSAGE,
+        dedupeKey: "daily-check-in:2026-08-18"
+      })
+    ]);
+    expect((await store.listTasks(context)).filter((entry) =>
+      entry.title === DAILY_CHECK_IN_TITLE && entry.status === "pending" && entry.id !== task.id
+    )).toHaveLength(1);
+  });
+
   it("marks stale sending outbox records failed without retrying delivery", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
@@ -331,6 +528,46 @@ describe("worker loop", () => {
         id: message.id,
         status: "failed",
         failureMessage: "Outbound delivery attempt expired before completion."
+      })
+    ]);
+  });
+
+  it("requeues a stale sending daily check-in on the same durable outbox row", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" });
+    const session = await store.createDevelopmentSession(settings, "worker-stale-daily-outbox-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-stale-daily-outbox-test",
+      session
+    };
+    const message = await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "pending",
+      toAddr: "owner-sms@example.test",
+      bodyText: DAILY_CHECK_IN_FALLBACK_MESSAGE,
+      origin: "daily_check_in_fallback",
+      isProactive: true,
+      dedupeKey: "daily-check-in:2026-08-18"
+    });
+    await store.claimOutboundMessageForSending(context, message.id);
+
+    const recovery = await recoverStuckWorkerState({
+      store,
+      context,
+      settings,
+      now: new Date(Date.now() + 31 * 60_000)
+    });
+
+    expect(recovery.recoveredOutbound).toBe(1);
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        id: message.id,
+        status: "pending",
+        deliveryAttempts: 1,
+        dedupeKey: "daily-check-in:2026-08-18"
       })
     ]);
   });
@@ -523,7 +760,7 @@ describe("worker loop", () => {
     ]);
   });
 
-  it("sends newsletter interest messages without approval when the scheduled check chooses to contact the owner", async () => {
+  it("falls back to SMS when a researched daily check-in has no MMS destination", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
       APP_ENV: "test",
@@ -543,7 +780,7 @@ describe("worker loop", () => {
     await store.upsertConnector(context, {
       kind: "owner-contact",
       status: "enabled",
-      config: { mms_gateway: "owner-mms@example.test" }
+      config: { sms_gateway: "owner-sms@example.test" }
     });
     await store.upsertConnector(context, {
       kind: "smtp",
@@ -564,7 +801,7 @@ describe("worker loop", () => {
       scheduleRationale: "Preference-aware daily newsletter interest check.",
       recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
     });
-    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-mms@example.test"] });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
 
     const result = await daemonOnce({
       store,
@@ -594,16 +831,19 @@ describe("worker loop", () => {
       outboundSent: 1
     });
     expect(sendMail).toHaveBeenCalledTimes(1);
-    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ to: "owner-mms@example.test" }));
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({ to: "owner-sms@example.test" }));
     await expect(store.listApprovals(context, ["pending"])).resolves.toEqual([]);
     await expect(store.listOutboundMessages(context)).resolves.toEqual([
       expect.objectContaining({
         status: "sent",
         approvalId: null,
-        channel: "mms",
+        channel: "sms",
+        origin: "daily_check_in_newsletter_research",
+        isProactive: true,
         bodyText: expect.stringContaining("Cool newsletter find: one concrete thing worth checking later.")
       })
     ]);
+    expect((await store.listOutboundMessages(context))[0]?.bodyText).toContain("What's up?");
   });
 
   it("keeps an existing legacy newsletter synthesis task from duplicating and rolls it forward to interest checks", async () => {
@@ -620,6 +860,11 @@ describe("worker loop", () => {
       requestId: "worker-legacy-newsletter-test",
       session
     };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
     const legacyTask = await store.createTask(context, {
       title: "Daily newsletter synthesis",
       prompt: "Legacy newsletter task.",
@@ -637,7 +882,7 @@ describe("worker loop", () => {
     });
 
     expect((await store.listTasks(context)).filter((entry) =>
-      ["Daily newsletter synthesis", "Newsletter interest check"].includes(entry.title) &&
+      ["Daily newsletter synthesis", "Newsletter interest check", DAILY_CHECK_IN_TITLE].includes(entry.title) &&
       !["completed", "cancelled", "failed"].includes(entry.status)
     )).toHaveLength(1);
 
@@ -661,7 +906,7 @@ describe("worker loop", () => {
 
     await expect(store.getTask(context, legacyTask.id)).resolves.toMatchObject({ status: "completed" });
     expect((await store.listTasks(context)).filter((entry) =>
-      entry.title === "Newsletter interest check" &&
+      entry.title === DAILY_CHECK_IN_TITLE &&
       entry.status === "pending" &&
       entry.sourceTaskId === legacyTask.id
     )).toHaveLength(1);
@@ -707,7 +952,7 @@ describe("worker loop", () => {
       modelClient: new MockModelClient(),
       now: new Date("2026-06-13T12:00:00.000Z")
     });
-    const task = (await store.listTasks(context)).find((entry) => entry.title === "Newsletter interest check");
+    const task = (await store.listTasks(context)).find((entry) => entry.title === DAILY_CHECK_IN_TITLE);
     expect(task).toBeTruthy();
 
     const prompt = await buildScheduledTaskPrompt({
@@ -718,15 +963,69 @@ describe("worker loop", () => {
     });
 
     expect(prompt).toContain("This is not a daily digest");
-    expect(prompt).toContain("host prompt includes current contact cadence");
+    expect(prompt).toContain("host prompt includes proactive contact cadence");
     expect(prompt).toContain("/assistant/preferences/newsletters.md");
     expect(prompt).toContain("Communication preferences:");
     expect(prompt).toContain("Newsletter preferences:");
     expect(prompt).toContain("Recent bot activity evidence for newsletter timing:");
     expect(prompt).toContain("pending_approvals=");
     expect(prompt).toContain("owner_visible_contact_attempts=");
-    expect(prompt).toContain("Prefer staying quiet when recent contact cadence is high");
+    expect(prompt).toContain("host will still queue a short fixed 'what's up?' check-in");
     expect(prompt).toContain("A surprising database outage writeup");
+  });
+
+  it("keeps recent appended preferences and the newest newsletter files in the bounded check-in prompt", async () => {
+    vi.useFakeTimers();
+    try {
+      const store = createMemoryStore();
+      const settings = loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "standalone",
+        AGENT_MAX_NEWSLETTER_DOCUMENTS_PER_INTEREST_CHECK: "5"
+      });
+      const session = await store.createDevelopmentSession(settings, "worker-recent-newsletter-context-login");
+      const context = {
+        userId: session.user.id,
+        actorType: "system" as const,
+        permissions: ["user", "system"],
+        requestId: "worker-recent-newsletter-context-test",
+        session
+      };
+      await store.writeMarkdownDocument(context, {
+        path: "/assistant/preferences/newsletters.md",
+        markdown: `# Newsletter Preferences\n\n${"older preference filler ".repeat(90)}\n\n- RECENT-APPENDED-INTEREST: space launch systems.`
+      });
+      vi.setSystemTime(new Date("2026-06-13T08:00:00.000Z"));
+      for (const name of ["a", "b", "c", "d", "e"]) {
+        await store.writeMarkdownDocument(context, {
+          path: `/newsletters/2026-06-13/${name}.md`,
+          markdown: `# ${name}\n\nOlder item ${name}.`
+        });
+      }
+      vi.setSystemTime(new Date("2026-06-13T09:00:00.000Z"));
+      await store.writeMarkdownDocument(context, {
+        path: "/newsletters/2026-06-13/z-newest.md",
+        markdown: "# Newest\n\nNEWEST-NEWSLETTER-MARKER"
+      });
+      const task = await store.createTask(context, {
+        title: DAILY_CHECK_IN_TITLE,
+        prompt: "Run daily check-in.",
+        dueAt: "2026-06-13T17:00:00.000Z"
+      });
+
+      const prompt = await buildScheduledTaskPrompt({
+        store,
+        context,
+        task,
+        settings,
+        now: new Date("2026-06-13T17:00:00.000Z")
+      });
+
+      expect(prompt).toContain("RECENT-APPENDED-INTEREST");
+      expect(prompt).toContain("NEWEST-NEWSLETTER-MARKER");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("honors the newsletter document guardrail when composing interest prompts", async () => {
@@ -768,11 +1067,12 @@ describe("worker loop", () => {
     expect(includedNewsletterDocuments).toHaveLength(2);
   });
 
-  it("lets a scheduled newsletter interest check stay quiet and record rationale", async () => {
+  it("queues the fixed conversational fallback when a daily check-in has no newsletter icebreaker", async () => {
     const store = createMemoryStore();
     const settings = loadSettings({
       APP_ENV: "test",
-      AUTH_MODE: "standalone"
+      AUTH_MODE: "standalone",
+      AGENT_OUTBOUND_ENABLED: "true"
     });
     const session = await store.createDevelopmentSession(settings, "worker-newsletter-quiet-login");
     const context = {
@@ -782,6 +1082,19 @@ describe("worker loop", () => {
       requestId: "worker-newsletter-quiet-test",
       session
     };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: { host: "smtp.example.test", from: "sender@example.test", password: "secret" }
+      }
+    });
     const task = await store.createTask(context, {
       title: "Newsletter interest check",
       prompt: "Run newsletter interest check.",
@@ -790,6 +1103,7 @@ describe("worker loop", () => {
       recurrencePolicy: "preference-aware daily interest check around 17:00 local/server time"
     });
 
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
     const result = await daemonOnce({
       store,
       context,
@@ -805,30 +1119,298 @@ describe("worker loop", () => {
           }
         ]
       }),
+      mailTransport: { sendMail },
       now: new Date("2026-06-13T17:00:00.000Z")
     });
 
-    expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1, outboundAttempted: 0 });
+    expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1, outboundAttempted: 1, outboundSent: 1 });
     await expect(store.getTask(context, task.id)).resolves.toMatchObject({
       status: "completed",
       scheduleRationale: "Test quiet newsletter check."
     });
-    await expect(store.listOutboundMessages(context)).resolves.toEqual([]);
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        status: "sent",
+        channel: "sms",
+        bodyText: DAILY_CHECK_IN_FALLBACK_MESSAGE,
+        origin: "daily_check_in_fallback",
+        isProactive: true
+      })
+    ]);
     await expect(store.listTaskEvents(context, task.id)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ eventType: "scheduled_task.outcome" })
     ]));
     const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
     expect(ledger).toMatchObject({
-      markdown: expect.stringContaining("completed scheduled task without owner-visible action")
+      markdown: expect.stringContaining("completed scheduled task with action")
     });
     expect(ledger?.markdown).toContain(`taskId: ${task.id}`);
     expect(ledger?.markdown).toContain("Stayed quiet: recent newsletter material was routine");
-    expect(ledger?.markdown).toContain("Owner-visible side effect status: none");
+    expect(ledger?.markdown).toContain("Owner-visible side effect status: tool_or_local_side_effect_recorded");
     expect((await store.listTasks(context)).filter((entry) =>
-      entry.title === "Newsletter interest check" &&
+      entry.title === DAILY_CHECK_IN_TITLE &&
       entry.status === "pending" &&
       entry.id !== task.id
     )).toHaveLength(1);
+  });
+
+  it("deduplicates overdue daily replays by owner-local execution date without creating another thread", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OUTBOUND_ENABLED: "true"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-daily-dedupe-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-daily-dedupe-test",
+      session
+    };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: { host: "smtp.example.test", from: "sender@example.test", password: "secret" }
+      }
+    });
+    const firstTask = await store.createTask(context, {
+      title: "Newsletter interest check",
+      prompt: "Overdue check-in one.",
+      dueAt: "2026-08-16T17:00:00.000Z"
+    });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
+    const observationModel = () => new MockModelClient({
+      tools: [{
+        toolName: "record_observation",
+        arguments: { summary: "No newsletter icebreaker today.", source: "daily_check_in" }
+      }]
+    });
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: observationModel(),
+      mailTransport: { sendMail },
+      now: new Date("2026-08-18T01:00:00.000Z")
+    });
+    const [firstOutbound] = await store.listOutboundMessages(context);
+    expect(firstOutbound).toMatchObject({
+      dedupeKey: "daily-check-in:2026-08-18",
+      status: "sent"
+    });
+
+    const replayTask = await store.createTask(context, {
+      title: "Daily newsletter synthesis",
+      prompt: "Overdue check-in replay.",
+      dueAt: "2026-08-17T17:00:00.000Z"
+    });
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: observationModel(),
+      mailTransport: { sendMail },
+      now: new Date("2026-08-18T01:05:00.000Z")
+    });
+
+    const outbox = await store.listOutboundMessages(context);
+    expect(outbox).toHaveLength(1);
+    expect(outbox[0]?.id).toBe(firstOutbound?.id);
+    expect(sendMail).toHaveBeenCalledTimes(1);
+    await expect(store.listConversationThreads(context)).resolves.toHaveLength(1);
+    await expect(store.listTaskEvents(context, replayTask.id)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        eventType: "daily_check_in.queued",
+        details: expect.objectContaining({
+          outbound_message_id: firstOutbound?.id,
+          conversation_thread_id: firstOutbound?.conversationThreadId
+        })
+      })
+    ]));
+    await expect(store.getTask(context, firstTask.id)).resolves.toMatchObject({ status: "completed" });
+  });
+
+  it("retries a transient daily SMTP failure with bounded persistent backoff", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OUTBOUND_ENABLED: "true"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-daily-retry-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-daily-retry-test",
+      session
+    };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: { host: "smtp.example.test", from: "sender@example.test", password: "secret" }
+      }
+    });
+    await store.createTask(context, {
+      title: DAILY_CHECK_IN_TITLE,
+      prompt: "Daily retry check-in.",
+      dueAt: "2026-08-18T17:00:00.000Z"
+    });
+    const sendMail = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary SMTP outage"))
+      .mockResolvedValueOnce({ accepted: ["owner-sms@example.test"] });
+
+    const first = await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: new MockModelClient({
+        tools: [{
+          toolName: "record_observation",
+          arguments: { summary: "Use fallback.", source: "daily_check_in" }
+        }]
+      }),
+      mailTransport: { sendMail },
+      now: new Date("2026-08-18T17:00:00.000Z")
+    });
+    expect(first).toMatchObject({ outboundAttempted: 1, outboundFailed: 1 });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({
+        status: "pending",
+        deliveryAttempts: 1,
+        nextDeliveryAttemptAt: "2026-08-18T17:01:00.000Z"
+      })
+    ]);
+
+    const early = await daemonOnce({
+      store,
+      context,
+      settings,
+      mailTransport: { sendMail },
+      now: new Date("2026-08-18T17:00:30.000Z")
+    });
+    expect(early.outboundAttempted).toBe(0);
+
+    const retried = await daemonOnce({
+      store,
+      context,
+      settings,
+      mailTransport: { sendMail },
+      now: new Date("2026-08-18T17:01:00.000Z")
+    });
+    expect(retried).toMatchObject({ outboundAttempted: 1, outboundSent: 1 });
+    await expect(store.listOutboundMessages(context)).resolves.toEqual([
+      expect.objectContaining({ status: "sent", deliveryAttempts: 2, nextDeliveryAttemptAt: null })
+    ]);
+    expect(sendMail).toHaveBeenCalledTimes(2);
+  });
+
+  it("queues exactly one host-owned daily row when the rolling proactive budget is saturated", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      AUTH_MODE: "standalone",
+      AGENT_OUTBOUND_ENABLED: "true",
+      AGENT_MAX_OWNER_VISIBLE_OUTBOUND_MESSAGES_PER_USER_PER_DAY: "1"
+    });
+    const session = await store.createDevelopmentSession(settings, "worker-daily-budget-bypass-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "system" as const,
+      permissions: ["user", "system"],
+      requestId: "worker-daily-budget-bypass-test",
+      session
+    };
+    await store.upsertConnector(context, {
+      kind: "owner-contact",
+      status: "enabled",
+      config: { sms_gateway: "owner-sms@example.test" }
+    });
+    await store.upsertConnector(context, {
+      kind: "smtp",
+      status: "enabled",
+      config: {
+        username: "sender@example.test",
+        smtp: { host: "smtp.example.test", from: "sender@example.test", password: "secret" }
+      }
+    });
+    await store.queueOutboundMessage(context, {
+      channel: "sms",
+      status: "sent",
+      toAddr: "owner-sms@example.test",
+      bodyText: "Earlier autonomous outreach saturated the rolling budget.",
+      origin: "propose_outbound_message",
+      isProactive: true
+    });
+    await store.createTask(context, {
+      title: DAILY_CHECK_IN_TITLE,
+      prompt: "Daily check-in under a saturated rolling budget.",
+      dueAt: "2026-08-18T17:00:00.000Z"
+    });
+    const observationModel = () => new MockModelClient({
+      tools: [{
+        toolName: "record_observation",
+        arguments: { summary: "Use the fixed daily fallback.", source: "daily_check_in" }
+      }]
+    });
+    const sendMail = vi.fn().mockResolvedValue({ accepted: ["owner-sms@example.test"] });
+
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: observationModel(),
+      mailTransport: { sendMail },
+      now: new Date("2026-08-18T17:00:00.000Z")
+    });
+    const firstDailyRows = (await store.listOutboundMessages(context))
+      .filter((message) => message.dedupeKey === "daily-check-in:2026-08-18");
+    expect(firstDailyRows).toEqual([
+      expect.objectContaining({
+        status: "sent",
+        origin: "daily_check_in_fallback",
+        isProactive: true,
+        bodyText: DAILY_CHECK_IN_FALLBACK_MESSAGE
+      })
+    ]);
+
+    await store.createTask(context, {
+      title: "Newsletter interest check",
+      prompt: "Replay today's daily check-in.",
+      dueAt: "2026-08-18T17:05:00.000Z"
+    });
+    await daemonOnce({
+      store,
+      context,
+      settings,
+      modelClient: observationModel(),
+      mailTransport: { sendMail },
+      now: new Date("2026-08-18T17:05:00.000Z")
+    });
+
+    const replayDailyRows = (await store.listOutboundMessages(context))
+      .filter((message) => message.dedupeKey === "daily-check-in:2026-08-18");
+    expect(replayDailyRows).toHaveLength(1);
+    expect(replayDailyRows[0]?.id).toBe(firstDailyRows[0]?.id);
+    expect(replayDailyRows[0]?.isProactive).toBe(true);
+    expect(sendMail).toHaveBeenCalledTimes(1);
   });
 
   it("lets a scheduled newsletter interest check send a budgeted conversational message", async () => {
@@ -909,6 +1491,8 @@ describe("worker loop", () => {
         status: "sent",
         toAddr: "owner-mms@example.test",
         approvalId: null,
+        origin: "daily_check_in_newsletter_research",
+        isProactive: true,
         bodyText: expect.stringContaining("One newsletter thing worth flagging")
       })
     ]);

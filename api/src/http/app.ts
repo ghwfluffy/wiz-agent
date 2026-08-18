@@ -1618,6 +1618,11 @@ export function buildApp(options: AppOptions = {}): Hono {
         subject,
         email: typeof userinfo?.email === "string" ? userinfo.email : `${username}@central-auth.local`,
         displayName: typeof userinfo?.name === "string" ? userinfo.name : username,
+        timezone: typeof userinfo?.zoneinfo === "string"
+          ? userinfo.zoneinfo
+          : typeof userinfo?.timezone === "string"
+            ? userinfo.timezone
+            : undefined,
         isAdmin: userinfo?.is_admin === true,
         identityProvider: "central-oauth",
         requestId

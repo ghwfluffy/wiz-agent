@@ -9,6 +9,22 @@ import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 import { processInboundMessage } from "./inboundProcessor.js";
 import { loadEmailSecret } from "./smtpSender.js";
 import { classifySender, handleInboundMessage, type InboundRateLimiter } from "../security/senderPolicy.js";
+import { extractNewsletterPublicLinks } from "../security/newsletterPolicy.js";
+
+export const DEFAULT_IMAP_POLL_INTERVAL_MS = 5 * 60 * 1000;
+export const MAX_IMAP_FAILURE_BACKOFF_MS = 60 * 60 * 1000;
+export const IMAP_UID_QUARANTINE_ATTEMPTS = 3;
+
+export class ImapMessageSourceError extends Error {
+  constructor(message: string, readonly sourceError?: unknown) {
+    super(message);
+    this.name = "ImapMessageSourceError";
+  }
+}
+
+export function isDeterministicImapMessageFailure(error: unknown): error is ImapMessageSourceError {
+  return error instanceof ImapMessageSourceError;
+}
 
 type ImapConfig = {
   username?: string;
@@ -19,6 +35,10 @@ type ImapConfig = {
   mailbox: string;
   lastReceivedAt?: string;
   lastUid?: number;
+  uidValidity?: string;
+  pollIntervalMs: number;
+  nextPollAt?: string;
+  consecutiveFailures: number;
 };
 
 type FetchMessage = {
@@ -103,6 +123,24 @@ function validUidCursor(value: number | undefined): number | undefined {
     : undefined;
 }
 
+function uidValidityFromConfig(value: unknown): string | undefined {
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isSafeInteger(value) && value >= 0) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function boundedPollIntervalMs(value: unknown): number {
+  const seconds = numberFromConfig(value);
+  if (seconds === undefined) {
+    return DEFAULT_IMAP_POLL_INTERVAL_MS;
+  }
+  return Math.min(60 * 60 * 1000, Math.max(60 * 1000, Math.trunc(seconds * 1000)));
+}
+
 function validDate(value: string | undefined): Date | undefined {
   if (!value) {
     return undefined;
@@ -130,6 +168,157 @@ export function isNewerThanLastReceived(receivedAt: string, lastReceivedAt: stri
   }
   const received = validDate(receivedAt);
   return Boolean(received && received.getTime() > last.getTime());
+}
+
+export function isImapPollDue(nextPollAt: string | undefined, now = new Date()): boolean {
+  const next = validDate(nextPollAt);
+  return !next || next.getTime() <= now.getTime();
+}
+
+export function imapFailureBackoffMs(
+  consecutiveFailures: number,
+  pollIntervalMs = DEFAULT_IMAP_POLL_INTERVAL_MS
+): number {
+  const failures = Math.max(1, Math.trunc(consecutiveFailures));
+  const exponent = Math.min(10, failures - 1);
+  return Math.min(MAX_IMAP_FAILURE_BACKOFF_MS, Math.max(60_000, pollIntervalMs) * (2 ** exponent));
+}
+
+export function eligibleImapUids(uids: number[], lastUid: number | undefined, limit = 10): number[] {
+  const cursor = typeof lastUid === "number" && Number.isFinite(lastUid) ? Math.trunc(lastUid) : 0;
+  return [...new Set(uids.map((uid) => Math.trunc(uid)))]
+    .filter((uid) => Number.isFinite(uid) && uid > cursor)
+    .sort((a, b) => a - b)
+    .slice(0, Math.max(0, Math.trunc(limit)));
+}
+
+export function shouldResetImapUidCursor(storedUidValidity: string | undefined, mailboxUidValidity: string | undefined): boolean {
+  return Boolean(storedUidValidity && mailboxUidValidity && storedUidValidity !== mailboxUidValidity);
+}
+
+export async function processImapUidBatch<T extends { uid: number }, R>(options: {
+  messages: T[];
+  processMessage: (message: T) => Promise<R>;
+  commitMessage: (message: T, result: R) => Promise<void>;
+  onFailure?: (message: T, error: unknown) => Promise<"continue" | "stop" | void>;
+}): Promise<{ attempted: number; recorded: number; failed: number }> {
+  let attempted = 0;
+  let recorded = 0;
+  let failed = 0;
+  for (const message of [...options.messages].sort((left, right) => left.uid - right.uid)) {
+    attempted += 1;
+    try {
+      const result = await options.processMessage(message);
+      await options.commitMessage(message, result);
+      recorded += 1;
+    } catch (error) {
+      failed += 1;
+      const resolution = await options.onFailure?.(message, error);
+      if (resolution === "continue") {
+        continue;
+      }
+      break;
+    }
+  }
+  return { attempted, recorded, failed };
+}
+
+async function clearImapUidFailureState(options: {
+  store: AgentStore;
+  context: RequestContext;
+  uid: number;
+  uidValidity?: string;
+}): Promise<void> {
+  const connector = await options.store.getConnector(options.context, "imap");
+  if (!connector) {
+    return;
+  }
+  const currentImap = objectValue(connector.config.imap);
+  const failedUid = numberFromConfig(currentImap.failed_uid);
+  const failedUidValidity = uidValidityFromConfig(currentImap.failed_uid_validity);
+  if (failedUid !== options.uid || (options.uidValidity && failedUidValidity && failedUidValidity !== options.uidValidity)) {
+    return;
+  }
+  await options.store.upsertConnector(options.context, {
+    kind: "imap",
+    status: connector.status,
+    config: {
+      ...connector.config,
+      imap: {
+        ...currentImap,
+        failed_uid: null,
+        failed_uid_attempts: 0,
+        failed_uid_validity: null
+      }
+    }
+  });
+}
+
+export async function resolveImapUidFailure(options: {
+  store: AgentStore;
+  context: RequestContext;
+  uid: number;
+  uidValidity?: string;
+  error: unknown;
+  quarantine: () => Promise<void>;
+}): Promise<"continue" | "stop"> {
+  const connector = await options.store.getConnector(options.context, "imap");
+  if (!connector) {
+    return "stop";
+  }
+  if (!isDeterministicImapMessageFailure(options.error)) {
+    await options.store.recordAudit(options.context, "connector.imap_message_error", "connector", "imap", {
+      uid: options.uid,
+      uid_validity: options.uidValidity ?? null,
+      retry_classification: "transient",
+      error_name: options.error instanceof Error ? options.error.name.slice(0, 120) : "UnknownError",
+      message: "Message handling failed outside deterministic source parsing. Processing stopped at this UID; the cursor and quarantine counter were not advanced."
+    });
+    return "stop";
+  }
+  const currentImap = objectValue(connector.config.imap);
+  const failedUid = numberFromConfig(currentImap.failed_uid);
+  const failedUidValidity = uidValidityFromConfig(currentImap.failed_uid_validity);
+  const sameUid = failedUid === options.uid
+    && (!options.uidValidity || !failedUidValidity || failedUidValidity === options.uidValidity);
+  const priorAttempts = sameUid ? Math.max(0, Math.trunc(numberFromConfig(currentImap.failed_uid_attempts) ?? 0)) : 0;
+  const attempts = Math.min(IMAP_UID_QUARANTINE_ATTEMPTS, priorAttempts + 1);
+  await options.store.upsertConnector(options.context, {
+    kind: "imap",
+    status: connector.status,
+    config: {
+      ...connector.config,
+      imap: {
+        ...currentImap,
+        failed_uid: options.uid,
+        failed_uid_attempts: attempts,
+        failed_uid_validity: options.uidValidity ?? null
+      }
+    }
+  });
+  await options.store.recordAudit(options.context, "connector.imap_message_error", "connector", "imap", {
+    uid: options.uid,
+    uid_validity: options.uidValidity ?? null,
+    retry_classification: "deterministic_source",
+    attempt: attempts,
+    quarantine_threshold: IMAP_UID_QUARANTINE_ATTEMPTS,
+    error_name: options.error instanceof Error ? options.error.name.slice(0, 120) : "UnknownError",
+    message: attempts < IMAP_UID_QUARANTINE_ATTEMPTS
+      ? "Message ingestion failed. Processing stopped at this UID; the cursor was not advanced past it."
+      : "Message ingestion failed at the retry threshold and is being quarantined."
+  });
+  if (attempts < IMAP_UID_QUARANTINE_ATTEMPTS) {
+    return "stop";
+  }
+  await options.store.recordAudit(options.context, "connector.imap_message_quarantined", "connector", "imap", {
+    uid: options.uid,
+    uid_validity: options.uidValidity ?? null,
+    attempts,
+    message: "The malformed message reached the bounded retry threshold. Its UID will be advanced explicitly so later mail can proceed."
+  });
+  await options.quarantine();
+  await clearImapUidFailureState(options);
+  return "continue";
 }
 
 export function imapErrorDetails(error: unknown): ImapErrorDetails {
@@ -171,8 +360,97 @@ export async function resolveImapConfig(options: {
     secure: booleanConfig(imapConfig.secure, secret.imap?.secure),
     mailbox: stringConfig(imapConfig.mailbox, secret.imap?.mailbox) ?? "INBOX",
     lastReceivedAt: stringFromConfig(imapConfig.last_received_at),
-    lastUid: numberFromConfig(imapConfig.last_uid)
+    lastUid: numberFromConfig(imapConfig.last_uid),
+    uidValidity: uidValidityFromConfig(imapConfig.uid_validity),
+    pollIntervalMs: boundedPollIntervalMs(imapConfig.poll_interval_seconds),
+    nextPollAt: stringFromConfig(imapConfig.next_poll_at),
+    consecutiveFailures: Math.max(0, Math.trunc(numberFromConfig(imapConfig.consecutive_failures) ?? 0))
   };
+}
+
+async function synchronizeImapUidValidity(options: {
+  store: AgentStore;
+  context: RequestContext;
+  config: ImapConfig;
+  mailboxUidValidity?: string;
+}): Promise<void> {
+  if (!options.mailboxUidValidity) {
+    return;
+  }
+  const resetCursor = shouldResetImapUidCursor(options.config.uidValidity, options.mailboxUidValidity);
+  if (!resetCursor && options.config.uidValidity === options.mailboxUidValidity) {
+    return;
+  }
+  const connector = await options.store.getConnector(options.context, "imap");
+  if (!connector) {
+    return;
+  }
+  const currentImap = objectValue(connector.config.imap);
+  await options.store.upsertConnector(options.context, {
+    kind: "imap",
+    status: connector.status,
+    config: {
+      ...connector.config,
+      imap: {
+        ...currentImap,
+        uid_validity: options.mailboxUidValidity,
+        ...(resetCursor ? {
+          last_uid: null,
+          last_received_at: null,
+          failed_uid: null,
+          failed_uid_attempts: 0,
+          failed_uid_validity: null
+        } : {})
+      }
+    }
+  });
+  if (resetCursor) {
+    await options.store.recordAudit(options.context, "connector.imap_uidvalidity_reset", "connector", "imap", {
+      previous_uid_validity: options.config.uidValidity,
+      mailbox_uid_validity: options.mailboxUidValidity,
+      message: "The mailbox UID validity changed, so the stale UID cursor was cleared before searching."
+    });
+    options.config.lastUid = undefined;
+    options.config.lastReceivedAt = undefined;
+  }
+  options.config.uidValidity = options.mailboxUidValidity;
+}
+
+async function updateImapPollState(options: {
+  store: AgentStore;
+  context: RequestContext;
+  config: Pick<ImapConfig, "pollIntervalMs" | "consecutiveFailures">;
+  succeeded: boolean;
+  now?: Date;
+}): Promise<void> {
+  const connector = await options.store.getConnector(options.context, "imap");
+  if (!connector) {
+    return;
+  }
+  const now = options.now ?? new Date();
+  const currentImap = objectValue(connector.config.imap);
+  const currentFailures = Math.max(0, Math.trunc(numberFromConfig(currentImap.consecutive_failures) ?? options.config.consecutiveFailures));
+  const consecutiveFailures = options.succeeded ? 0 : currentFailures + 1;
+  const delayMs = options.succeeded
+    ? options.config.pollIntervalMs
+    : imapFailureBackoffMs(consecutiveFailures, options.config.pollIntervalMs);
+  await options.store.upsertConnector(options.context, {
+    kind: "imap",
+    status: connector.status,
+    config: {
+      ...connector.config,
+      imap: {
+        ...currentImap,
+        poll_interval_seconds: Math.trunc(options.config.pollIntervalMs / 1000),
+        next_poll_at: new Date(now.getTime() + delayMs).toISOString(),
+        consecutive_failures: consecutiveFailures,
+        last_poll_attempt_at: now.toISOString(),
+        ...(options.succeeded
+          ? { last_poll_succeeded_at: now.toISOString() }
+          : { last_poll_failed_at: now.toISOString() })
+      }
+    }
+  });
 }
 
 async function updateImapProgress(options: {
@@ -180,6 +458,7 @@ async function updateImapProgress(options: {
   context: RequestContext;
   receivedAt?: string;
   uid?: number;
+  clearFailureUid?: number;
 }): Promise<void> {
   const connector = await options.store.getConnector(options.context, "imap");
   if (!connector) {
@@ -194,6 +473,8 @@ async function updateImapProgress(options: {
   const uid = typeof options.uid === "number" && Number.isFinite(options.uid)
     ? Math.max(Math.trunc(options.uid), currentUid ?? 0)
     : currentUid;
+  const failedUid = numberFromConfig(currentImap.failed_uid);
+  const clearFailure = typeof options.clearFailureUid === "number" && failedUid === Math.trunc(options.clearFailureUid);
   await options.store.upsertConnector(options.context, {
     kind: "imap",
     status: connector.status,
@@ -202,7 +483,12 @@ async function updateImapProgress(options: {
       imap: {
         ...currentImap,
         last_received_at: receivedAt ?? null,
-        last_uid: uid ?? null
+        last_uid: uid ?? null,
+        ...(clearFailure ? {
+          failed_uid: null,
+          failed_uid_attempts: 0,
+          failed_uid_validity: null
+        } : {})
       }
     }
   });
@@ -245,12 +531,42 @@ function addressText(value: Awaited<ReturnType<typeof simpleParser>>["to"]): str
   return Array.isArray(value) ? value.flatMap((item) => item.value).map((item) => item.address).filter(Boolean).join(", ") : value.text;
 }
 
-function textBody(parsed: Awaited<ReturnType<typeof simpleParser>>): string {
-  const text = parsed.text?.trim();
-  if (text) {
-    return text;
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, "\"")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_match, digits: string) => String.fromCodePoint(Number.parseInt(digits, 16)))
+    .replace(/&#([0-9]+);/g, (_match, digits: string) => String.fromCodePoint(Number.parseInt(digits, 10)));
+}
+
+function htmlAnchorHrefs(html: string): string[] {
+  const hrefs: string[] = [];
+  const pattern = /<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gi;
+  for (const match of html.matchAll(pattern)) {
+    const href = decodeHtmlAttribute(match[1] ?? match[2] ?? match[3] ?? "").trim();
+    if (href) {
+      hrefs.push(href);
+    }
   }
-  return parsed.html ? parsed.html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim() : "";
+  return hrefs;
+}
+
+export function normalizedMessageBody(parsed: Awaited<ReturnType<typeof simpleParser>>): string {
+  const html = typeof parsed.html === "string" ? parsed.html : "";
+  const text = parsed.text?.trim() || html
+    .replace(/<\/?(?:p|div|li|h[1-6]|br)\b[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/ *\n */g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  const missingLinks = extractNewsletterPublicLinks(htmlAnchorHrefs(html).join("\n"))
+    .filter((link) => !text.includes(link));
+  return [
+    text,
+    missingLinks.length > 0 ? `Source links:\n${missingLinks.join("\n")}` : ""
+  ].filter(Boolean).join("\n\n");
 }
 
 function sanitizeAttachmentFilename(value: string | undefined): string | null {
@@ -360,52 +676,85 @@ export async function processImapInbox(options: {
   if (!resolvedConfig) {
     return { configured: false, attempted: 0, recorded: 0, failed: 0 };
   }
+  if (!resolvedConfig.host || !resolvedConfig.username || !resolvedConfig.password) {
+    return { configured: false, attempted: 0, recorded: 0, failed: 0 };
+  }
+  const host = resolvedConfig.host;
+  const username = resolvedConfig.username;
+  const password = resolvedConfig.password;
+  if (!isImapPollDue(resolvedConfig.nextPollAt)) {
+    return { configured: true, attempted: 0, recorded: 0, failed: 0 };
+  }
   const config = await seedImapProgressFromRecordedMessages({
     store: options.store,
     context: options.context,
     config: resolvedConfig
   });
-  if (!config.host || !config.username || !config.password) {
-    return { configured: false, attempted: 0, recorded: 0, failed: 0 };
-  }
-  const uidCursor = validUidCursor(config.lastUid);
 
   const client = new ImapFlow({
-    host: config.host,
+    host,
     port: config.port ?? 993,
     secure: config.secure ?? true,
     connectionTimeout: 10_000,
     greetingTimeout: 10_000,
     socketTimeout: 15_000,
     auth: {
-      user: config.username,
-      pass: config.password
+      user: username,
+      pass: password
     },
     logger: false
   });
   client.on("error", () => undefined);
-  let attempted = 0;
-  let recorded = 0;
-  let failed = 0;
-
-  await client.connect();
   try {
+    await client.connect();
     const lock = await client.getMailboxLock(config.mailbox);
+    let result = { attempted: 0, recorded: 0, failed: 0 };
     try {
-      const unseen = await client.search(buildImapSearchCriteria(config), { uid: true });
-      const unseenUids = Array.isArray(unseen) ? unseen.slice(0, options.limit ?? 10) : [];
-      if (unseenUids.length === 0) {
-        return { configured: true, attempted: 0, recorded: 0, failed: 0 };
-      }
-      for await (const rawMessage of client.fetch(unseenUids, { uid: true, envelope: true, source: true }, { uid: true })) {
-        if (attempted >= (options.limit ?? 10)) {
-          break;
+      await synchronizeImapUidValidity({
+        store: options.store,
+        context: options.context,
+        config,
+        mailboxUidValidity: client.mailbox ? client.mailbox.uidValidity.toString() : undefined
+      });
+      const found = await client.search(buildImapSearchCriteria(config), { uid: true });
+      const candidateUids = eligibleImapUids(Array.isArray(found) ? found : [], config.lastUid, options.limit ?? 10);
+      const messages: FetchMessage[] = [];
+      if (candidateUids.length > 0) {
+        for await (const rawMessage of client.fetch(candidateUids, { uid: true, envelope: true, source: true }, { uid: true })) {
+          const message = rawMessage as FetchMessage;
+          if (candidateUids.includes(message.uid)) {
+            messages.push(message);
+          }
         }
-        attempted += 1;
-        const message = rawMessage as FetchMessage;
-        try {
-          const parsed = await simpleParser(message.source ?? Buffer.from(""));
-          const fromAddr = firstAddress(parsed.from);
+      }
+      result = await processImapUidBatch({
+        messages,
+        processMessage: async (message) => {
+          if (!message.source) {
+            throw new ImapMessageSourceError("IMAP message source was unavailable.");
+          }
+          let parsed: Awaited<ReturnType<typeof simpleParser>>;
+          let fromAddr: string;
+          let toAddr: string;
+          let subject: string | null;
+          let bodyText: string;
+          let receivedAt: string;
+          let source: string;
+          let providerMessageId: string;
+          let attachmentMetadata: InboundAttachmentMetadata[];
+          try {
+            parsed = await simpleParser(message.source);
+            fromAddr = firstAddress(parsed.from);
+            toAddr = addressText(parsed.to) || username;
+            subject = parsed.subject ?? null;
+            bodyText = normalizedMessageBody(parsed);
+            receivedAt = parsed.date?.toISOString() ?? new Date().toISOString();
+            source = sourceForAddress(fromAddr);
+            providerMessageId = firstNonBlank(parsed.messageId, message.envelope?.messageId) ?? `${config.mailbox}:${message.uid}`;
+            attachmentMetadata = metadataForParsedAttachments(parsed);
+          } catch (error) {
+            throw new ImapMessageSourceError("IMAP message source could not be parsed or normalized.", error);
+          }
           const classification = await classifySender({
             context: options.context,
             settings: options.settings,
@@ -413,29 +762,17 @@ export async function processImapInbox(options: {
             fromAddr
           });
           const inbound: InboundMessageInput = {
-            providerMessageId: firstNonBlank(parsed.messageId, message.envelope?.messageId) ?? `${config.mailbox}:${message.uid}`,
+            providerMessageId,
             fromAddr,
-            toAddr: addressText(parsed.to) || config.username,
-            subject: parsed.subject ?? null,
-            bodyText: textBody(parsed),
-            receivedAt: parsed.date?.toISOString() ?? new Date().toISOString(),
-            source: sourceForAddress(fromAddr),
+            toAddr,
+            subject,
+            bodyText,
+            receivedAt,
+            source,
             attachments: classification === "owner"
               ? await sanitizedOwnerAttachments(parsed)
-              : metadataForParsedAttachments(parsed)
+              : attachmentMetadata
           };
-          const isAlreadyConsumed = uidCursor !== undefined
-            ? message.uid <= uidCursor
-            : !isNewerThanLastReceived(inbound.receivedAt ?? "", config.lastReceivedAt);
-          if (isAlreadyConsumed) {
-            await updateImapProgress({
-              store: options.store,
-              context: options.context,
-              uid: message.uid
-            });
-            await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true });
-            continue;
-          }
           if (options.modelClient) {
             await processInboundMessage({
               context: options.context,
@@ -456,28 +793,73 @@ export async function processImapInbox(options: {
               rateLimiter: options.rateLimiter
             });
           }
-          await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true });
+          return { receivedAt: inbound.receivedAt ?? undefined };
+        },
+        commitMessage: async (message, processed) => {
           await updateImapProgress({
             store: options.store,
             context: options.context,
-            receivedAt: inbound.receivedAt ?? undefined,
-            uid: message.uid
+            receivedAt: processed.receivedAt,
+            uid: message.uid,
+            clearFailureUid: message.uid
           });
-          config.lastReceivedAt = inbound.receivedAt ?? config.lastReceivedAt;
+          config.lastReceivedAt = processed.receivedAt && isNewerThanLastReceived(processed.receivedAt, config.lastReceivedAt)
+            ? processed.receivedAt
+            : config.lastReceivedAt;
           config.lastUid = typeof config.lastUid === "number" ? Math.max(config.lastUid, message.uid) : message.uid;
-          recorded += 1;
-        } catch {
-          failed += 1;
+          await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true }).catch(async () => {
+            await options.store.recordAudit(options.context, "connector.imap_seen_error", "connector", "imap", {
+              uid: message.uid,
+              message: "The message was ingested and the UID cursor advanced, but the provider did not accept the Seen flag."
+            }).catch(() => undefined);
+          });
+        },
+        onFailure: async (message, error) => {
+          return resolveImapUidFailure({
+            store: options.store,
+            context: options.context,
+            uid: message.uid,
+            uidValidity: config.uidValidity,
+            error,
+            quarantine: async () => {
+              await updateImapProgress({
+                store: options.store,
+                context: options.context,
+                uid: message.uid,
+                clearFailureUid: message.uid
+              });
+              config.lastUid = typeof config.lastUid === "number" ? Math.max(config.lastUid, message.uid) : message.uid;
+              await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true }).catch(async () => {
+                await options.store.recordAudit(options.context, "connector.imap_seen_error", "connector", "imap", {
+                  uid: message.uid,
+                  message: "The quarantined UID cursor advanced, but the provider did not accept the Seen flag."
+                }).catch(() => undefined);
+              });
+            }
+          });
         }
-      }
+      });
     } finally {
       lock.release();
     }
+    await updateImapPollState({
+      store: options.store,
+      context: options.context,
+      config,
+      succeeded: result.failed === 0
+    });
+    return { configured: true, ...result };
+  } catch (error) {
+    await updateImapPollState({
+      store: options.store,
+      context: options.context,
+      config,
+      succeeded: false
+    }).catch(() => undefined);
+    throw error;
   } finally {
-    await client.logout();
+    await client.logout().catch(() => undefined);
   }
-
-  return { configured: true, attempted, recorded, failed };
 }
 
 export async function testImapConnection(options: {

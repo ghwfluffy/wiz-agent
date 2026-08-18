@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../src/config/settings.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
@@ -8,6 +8,7 @@ import { MockEmbeddingClient } from "../src/rag/embeddings.js";
 import { indexMarkdownDocument, processRagIndexJobs } from "../src/rag/indexer.js";
 import type { QdrantClient, QdrantPoint, QdrantSearchHit } from "../src/rag/qdrant.js";
 import { HttpQdrantClient, qdrantCollectionForUser, qdrantDocumentFilter } from "../src/rag/qdrant.js";
+import { processRagJobsWhenQdrantHealthy } from "../src/ragWorker.js";
 
 class FakeQdrantClient implements QdrantClient {
   collections = new Map<string, Map<string, QdrantPoint>>();
@@ -151,6 +152,25 @@ describe("RAG chunking", () => {
 });
 
 describe("RAG worker", () => {
+  it("leaves queued jobs unclaimed while Qdrant is unhealthy", async () => {
+    const processJobs = vi.fn(async () => ({
+      claimed: 1,
+      indexed: 1,
+      deleted: 0,
+      failed: 0,
+      dead: 0
+    }));
+
+    await expect(processRagJobsWhenQdrantHealthy({
+      qdrant: { health: async () => ({ ok: false }) },
+      processJobs
+    })).resolves.toEqual({
+      qdrantOk: false,
+      processed: { claimed: 0, indexed: 0, deleted: 0, failed: 0, dead: 0 }
+    });
+    expect(processJobs).not.toHaveBeenCalled();
+  });
+
   it("reclaims stale claimed jobs after restart grace", async () => {
     const { store, context } = await testContext("owner");
     await store.writeMarkdownDocument(context, {

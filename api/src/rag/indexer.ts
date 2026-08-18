@@ -18,6 +18,7 @@ function systemContext(userId: string): RequestContext {
         id: userId,
         email: "",
         displayName: "RAG Worker",
+        timezone: "UTC",
         isAdmin: false
       },
       createdAt: new Date().toISOString(),

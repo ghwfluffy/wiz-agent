@@ -16,13 +16,28 @@ import { runtimeSafetyPolicy } from "./security/safetyPolicy.js";
 
 const WORKER_INTERVAL_MS = 20_000;
 const INBOUND_BATCH_LIMIT = 10;
-const INBOUND_TIMEOUT_MS = 15_000;
 const MAX_WORKER_LOG_STRING_LENGTH = 500;
 const MAX_WORKER_LOG_ARRAY_ITEMS = 20;
 const MAX_WORKER_LOG_DEPTH = 4;
 const SENSITIVE_WORKER_LOG_KEY_PATTERN = /(?:password|passwd|pwd|secret|token|api[_\s-]?key|access[_\s-]?key|private[_\s-]?key|credential|authorization|bearer|cookie|session)/i;
 let inboundRateLimiter: SlidingWindowRateLimiter | undefined;
 let inboundRateLimiterLimit = 0;
+
+export function createNonOverlappingRunner(work: () => Promise<void>): () => Promise<boolean> {
+  let running = false;
+  return async () => {
+    if (running) {
+      return false;
+    }
+    running = true;
+    try {
+      await work();
+      return true;
+    } finally {
+      running = false;
+    }
+  };
+}
 
 function reviewNotificationRateLimiter(settings: Settings): SlidingWindowRateLimiter {
   const limit = runtimeSafetyPolicy(settings).maxUntrustedReviewNotificationsPerSenderPerDay;
@@ -31,13 +46,6 @@ function reviewNotificationRateLimiter(settings: Settings): SlidingWindowRateLim
     inboundRateLimiterLimit = limit;
   }
   return inboundRateLimiter;
-}
-
-class ImapIdleTimeout extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "ImapIdleTimeout";
-  }
 }
 
 function workerSession(user: AuthenticatedUser): Session {
@@ -135,7 +143,7 @@ export async function workerTick(options: {
     totals.recoveredApprovalExecutions += result.recoveredApprovalExecutions;
 
     try {
-      const inbound = await withTimeout((options.imapProcessor ?? processImapInbox)({
+      const inbound = await (options.imapProcessor ?? processImapInbox)({
         store: options.store,
         context,
         settings: options.settings,
@@ -143,37 +151,21 @@ export async function workerTick(options: {
         modelClient: options.modelClient,
         integrationTokenProvider,
         limit: INBOUND_BATCH_LIMIT
-      }), INBOUND_TIMEOUT_MS, "IMAP processing timed out.");
+      });
       totals.inboundAttempted += inbound.attempted;
       totals.inboundRecorded += inbound.recorded;
       totals.inboundFailed += inbound.failed;
     } catch (error) {
-      if (error instanceof ImapIdleTimeout) {
-        continue;
-      } else {
-        totals.inboundFailed += 1;
-        const details = sanitizeWorkerDetails(imapErrorDetails(error));
-        await options.store.recordAudit(context, "worker.imap_error", "connector", "imap", details);
-        logWorker("worker_imap_error", {
-          user_id: user.id,
-          ...details
-        });
-      }
+      totals.inboundFailed += 1;
+      const details = sanitizeWorkerDetails(imapErrorDetails(error));
+      await options.store.recordAudit(context, "worker.imap_error", "connector", "imap", details);
+      logWorker("worker_imap_error", {
+        user_id: user.id,
+        ...details
+      });
     }
   }
   return totals;
-}
-
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new ImapIdleTimeout(message)), timeoutMs);
-  });
-  return Promise.race([promise, timeoutPromise]).finally(() => {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-  });
 }
 
 function compactWorkerLogText(value: string): string {
@@ -237,7 +229,7 @@ export function startWorker(): ReturnType<typeof setInterval> {
     ? OpenAIModelClient.fromSettings(settings)
     : undefined;
 
-  async function tick(): Promise<void> {
+  const runTick = createNonOverlappingRunner(async () => {
     try {
       const result = await workerTick({
         store,
@@ -254,6 +246,15 @@ export function startWorker(): ReturnType<typeof setInterval> {
     } catch (error) {
       logWorker("worker_error", {
         message: error instanceof Error ? error.message : String(error)
+      });
+    }
+  });
+
+  async function tick(): Promise<void> {
+    if (!await runTick()) {
+      logWorker("worker_tick_skipped", {
+        reason: "previous_tick_still_running",
+        interval_ms: WORKER_INTERVAL_MS
       });
     }
   }

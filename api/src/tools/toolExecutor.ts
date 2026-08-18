@@ -61,12 +61,14 @@ async function queueOwnerApprovalNotification(options: {
   store: AgentStore;
   settings?: Settings;
   summary: string;
+  ownerInitiated: boolean;
 }): Promise<void> {
   await queueOwnerVisibleMessage({
     context: options.context,
     store: options.store,
     settings: options.settings,
     source: "approval_request",
+    ownerInitiated: options.ownerInitiated,
     body: `I need your approval for this action: ${options.summary}\nReply YES to approve, NO to reject, LATER to leave it pending, or DETAILS for more information.`
   });
 }
@@ -286,7 +288,8 @@ export async function executeToolCall(options: {
       context: options.context,
       store: options.store,
       settings: options.settings,
-      summary: input.summary
+      summary: input.summary,
+      ownerInitiated
     });
     return {
       executed: true,
@@ -597,6 +600,7 @@ export async function executeToolCall(options: {
       const sentOrPending = outbound.filter((message) =>
         ["requires_approval", "approved", "pending", "sending", "sent"].includes(message.status)
       );
+      const proactiveSentOrPending = sentOrPending.filter((message) => message.isProactive);
       const failedRuns = runs.filter((run) => run.status === "failed");
       const failedToolCalls = toolCalls.filter((toolCall) => ["failed", "rejected"].includes(toolCall.status));
       const failedOutbound = outbound.filter((message) => message.status === "failed");
@@ -604,6 +608,8 @@ export async function executeToolCall(options: {
         outbound_message_id: message.id,
         channel: message.channel,
         status: message.status,
+        origin: message.origin,
+        is_proactive: message.isProactive,
         timestamp: message.sentAt ?? message.createdAt,
         subject: message.subject,
         body_excerpt: excerpt(message.bodyText, 280)
@@ -616,7 +622,8 @@ export async function executeToolCall(options: {
           since: since.toISOString(),
           counts: {
             outbound_total: outbound.length,
-            owner_visible_contact_attempts: sentOrPending.length,
+            owner_visible_contact_attempts: proactiveSentOrPending.length,
+            non_proactive_owner_replies: sentOrPending.length - proactiveSentOrPending.length,
             sent: outbound.filter((message) => message.status === "sent").length,
             pending_or_approved: outbound.filter((message) => ["pending", "approved", "sending"].includes(message.status)).length,
             requiring_approval: outbound.filter((message) => message.status === "requires_approval").length,
@@ -630,7 +637,7 @@ export async function executeToolCall(options: {
           },
           contact_cadence: assessContactCadence({
             lookbackHours,
-            outboundAttempts: sentOrPending.length,
+            outboundAttempts: proactiveSentOrPending.length,
             ownerInboundCount: ownerInbound.length,
             pendingApprovals: approvals.length,
             failedOutbound: failedOutbound.length
@@ -1430,13 +1437,15 @@ export async function executeToolCall(options: {
         channel: destination.channel,
         toAddr: destination.toAddr,
         subject: typeof options.args.subject === "string" ? options.args.subject : null,
-        bodyText: String(options.args.body)
+        bodyText: String(options.args.body),
+        isProactive: !ownerInitiated
       });
       await queueOwnerApprovalNotification({
         context: options.context,
         store: options.store,
         settings: options.settings,
-        summary: `Send ${destination.channel} owner message: ${String(options.args.body)}`
+        summary: `Send ${destination.channel} owner message: ${String(options.args.body)}`,
+        ownerInitiated
       });
       return {
         executed: true,
@@ -1750,9 +1759,11 @@ function assessContactCadence(input: {
   if (attemptsPerDay > 3 || input.outboundAttempts >= 8) {
     level = "high";
     reasons.push("Owner-visible contact attempts are high for the selected window.");
-  } else if (input.outboundAttempts === 0 && input.ownerInboundCount > 0) {
+  } else if (input.outboundAttempts === 0) {
     level = "quiet";
-    reasons.push("The owner has contacted the agent, but the agent has not attempted an owner-visible reply.");
+    reasons.push(input.ownerInboundCount > 0
+      ? "The owner has contacted the agent, but the agent has not attempted proactive owner-visible contact."
+      : "The agent has not attempted proactive owner-visible contact in this window.");
   } else if (attemptsPerDay < 0.25 && input.ownerInboundCount > input.outboundAttempts) {
     level = "quiet";
     reasons.push("Owner inbound messages outnumber bot contact attempts in this window.");
@@ -1782,6 +1793,7 @@ const APPROVAL_GATED_OUTBOUND_TASK_MARKERS = [
 ];
 
 const DIRECT_NEWSLETTER_OUTBOUND_TASK_MARKERS = [
+  "daily conversational check-in",
   "newsletter interest check",
   "newsletter-interest"
 ];

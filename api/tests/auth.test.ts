@@ -182,6 +182,7 @@ describe("standalone auth", () => {
           sub: "central-user-1",
           preferred_username: "ghw",
           name: "GHW",
+          zoneinfo: "America/Chicago",
           is_admin: true
         })
       });
@@ -216,6 +217,7 @@ describe("standalone auth", () => {
       authenticated: true,
       user: {
         displayName: "GHW",
+        timezone: "America/Chicago",
         isAdmin: true
       }
     });
