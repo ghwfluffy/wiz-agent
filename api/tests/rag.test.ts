@@ -214,6 +214,71 @@ describe("RAG worker", () => {
     expect(points[0]?.payload.path_prefixes).toEqual(["/", "/personal", "/personal/profile.md"]);
   });
 
+  it("keeps truncated Qdrant excerpts well formed at an emoji boundary", async () => {
+    const { store, context } = await testContext("owner");
+    const document = await store.writeMarkdownDocument(context, {
+      path: "/newsletters/2026-08-17/unicode.md",
+      markdown: `\uD800${"a".repeat(318)}🚀tail`
+    });
+    if ("code" in document) {
+      throw new Error("unexpected conflict");
+    }
+    let upsertBody = "";
+    const hasLoneSurrogate = (value: string): boolean => {
+      for (let index = 0; index < value.length; index += 1) {
+        const code = value.charCodeAt(index);
+        if (code >= 0xD800 && code <= 0xDBFF) {
+          const next = value.charCodeAt(index + 1);
+          if (!(next >= 0xDC00 && next <= 0xDFFF)) {
+            return true;
+          }
+          index += 1;
+        } else if (code >= 0xDC00 && code <= 0xDFFF) {
+          return true;
+        }
+      }
+      return false;
+    };
+    const fetchImpl: typeof fetch = async (request, init) => {
+      const url = String(request);
+      if (!init?.method || init.method === "GET") {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/points/delete")) {
+        return new Response("{}", { status: 200 });
+      }
+      if (url.includes("/points?wait=true")) {
+        upsertBody = String(init?.body ?? "");
+        const parsed = JSON.parse(upsertBody) as { points?: Array<{ payload?: { excerpt?: unknown } }> };
+        const payloadExcerpt = parsed.points?.[0]?.payload?.excerpt;
+        return new Response("{}", {
+          status: typeof payloadExcerpt === "string" && !hasLoneSurrogate(payloadExcerpt) ? 200 : 400
+        });
+      }
+      if (url.includes("/points/count")) {
+        return new Response(JSON.stringify({ result: { count: 1 } }), { status: 200 });
+      }
+      throw new Error(`Unexpected Qdrant test request: ${url}`);
+    };
+    const settings = loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone", RAG_EMBEDDING_DIMENSIONS: "4" });
+
+    await expect(indexMarkdownDocument({
+      store,
+      qdrant: new HttpQdrantClient(settings, fetchImpl),
+      embeddings: new MockEmbeddingClient(),
+      settings,
+      document
+    })).resolves.toBe(1);
+
+    const serialized = JSON.parse(upsertBody) as { points: Array<{ payload: { excerpt: string } }> };
+    const payloadExcerpt = serialized.points[0]?.payload.excerpt ?? "";
+    expect(hasLoneSurrogate(payloadExcerpt)).toBe(false);
+    expect(payloadExcerpt.startsWith("\uFFFD")).toBe(true);
+    expect(payloadExcerpt.endsWith("🚀")).toBe(true);
+    expect(Array.from(payloadExcerpt)).toHaveLength(320);
+    expect(upsertBody).not.toMatch(/\\u(?:d[89ab][0-9a-f]{2}|d[cdef][0-9a-f]{2})/i);
+  });
+
   it("skips stale version jobs and indexes the current document job", async () => {
     const { store, context } = await testContext("owner");
     const first = await store.writeMarkdownDocument(context, {

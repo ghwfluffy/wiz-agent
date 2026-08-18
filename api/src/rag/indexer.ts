@@ -32,8 +32,16 @@ function retryAt(attempts: number): Date {
   return new Date(Date.now() + delayMs);
 }
 
+function wellFormedText(value: string): string {
+  return value.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "\uFFFD"
+  );
+}
+
 function excerpt(text: string): string {
-  return text.replace(/\s+/g, " ").trim().slice(0, 320);
+  const normalized = wellFormedText(text.replace(/\s+/g, " ").trim());
+  return Array.from(normalized).slice(0, 320).join("");
 }
 
 function qdrantPayload(
