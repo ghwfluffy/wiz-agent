@@ -114,6 +114,23 @@ describe("tool validation and repair", () => {
 
     expect(invalid.ok).toBe(false);
     expect(valid.ok).toBe(true);
+    expect(validateToolArguments("search_development_jobs", {
+      query: "shared navigation",
+      limit: 10
+    }).ok).toBe(true);
+    expect(validateToolArguments("get_development_job", {
+      jobId: "abcdef12"
+    }).ok).toBe(true);
+    expect(validateToolArguments("get_development_job", {
+      jobId: "abcdef1"
+    }).ok).toBe(false);
+    expect(validateToolArguments("get_development_job", {
+      jobId: "abcdef12_bad"
+    }).ok).toBe(false);
+    expect(validateToolArguments("cancel_development_job", {
+      jobId: "abcdef12",
+      rationale: "The owner asked to stop it."
+    }).ok).toBe(false);
     expect(validateToolArguments("confirm_dangerous_development_job", {
       jobId: "00000000-0000-4000-8000-000000000001",
       confirmation: "confirm",
@@ -269,6 +286,13 @@ describe("app capability registry", () => {
       pathTemplate: "/jobs/:job_id/respond",
       approvalMode: "direct_owner_only"
     });
+    expect(getIntegrationAction("omni_dev.search_jobs")).toMatchObject({
+      app: "omni_dev",
+      access: "read",
+      method: "GET",
+      pathTemplate: "/jobs",
+      queryParams: ["query", "limit"]
+    });
     expect(getIntegrationAction("omni_dev.create_job")?.safety).toEqual(expect.arrayContaining([
       expect.stringContaining("Do not guess repository paths")
     ]));
@@ -298,6 +322,7 @@ describe("app capability registry", () => {
         expect.objectContaining({ name: "create_budget_expense", access: "write", sideEffect: "local_persistence" }),
         expect.objectContaining({ name: "integration_action" }),
         expect.objectContaining({ name: "delegate_development_task", access: "write", sideEffect: "cross_app_api" }),
+        expect.objectContaining({ name: "search_development_jobs", access: "read", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "get_development_job", access: "read", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "cancel_development_job", access: "write", sideEffect: "cross_app_api" }),
         expect.objectContaining({ name: "confirm_dangerous_development_job", access: "write", sideEffect: "cross_app_api" }),
@@ -378,6 +403,49 @@ describe("agent task execution", () => {
     expect(body.context.entries).toEqual([
       expect.objectContaining({ direction: "owner", body: "Please improve the goals screen." }),
       expect.objectContaining({ direction: "assistant", body: "Which part should change?" })
+    ]);
+  });
+
+  it("searches development jobs and retrieves a unique shortened job ID through scoped read actions", async () => {
+    const { context, store } = await testContext();
+    const tokenFor = vi.fn(async () => "signed-token");
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({ jobs: [] })
+    });
+    const executionOptions = {
+      context,
+      store,
+      settings: loadSettings({
+        APP_ENV: "test",
+        AUTH_MODE: "oauth",
+        OMNI_DEV_API_BASE_URL: "https://omni.example.test/api/agent/v1"
+      }),
+      integrationTokenProvider: { tokenFor },
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    };
+
+    await executeToolCall({
+      ...executionOptions,
+      toolName: "search_development_jobs",
+      args: { query: "dashboard", limit: 7 }
+    });
+    await executeToolCall({
+      ...executionOptions,
+      toolName: "get_development_job",
+      args: { jobId: "abcdef12" }
+    });
+
+    expect(String(fetchImpl.mock.calls[0]?.[0])).toBe(
+      "https://omni.example.test/api/agent/v1/jobs?query=dashboard&limit=7"
+    );
+    expect(String(fetchImpl.mock.calls[1]?.[0])).toBe(
+      "https://omni.example.test/api/agent/v1/jobs/abcdef12"
+    );
+    expect(tokenFor.mock.calls.map((call) => call[2])).toEqual([
+      "omni_dev.search_jobs",
+      "omni_dev.get_job"
     ]);
   });
 

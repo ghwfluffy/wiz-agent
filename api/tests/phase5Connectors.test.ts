@@ -1759,6 +1759,17 @@ describe("cross-app integration gateway", () => {
     });
 
     expect(resolveIntegrationActionRequest({
+      actionId: "omni_dev.search_jobs",
+      query: { query: "first eight", limit: 10 }
+    })).toEqual({
+      ok: true,
+      app: "omni_dev",
+      path: "/jobs?query=first+eight&limit=10",
+      method: "GET",
+      body: undefined
+    });
+
+    expect(resolveIntegrationActionRequest({
       actionId: "omni_dev.get_job",
       pathParams: { job_id: "job-123" }
     })).toEqual({

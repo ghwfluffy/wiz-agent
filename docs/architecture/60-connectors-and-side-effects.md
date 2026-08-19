@@ -677,6 +677,15 @@ Autonomous or scheduled write proposals queue `cross_app_write_action`
 approvals with the exact registered action id, path params, query, and body to
 execute after approval unless the registry marks the action direct-owner-only.
 
+Omni Dev provides a dedicated read-only `search_development_jobs` wrapper and
+`omni_dev.search_jobs` action. The downstream endpoint applies the scoped-token
+subject to every query and returns at most 50 jobs newest first, optionally
+matching a job-ID prefix or objective text. `get_development_job` may use an
+exact UUID or a canonical UUID prefix of at least eight characters. Unique
+prefixes resolve; missing prefixes return not found; ambiguous prefixes return
+at most 10 safe candidates plus truncation metadata. Cancel, confirmation,
+response, retry, and other mutations remain exact-full-ID operations.
+
 The Apartment Gate open-right-gate action follows the same owner-command rule:
 a current authenticated owner request from web chat, mobile voice, or
 owner-classified inbound messaging executes through a scoped token immediately.

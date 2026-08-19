@@ -1639,6 +1639,13 @@ export async function executeToolCall(options: {
         summary: `Delegate development objective: ${String(options.args.objective).slice(0, 500)}`
       });
     }
+    case "search_development_jobs":
+      return callReadIntegration("omni_dev.search_jobs", {
+        query: compactPayload({
+          query: options.args.query,
+          limit: options.args.limit
+        }) as Record<string, string | number | boolean>
+      });
     case "get_development_job":
       return callReadIntegration("omni_dev.get_job", {
         pathParams: { job_id: String(options.args.jobId) }

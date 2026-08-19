@@ -142,9 +142,16 @@ boundaries.
 ### Omni Dev
 
 Omni Dev is the private development-job control plane. Wrapper tools can create
-an objective with the selected durable conversation thread, read job
-status, request cancellation, or confirm a rare dangerous job after an explicit
-owner reply. Omni Dev first plans in a disposable checkout and may return a
+an objective with the selected durable conversation thread, search the current
+owner's jobs by ID prefix or objective text, read job status, request
+cancellation, or confirm a rare dangerous job after an explicit owner reply.
+Search results are bounded, newest first, and use the dedicated read-only
+`omni_dev.search_jobs` scope. `get_development_job` accepts an exact canonical
+UUID or a canonical UUID prefix of at least eight characters. A unique prefix
+resolves normally; no match stays explicitly not found; an ambiguous prefix
+returns at most 10 safe candidate summaries with truncation metadata and is
+never selected arbitrarily. All mutating wrappers still require full UUIDs.
+Omni Dev first plans in a disposable checkout and may return a
 focused question, a confident implementation plan, or a no-change explanation.
 The `respond_to_development_job` wrapper forwards the owner's answer from the
 same conversation to the existing waiting job, which must plan again before

@@ -101,6 +101,7 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
   web_research: { access: "read", risk: "low", sideEffect: "local_persistence" },
   integration_action: { access: "write", risk: "high", sideEffect: "cross_app_api" },
   delegate_development_task: { access: "write", risk: "high", sideEffect: "cross_app_api" },
+  search_development_jobs: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   get_development_job: { access: "read", risk: "low", sideEffect: "cross_app_api" },
   cancel_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" },
   confirm_dangerous_development_job: { access: "write", risk: "high", sideEffect: "cross_app_api" },
@@ -108,7 +109,9 @@ const metadata: Record<ToolName, Pick<ToolDefinition, "access" | "risk" | "sideE
 };
 
 const toolDescriptions: Partial<Record<ToolName, string>> = {
-  web_research: "Search or open the public web using an isolated read-only researcher. Returns a sanitized, cited, externally-tainted evidence bundle and durable research session for natural follow-ups. No approval is required. Use priorResearchSessionId to continue an earlier search."
+  web_research: "Search or open the public web using an isolated read-only researcher. Returns a sanitized, cited, externally-tainted evidence bundle and durable research session for natural follow-ups. No approval is required. Use priorResearchSessionId to continue an earlier search.",
+  search_development_jobs: "Search the current owner's Omni Dev jobs by an optional job-ID prefix or objective text. Results are bounded and newest first.",
+  get_development_job: "Retrieve an owner-owned Omni Dev job by exact canonical UUID or a unique canonical UUID prefix of at least eight characters. Ambiguous prefixes return bounded candidates and are never selected arbitrarily."
 };
 
 export const ToolRegistry = Object.fromEntries(

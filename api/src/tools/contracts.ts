@@ -554,8 +554,22 @@ export const DelegateDevelopmentTaskToolSchema = z.object({
   rationale: z.string().min(1).max(2000)
 }).strict();
 
+const CANONICAL_UUID_TEMPLATE = "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
+export const DevelopmentJobReferenceSchema = z.string().trim().min(8).max(36).refine((value) => {
+  const normalized = value.toLowerCase();
+  return [...normalized].every((character, index) => (
+    CANONICAL_UUID_TEMPLATE[index] === "x" ? /[0-9a-f]/.test(character) : character === CANONICAL_UUID_TEMPLATE[index]
+  ));
+}, "Must be a canonical UUID or a canonical UUID prefix of at least eight characters.");
+
+export const SearchDevelopmentJobsToolSchema = z.object({
+  query: z.string().trim().min(1).max(500).optional(),
+  limit: z.number().int().min(1).max(50).default(20),
+  reason: z.string().min(1).max(1000).optional()
+}).strict();
+
 export const GetDevelopmentJobToolSchema = z.object({
-  jobId: z.string().uuid(),
+  jobId: DevelopmentJobReferenceSchema,
   reason: z.string().min(1).max(1000).optional()
 }).strict();
 
@@ -643,6 +657,7 @@ export const ToolContracts = {
   web_research: WebResearchToolSchema,
   integration_action: IntegrationActionToolSchema,
   delegate_development_task: DelegateDevelopmentTaskToolSchema,
+  search_development_jobs: SearchDevelopmentJobsToolSchema,
   get_development_job: GetDevelopmentJobToolSchema,
   cancel_development_job: CancelDevelopmentJobToolSchema,
   confirm_dangerous_development_job: ConfirmDangerousDevelopmentJobToolSchema,

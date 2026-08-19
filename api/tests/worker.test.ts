@@ -461,7 +461,8 @@ describe("worker loop", () => {
       status: "enabled",
       config: { sms_gateway: "owner-sms@example.test" }
     });
-    const createdAt = new Date("2026-08-18T17:00:00.000Z");
+    const recoveryAt = new Date(Date.now() + 31 * 60_000);
+    const createdAt = new Date(recoveryAt.getTime() - 31 * 60_000);
     const task = await store.createTask(context, {
       title: DAILY_CHECK_IN_TITLE,
       prompt: "Stale daily check-in.",
@@ -473,7 +474,7 @@ describe("worker loop", () => {
       store,
       context,
       settings,
-      now: new Date("2026-08-18T17:31:00.000Z")
+      now: recoveryAt
     });
 
     await expect(store.getTask(context, task.id)).resolves.toMatchObject({ status: "failed" });
@@ -481,7 +482,7 @@ describe("worker loop", () => {
       expect.objectContaining({
         status: "pending",
         bodyText: DAILY_CHECK_IN_FALLBACK_MESSAGE,
-        dedupeKey: "daily-check-in:2026-08-18"
+        dedupeKey: `daily-check-in:${recoveryAt.toISOString().slice(0, 10)}`
       })
     ]);
     expect((await store.listTasks(context)).filter((entry) =>

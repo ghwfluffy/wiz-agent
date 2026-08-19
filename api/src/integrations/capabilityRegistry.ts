@@ -35,6 +35,7 @@ export const IntegrationActionIds = [
   "budget.list_audit_logs",
   "apartment_gate.open_right_gate",
   "omni_dev.create_job",
+  "omni_dev.search_jobs",
   "omni_dev.get_job",
   "omni_dev.cancel_job",
   "omni_dev.confirm_dangerous_job",
@@ -463,6 +464,26 @@ const omniDevActions: readonly IntegrationActionCapability[] = [
     responseUse: "Return the job id, risk classification, and whether dangerous-change confirmation is required. Do not claim work has completed when it is only queued."
   },
   {
+    id: "omni_dev.search_jobs",
+    app: "omni_dev",
+    title: "Search development jobs",
+    access: "read",
+    risk: "low",
+    method: "GET",
+    pathTemplate: "/jobs",
+    queryParams: ["query", "limit"],
+    purpose: "Search a bounded newest-first set of the current owner's development jobs by job ID prefix or objective text.",
+    whenToUse: [
+      "The owner asks to find a job but does not provide a full job ID.",
+      "The owner asks for recent development jobs matching an objective or shortened ID."
+    ],
+    safety: [
+      "Results are restricted downstream to the subject in the scoped token.",
+      "Use the returned full ID for mutating actions, which continue to require exact canonical UUIDs."
+    ],
+    responseUse: "Summarize the bounded matches newest first and ask the owner to distinguish candidates when more than one remains plausible."
+  },
+  {
     id: "omni_dev.get_job",
     app: "omni_dev",
     title: "Get development job",
@@ -471,10 +492,14 @@ const omniDevActions: readonly IntegrationActionCapability[] = [
     method: "GET",
     pathTemplate: "/jobs/:job_id",
     pathParams: ["job_id"],
-    purpose: "Read the current state and bounded result of one owner-owned development job.",
+    purpose: "Read the current state and bounded result of one owner-owned development job by exact ID or a unique UUID prefix of at least eight characters.",
     whenToUse: ["The owner asks for progress, completion, failure, commits, validation, deployment, or rollback status."],
-    safety: ["Use only a job id returned for the current owner.", "Summarize logs and failures without exposing credentials or raw environment data."],
-    responseUse: "Report the exact lifecycle state and the newest useful result or failure."
+    safety: [
+      "Use only a job id or prefix returned for the current owner.",
+      "If a prefix is ambiguous, present the bounded candidate summaries instead of selecting one.",
+      "Summarize logs and failures without exposing credentials or raw environment data."
+    ],
+    responseUse: "Report the exact lifecycle state and the newest useful result or failure; clearly distinguish not-found and ambiguous-prefix results."
   },
   {
     id: "omni_dev.cancel_job",
@@ -931,6 +956,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
       "Provide a faithful objective and explicit acceptance criteria without guessing repository paths. Omni Dev inspects the current repository and selects every required component during confidence preflight.",
       "A direct authenticated owner instruction to tell or have Omni Dev perform development must be delegated. If the language model twice returns text without a tool call, host code passes the exact owner command and linked owner attachments through the same scoped delegate tool; Omni Dev confidence preflight still decides whether implementation can start.",
       "Omni Dev performs a disposable confidence preflight before implementation. If it asks a question, forward the owner's answer with respond_to_development_job so the existing job can plan again; do not create a replacement job.",
+      "Use search_development_jobs to find recent jobs by objective text or shortened ID. get_development_job accepts a unique canonical UUID prefix of at least eight characters and returns bounded candidates instead of guessing when a prefix is ambiguous.",
       "A queued job is asynchronous; use the status tool for follow-ups and distinguish queued, planning, awaiting_owner_input, running, validating, deploying, no_change, succeeded, failed, and rolled-back states.",
       "Routine owner-requested work does not require dashboard approval. Only destructive or security-boundary work pauses for an explicit owner confirmation, which can be supplied through the assistant or dashboard."
     ],

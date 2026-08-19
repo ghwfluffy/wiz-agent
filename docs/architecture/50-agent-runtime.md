@@ -342,6 +342,11 @@ Current migrated agent tools:
   recurring bills or observed spending patterns. Direct owner commands execute
   through scoped app tokens; autonomous or scheduled proposals still queue
   approval before changing projection data.
+- Omni Dev read wrappers expose owner-scoped newest-first search by job-ID
+  prefix or objective text and retrieval by exact UUID or a unique canonical
+  prefix of at least eight characters. Ambiguous retrieval returns a bounded
+  candidate set with truncation metadata; mutating Omni Dev wrappers remain
+  full-ID-only.
 - `write_memory` appends model-selected durable markdown memory under host-owned
   user scope.
 - `write_file` writes a complete markdown file under host-owned user scope. It
