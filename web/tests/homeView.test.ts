@@ -248,7 +248,7 @@ describe("home view", () => {
       attention: [{ id: "approval-1", kind: "approval", severity: "medium", title: "Approve check-in", status: "pending", createdAt: "2026-06-13T12:00:00.000Z" }],
       activeTasks: [{ id: "task-1", title: "Review travel plan", status: "pending", dueAt: null, priority: 0, scheduleRationale: "Owner asked for a follow-up.", recurrencePolicy: null, nextReviewAt: null, waitingOn: null, blockedReason: null, ownerClarificationNeeded: false, sourceMemoryPath: null, sourceMessageId: null, sourceTaskId: null, updatedAt: "2026-06-13T12:00:00.000Z" }],
       pendingApprovals: [{ id: "approval-1", actionType: "send_outbound_message", riskLevel: "medium", summary: "Send owner a travel-plan check-in.", expiresAt: "2026-06-13T13:00:00.000Z", sourceRunId: null, sourceRef: null, executionStatus: "not_applicable", createdAt: "2026-06-13T12:00:00.000Z" }],
-      recentDecisions: [{ path: "/assistant/decisions/2026-06.md", title: "Assistant Decisions", updatedAt: "2026-06-13T12:00:00.000Z", excerpt: "Queued a check-in because the task is due soon." }],
+      recentDecisions: [{ path: "/assistant/decisions/2026-06-13.md", title: "Assistant Decisions", updatedAt: "2026-06-13T12:00:00.000Z", excerpt: "Queued a check-in because the task is due soon." }],
       recentMemoryChanges: [{
         id: "change-1",
         path: "/assistant/feedback/2026-06.md",

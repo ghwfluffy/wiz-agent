@@ -123,26 +123,19 @@ export function parseMarkdownSections(markdown: string): ParsedMarkdownSection[]
     });
   }
 
-  const idsByHeadingIndex = new Map<number, string>();
-  headings.forEach((heading, index) => {
-    const sectionId = uniqueSectionId(heading.path.map(slugPart).join("/"), used);
-    idsByHeadingIndex.set(index, sectionId);
-  });
-
+  const parentStack: Array<{ level: number; sectionId: string }> = [];
   headings.forEach((heading, index) => {
     const next = headings[index + 1];
-    let parentSectionId: string | null = null;
-    for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-      const candidate = headings[cursor];
-      if (candidate && candidate.level < heading.level) {
-        parentSectionId = idsByHeadingIndex.get(cursor) ?? null;
-        break;
-      }
+    while (parentStack.at(-1) && (parentStack.at(-1)?.level ?? 0) >= heading.level) {
+      parentStack.pop();
     }
+    const parentSectionId = parentStack.at(-1)?.sectionId ?? null;
+    const sectionId = uniqueSectionId(heading.path.map(slugPart).join("/"), used);
+    parentStack.push({ level: heading.level, sectionId });
     const lineEnd = next ? next.line - 1 : lines.length;
     const content = lines.slice(heading.line - 1, lineEnd).join("\n");
     sections.push({
-      sectionId: idsByHeadingIndex.get(index) ?? slugPart(heading.heading),
+      sectionId,
       parentSectionId,
       heading: heading.heading,
       headingPath: heading.path,

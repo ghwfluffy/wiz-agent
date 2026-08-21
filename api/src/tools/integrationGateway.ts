@@ -46,6 +46,15 @@ function isApiBackedIntegrationApp(app: string): app is IntegrationApp {
 }
 
 const MAX_INTEGRATION_FAILURE_REASON_LENGTH = 240;
+export const INTEGRATION_REQUEST_TIMEOUT_MS = 20_000;
+export const INTEGRATION_RESPONSE_MAX_BYTES = 1024 * 1024;
+
+class IntegrationGatewayBoundaryError extends Error {
+  constructor(readonly reason: "integration_request_timeout" | "integration_response_too_large") {
+    super(reason);
+    this.name = "IntegrationGatewayBoundaryError";
+  }
+}
 
 export function redactIntegrationText(value: string): string {
   return value
@@ -132,6 +141,7 @@ export async function callIntegrationApi(options: {
   scope?: string;
   tokenProvider: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
+  timeoutMs?: number;
 }): Promise<IntegrationGatewayResult> {
   const baseUrl = integrationBaseUrl(options.settings, options.app);
   if (!baseUrl) {
@@ -146,26 +156,113 @@ export async function callIntegrationApi(options: {
   if (!resolvedUrl.ok) {
     return resolvedUrl;
   }
-  let response: Response;
+  const requestedTimeoutMs = options.timeoutMs ?? INTEGRATION_REQUEST_TIMEOUT_MS;
+  const timeoutMs = Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+    ? Math.min(Math.floor(requestedTimeoutMs), INTEGRATION_REQUEST_TIMEOUT_MS)
+    : INTEGRATION_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  let activeReader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let rejectTimeout: ((error: IntegrationGatewayBoundaryError) => void) | undefined;
+  const timeoutPromise = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+  const timeout = setTimeout(() => {
+    const error = new IntegrationGatewayBoundaryError("integration_request_timeout");
+    controller.abort(error);
+    void activeReader?.cancel(error).catch(() => undefined);
+    rejectTimeout?.(error);
+  }, timeoutMs);
+  timeout.unref();
   try {
-    response = await fetcher(resolvedUrl.url, {
-      method: options.method ?? "GET",
-      headers: {
-        authorization: `Bearer ${token}`,
-        "content-type": "application/json",
-        "x-agent-user-id": options.context.userId
-      },
-      body: options.body === undefined ? undefined : JSON.stringify(options.body)
-    });
+    return await Promise.race([
+      (async (): Promise<IntegrationGatewayResult> => {
+        const response = await fetcher(resolvedUrl.url, {
+          method: options.method ?? "GET",
+          headers: {
+            authorization: `Bearer ${token}`,
+            "content-type": "application/json",
+            "x-agent-user-id": options.context.userId
+          },
+          body: options.body === undefined ? undefined : JSON.stringify(options.body),
+          signal: controller.signal
+        });
+        const declaredLength = response.headers?.get?.("content-length");
+        if (declaredLength && /^\d+$/.test(declaredLength)) {
+          const declaredBytes = Number(declaredLength);
+          if (!Number.isSafeInteger(declaredBytes) || declaredBytes > INTEGRATION_RESPONSE_MAX_BYTES) {
+            const error = new IntegrationGatewayBoundaryError("integration_response_too_large");
+            controller.abort(error);
+            await response.body?.cancel(error).catch(() => undefined);
+            throw error;
+          }
+        }
+
+        let rawData: unknown = null;
+        if (response.body) {
+          const reader = response.body.getReader();
+          activeReader = reader;
+          const decoder = new TextDecoder();
+          const decoded: string[] = [];
+          let receivedBytes = 0;
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) {
+                break;
+              }
+              receivedBytes += value.byteLength;
+              if (receivedBytes > INTEGRATION_RESPONSE_MAX_BYTES) {
+                const error = new IntegrationGatewayBoundaryError("integration_response_too_large");
+                controller.abort(error);
+                await reader.cancel(error).catch(() => undefined);
+                throw error;
+              }
+              decoded.push(decoder.decode(value, { stream: true }));
+            }
+            decoded.push(decoder.decode());
+            const bodyText = decoded.join("");
+            if (bodyText) {
+              try {
+                rawData = JSON.parse(bodyText) as unknown;
+              } catch {
+                rawData = null;
+              }
+            }
+          } finally {
+            reader.releaseLock();
+            if (activeReader === reader) {
+              activeReader = undefined;
+            }
+          }
+        } else if (response.body === undefined && typeof response.json === "function") {
+          // Test doubles and trusted injected fetch implementations may return a
+          // Response-like object without a stream. Production fetch responses
+          // always take the byte-bounded stream path above.
+          rawData = await response.json().catch(() => null);
+          const serialized = JSON.stringify(rawData);
+          if (serialized && new TextEncoder().encode(serialized).byteLength > INTEGRATION_RESPONSE_MAX_BYTES) {
+            throw new IntegrationGatewayBoundaryError("integration_response_too_large");
+          }
+        }
+        return {
+          ok: true,
+          status: response.status,
+          data: redactIntegrationData(rawData)
+        };
+      })(),
+      timeoutPromise
+    ]);
   } catch (error) {
+    if (error instanceof IntegrationGatewayBoundaryError) {
+      return { ok: false, reason: error.reason };
+    }
+    if (controller.signal.aborted) {
+      return { ok: false, reason: "integration_request_timeout" };
+    }
     return { ok: false, reason: safeIntegrationFailureReason(error, "integration_request_failed") };
+  } finally {
+    clearTimeout(timeout);
   }
-  const data = redactIntegrationData(await response.json().catch(() => null));
-  return {
-    ok: true,
-    status: response.status,
-    data
-  };
 }
 
 export function resolveIntegrationActionRequest(options: {

@@ -14,6 +14,11 @@ import { extractNewsletterPublicLinks } from "../security/newsletterPolicy.js";
 export const DEFAULT_IMAP_POLL_INTERVAL_MS = 5 * 60 * 1000;
 export const MAX_IMAP_FAILURE_BACKOFF_MS = 60 * 60 * 1000;
 export const IMAP_UID_QUARANTINE_ATTEMPTS = 3;
+export const MAX_IMAP_MESSAGE_BYTES = 32 * 1024 * 1024;
+export const MAX_IMAP_LITERAL_BYTES = MAX_IMAP_MESSAGE_BYTES + 1;
+export const MAX_IMAP_RESPONSE_BYTES = MAX_IMAP_LITERAL_BYTES + 1024 * 1024;
+export const MAX_IMAP_LINE_BYTES = 256 * 1024;
+export const MAX_IMAP_HTML_PARSE_BYTES = 2 * 1024 * 1024;
 
 export class ImapMessageSourceError extends Error {
   constructor(message: string, readonly sourceError?: unknown) {
@@ -41,13 +46,137 @@ type ImapConfig = {
   consecutiveFailures: number;
 };
 
-type FetchMessage = {
+export type FetchMessage = {
   uid: number;
+  size?: number;
   envelope?: {
     messageId?: string;
   };
-  source?: Buffer;
+  source: Buffer;
 };
+
+export type ImapPollClient = Pick<
+  ImapFlow,
+  "on" | "connect" | "getMailboxLock" | "search" | "fetchOne" | "messageFlagsAdd" | "logout"
+> & {
+  readonly mailbox: ImapFlow["mailbox"];
+};
+
+export type ImapPollClientFactory = (
+  options: ConstructorParameters<typeof ImapFlow>[0]
+) => ImapPollClient;
+
+function boundedImapClientOptions(input: {
+  host: string;
+  port: number;
+  secure: boolean;
+  username: string;
+  password: string;
+}): ConstructorParameters<typeof ImapFlow>[0] {
+  return {
+    host: input.host,
+    port: input.port,
+    secure: input.secure,
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000,
+    maxLineLength: MAX_IMAP_LINE_BYTES,
+    maxLiteralSize: MAX_IMAP_LITERAL_BYTES,
+    maxResponseSize: MAX_IMAP_RESPONSE_BYTES,
+    auth: {
+      user: input.username,
+      pass: input.password
+    },
+    logger: false
+  };
+}
+
+function createImapPollClient(
+  options: ConstructorParameters<typeof ImapFlow>[0],
+  factory?: ImapPollClientFactory
+): ImapPollClient {
+  return factory ? factory(options) : new ImapFlow(options);
+}
+
+function boundedPositiveInteger(value: number | undefined, fallback: number): number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0
+    ? value
+    : fallback;
+}
+
+function isImapResponseLimitError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const candidate = error as { code?: unknown; cause?: unknown };
+  if (
+    candidate.code === "LiteralTooLarge"
+    || candidate.code === "ResponseTooLarge"
+    || candidate.code === "LineTooLarge"
+  ) {
+    return true;
+  }
+  return candidate.cause !== undefined && isImapResponseLimitError(candidate.cause);
+}
+
+export async function fetchBoundedImapMessage(
+  client: Pick<ImapFlow, "fetchOne">,
+  uid: number,
+  maxMessageBytes = MAX_IMAP_MESSAGE_BYTES
+): Promise<FetchMessage> {
+  const messageLimit = boundedPositiveInteger(maxMessageBytes, MAX_IMAP_MESSAGE_BYTES);
+  const sourceFetchLimit = messageLimit + 1;
+  let fetched: Awaited<ReturnType<ImapFlow["fetchOne"]>>;
+  try {
+    fetched = await client.fetchOne(uid, {
+      uid: true,
+      envelope: true,
+      size: true,
+      source: { start: 0, maxLength: sourceFetchLimit }
+    }, { uid: true });
+  } catch (error) {
+    if (isImapResponseLimitError(error)) {
+      throw new ImapMessageSourceError("IMAP message source exceeded the configured byte limit.", error);
+    }
+    throw error;
+  }
+  if (!fetched || fetched.uid !== uid || !fetched.source) {
+    throw new ImapMessageSourceError("IMAP message source was unavailable or did not match the requested UID.");
+  }
+  if (
+    (typeof fetched.size === "number" && (!Number.isSafeInteger(fetched.size) || fetched.size < 0))
+    || (typeof fetched.size === "number" && fetched.size > messageLimit)
+    || fetched.source.byteLength > messageLimit
+  ) {
+    throw new ImapMessageSourceError("IMAP message source exceeded the configured byte limit.");
+  }
+  return {
+    uid,
+    size: fetched.size,
+    envelope: fetched.envelope,
+    source: fetched.source
+  };
+}
+
+export async function parseBoundedImapMessageSource(
+  source: Buffer,
+  options: { maxMessageBytes?: number; maxHtmlParseBytes?: number } = {}
+): ReturnType<typeof simpleParser> {
+  const messageLimit = boundedPositiveInteger(options.maxMessageBytes, MAX_IMAP_MESSAGE_BYTES);
+  const htmlParseLimit = boundedPositiveInteger(options.maxHtmlParseBytes, MAX_IMAP_HTML_PARSE_BYTES);
+  if (source.byteLength > messageLimit) {
+    throw new ImapMessageSourceError("IMAP message source exceeded the configured byte limit.");
+  }
+  try {
+    return await simpleParser(source, {
+      keepCidLinks: true,
+      maxHtmlLengthToParse: htmlParseLimit,
+      skipTextToHtml: true
+    });
+  } catch (error) {
+    throw new ImapMessageSourceError("IMAP message source could not be parsed within configured limits.", error);
+  }
+}
 
 export type ImapErrorDetails = {
   name?: string;
@@ -201,6 +330,7 @@ export async function processImapUidBatch<T extends { uid: number }, R>(options:
   processMessage: (message: T) => Promise<R>;
   commitMessage: (message: T, result: R) => Promise<void>;
   onFailure?: (message: T, error: unknown) => Promise<"continue" | "stop" | void>;
+  onProgress?: () => Promise<void>;
 }): Promise<{ attempted: number; recorded: number; failed: number }> {
   let attempted = 0;
   let recorded = 0;
@@ -218,6 +348,10 @@ export async function processImapUidBatch<T extends { uid: number }, R>(options:
         continue;
       }
       break;
+    } finally {
+      if (options.onProgress) {
+        await options.onProgress().catch(() => undefined);
+      }
     }
   }
   return { attempted, recorded, failed };
@@ -671,6 +805,8 @@ export async function processImapInbox(options: {
   integrationTokenProvider?: IntegrationTokenProvider;
   fetchImpl?: typeof fetch;
   limit?: number;
+  onProgress?: () => Promise<void>;
+  imapClientFactory?: ImapPollClientFactory;
 }): Promise<{ configured: boolean; attempted: number; recorded: number; failed: number }> {
   const resolvedConfig = await resolveImapConfig(options);
   if (!resolvedConfig) {
@@ -691,19 +827,13 @@ export async function processImapInbox(options: {
     config: resolvedConfig
   });
 
-  const client = new ImapFlow({
+  const client = createImapPollClient(boundedImapClientOptions({
     host,
     port: config.port ?? 993,
     secure: config.secure ?? true,
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 15_000,
-    auth: {
-      user: username,
-      pass: password
-    },
-    logger: false
-  });
+    username,
+    password
+  }), options.imapClientFactory);
   client.on("error", () => undefined);
   try {
     await client.connect();
@@ -718,127 +848,130 @@ export async function processImapInbox(options: {
       });
       const found = await client.search(buildImapSearchCriteria(config), { uid: true });
       const candidateUids = eligibleImapUids(Array.isArray(found) ? found : [], config.lastUid, options.limit ?? 10);
-      const messages: FetchMessage[] = [];
-      if (candidateUids.length > 0) {
-        for await (const rawMessage of client.fetch(candidateUids, { uid: true, envelope: true, source: true }, { uid: true })) {
-          const message = rawMessage as FetchMessage;
-          if (candidateUids.includes(message.uid)) {
-            messages.push(message);
-          }
-        }
-      }
-      result = await processImapUidBatch({
-        messages,
-        processMessage: async (message) => {
-          if (!message.source) {
-            throw new ImapMessageSourceError("IMAP message source was unavailable.");
-          }
-          let parsed: Awaited<ReturnType<typeof simpleParser>>;
-          let fromAddr: string;
-          let toAddr: string;
-          let subject: string | null;
-          let bodyText: string;
-          let receivedAt: string;
-          let source: string;
-          let providerMessageId: string;
-          let attachmentMetadata: InboundAttachmentMetadata[];
-          try {
-            parsed = await simpleParser(message.source);
-            fromAddr = firstAddress(parsed.from);
-            toAddr = addressText(parsed.to) || username;
-            subject = parsed.subject ?? null;
-            bodyText = normalizedMessageBody(parsed);
-            receivedAt = parsed.date?.toISOString() ?? new Date().toISOString();
-            source = sourceForAddress(fromAddr);
-            providerMessageId = firstNonBlank(parsed.messageId, message.envelope?.messageId) ?? `${config.mailbox}:${message.uid}`;
-            attachmentMetadata = metadataForParsedAttachments(parsed);
-          } catch (error) {
-            throw new ImapMessageSourceError("IMAP message source could not be parsed or normalized.", error);
-          }
-          const classification = await classifySender({
-            context: options.context,
-            settings: options.settings,
-            store: options.store,
-            fromAddr
-          });
-          const inbound: InboundMessageInput = {
-            providerMessageId,
-            fromAddr,
-            toAddr,
-            subject,
-            bodyText,
-            receivedAt,
-            source,
-            attachments: classification === "owner"
-              ? await sanitizedOwnerAttachments(parsed)
-              : attachmentMetadata
-          };
-          if (options.modelClient) {
-            await processInboundMessage({
+      for (const uid of candidateUids) {
+        let failureResolution: "continue" | "stop" | undefined;
+        const processed = await processImapUidBatch({
+          messages: [{ uid }],
+          processMessage: async () => {
+            const message = await fetchBoundedImapMessage(client, uid);
+            let parsed: Awaited<ReturnType<typeof simpleParser>>;
+            let fromAddr: string;
+            let toAddr: string;
+            let subject: string | null;
+            let bodyText: string;
+            let receivedAt: string;
+            let source: string;
+            let providerMessageId: string;
+            let attachmentMetadata: InboundAttachmentMetadata[];
+            try {
+              parsed = await parseBoundedImapMessageSource(message.source);
+              fromAddr = firstAddress(parsed.from);
+              toAddr = addressText(parsed.to) || username;
+              subject = parsed.subject ?? null;
+              bodyText = normalizedMessageBody(parsed);
+              receivedAt = parsed.date?.toISOString() ?? new Date().toISOString();
+              source = sourceForAddress(fromAddr);
+              providerMessageId = firstNonBlank(parsed.messageId, message.envelope?.messageId) ?? `${config.mailbox}:${message.uid}`;
+              attachmentMetadata = metadataForParsedAttachments(parsed);
+            } catch (error) {
+              if (isDeterministicImapMessageFailure(error)) {
+                throw error;
+              }
+              throw new ImapMessageSourceError("IMAP message source could not be parsed or normalized.", error);
+            }
+            const classification = await classifySender({
               context: options.context,
               settings: options.settings,
               store: options.store,
-              message: inbound,
-              rateLimiter: options.rateLimiter,
-              modelClient: options.modelClient,
-              integrationTokenProvider: options.integrationTokenProvider,
-              fetchImpl: options.fetchImpl
+              fromAddr
             });
-          } else {
-            await handleInboundMessage({
-              context: options.context,
-              settings: options.settings,
-              store: options.store,
-              message: inbound,
-              rateLimiter: options.rateLimiter
-            });
-          }
-          return { receivedAt: inbound.receivedAt ?? undefined };
-        },
-        commitMessage: async (message, processed) => {
-          await updateImapProgress({
-            store: options.store,
-            context: options.context,
-            receivedAt: processed.receivedAt,
-            uid: message.uid,
-            clearFailureUid: message.uid
-          });
-          config.lastReceivedAt = processed.receivedAt && isNewerThanLastReceived(processed.receivedAt, config.lastReceivedAt)
-            ? processed.receivedAt
-            : config.lastReceivedAt;
-          config.lastUid = typeof config.lastUid === "number" ? Math.max(config.lastUid, message.uid) : message.uid;
-          await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true }).catch(async () => {
-            await options.store.recordAudit(options.context, "connector.imap_seen_error", "connector", "imap", {
-              uid: message.uid,
-              message: "The message was ingested and the UID cursor advanced, but the provider did not accept the Seen flag."
-            }).catch(() => undefined);
-          });
-        },
-        onFailure: async (message, error) => {
-          return resolveImapUidFailure({
-            store: options.store,
-            context: options.context,
-            uid: message.uid,
-            uidValidity: config.uidValidity,
-            error,
-            quarantine: async () => {
-              await updateImapProgress({
-                store: options.store,
+            const inbound: InboundMessageInput = {
+              providerMessageId,
+              fromAddr,
+              toAddr,
+              subject,
+              bodyText,
+              receivedAt,
+              source,
+              attachments: classification === "owner"
+                ? await sanitizedOwnerAttachments(parsed)
+                : attachmentMetadata
+            };
+            if (options.modelClient) {
+              await processInboundMessage({
                 context: options.context,
-                uid: message.uid,
-                clearFailureUid: message.uid
+                settings: options.settings,
+                store: options.store,
+                message: inbound,
+                rateLimiter: options.rateLimiter,
+                modelClient: options.modelClient,
+                integrationTokenProvider: options.integrationTokenProvider,
+                fetchImpl: options.fetchImpl
               });
-              config.lastUid = typeof config.lastUid === "number" ? Math.max(config.lastUid, message.uid) : message.uid;
-              await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true }).catch(async () => {
-                await options.store.recordAudit(options.context, "connector.imap_seen_error", "connector", "imap", {
-                  uid: message.uid,
-                  message: "The quarantined UID cursor advanced, but the provider did not accept the Seen flag."
-                }).catch(() => undefined);
+            } else {
+              await handleInboundMessage({
+                context: options.context,
+                settings: options.settings,
+                store: options.store,
+                message: inbound,
+                rateLimiter: options.rateLimiter
               });
             }
-          });
+            return { receivedAt: inbound.receivedAt ?? undefined };
+          },
+          commitMessage: async (message, handled) => {
+            await updateImapProgress({
+              store: options.store,
+              context: options.context,
+              receivedAt: handled.receivedAt,
+              uid: message.uid,
+              clearFailureUid: message.uid
+            });
+            config.lastReceivedAt = handled.receivedAt && isNewerThanLastReceived(handled.receivedAt, config.lastReceivedAt)
+              ? handled.receivedAt
+              : config.lastReceivedAt;
+            config.lastUid = typeof config.lastUid === "number" ? Math.max(config.lastUid, message.uid) : message.uid;
+            await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true }).catch(async () => {
+              await options.store.recordAudit(options.context, "connector.imap_seen_error", "connector", "imap", {
+                uid: message.uid,
+                message: "The message was ingested and the UID cursor advanced, but the provider did not accept the Seen flag."
+              }).catch(() => undefined);
+            });
+          },
+          onFailure: async (message, error) => {
+            failureResolution = await resolveImapUidFailure({
+              store: options.store,
+              context: options.context,
+              uid: message.uid,
+              uidValidity: config.uidValidity,
+              error,
+              quarantine: async () => {
+                await updateImapProgress({
+                  store: options.store,
+                  context: options.context,
+                  uid: message.uid,
+                  clearFailureUid: message.uid
+                });
+                config.lastUid = typeof config.lastUid === "number" ? Math.max(config.lastUid, message.uid) : message.uid;
+                await client.messageFlagsAdd(message.uid, ["\\Seen"], { uid: true }).catch(async () => {
+                  await options.store.recordAudit(options.context, "connector.imap_seen_error", "connector", "imap", {
+                    uid: message.uid,
+                    message: "The quarantined UID cursor advanced, but the provider did not accept the Seen flag."
+                  }).catch(() => undefined);
+                });
+              }
+            });
+            return failureResolution;
+          },
+          onProgress: options.onProgress
+        });
+        result.attempted += processed.attempted;
+        result.recorded += processed.recorded;
+        result.failed += processed.failed;
+        if (processed.failed > 0 && failureResolution !== "continue") {
+          break;
         }
-      });
+      }
     } finally {
       lock.release();
     }
@@ -866,6 +999,7 @@ export async function testImapConnection(options: {
   store: AgentStore;
   context: RequestContext;
   settings: Settings;
+  imapClientFactory?: ImapPollClientFactory;
 }): Promise<ImapTestResult> {
   const config = await resolveImapConfig(options);
   if (!config) {
@@ -883,19 +1017,13 @@ export async function testImapConnection(options: {
   if (!base.configured || !config.host || !config.username || !config.password) {
     return { ok: false, ...base, error: { message: "IMAP configuration is incomplete." } };
   }
-  const client = new ImapFlow({
+  const client = createImapPollClient(boundedImapClientOptions({
     host: config.host,
     port: config.port ?? 993,
     secure: config.secure ?? true,
-    connectionTimeout: 10_000,
-    greetingTimeout: 10_000,
-    socketTimeout: 15_000,
-    auth: {
-      user: config.username,
-      pass: config.password
-    },
-    logger: false
-  });
+    username: config.username,
+    password: config.password
+  }), options.imapClientFactory);
   client.on("error", () => undefined);
   try {
     await client.connect();

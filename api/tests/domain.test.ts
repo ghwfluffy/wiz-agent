@@ -1433,18 +1433,72 @@ describe("domain and user ownership APIs", () => {
       job: {
         id: job.id,
         status: "pending",
-        attempts: 1,
+        attempts: 0,
         lastError: null
       }
+    });
+
+    const [retried] = await store.claimRagIndexJobs(1, new Date());
+    expect(retried).toMatchObject({
+      id: job.id,
+      status: "claimed",
+      attempts: 1
     });
 
     const audit = await store.listAudit(context, true);
     expect(audit).toEqual(expect.arrayContaining([
       expect.objectContaining({
         action: "rag.index_job.retry",
-        entityId: job.id
+        entityId: job.id,
+        details: expect.objectContaining({
+          prior_attempts: 1,
+          attempts: 0
+        })
       })
     ]));
+  });
+
+  it("returns well-formed code-point-bounded semantic excerpts from memory", async () => {
+    const store = createMemoryStore();
+    const settings = loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" });
+    const session = await store.createDevelopmentSession(settings, "semantic-excerpt-login");
+    const context = {
+      userId: session.user.id,
+      actorType: "user" as const,
+      permissions: ["user"],
+      requestId: "semantic-excerpt-test",
+      session
+    };
+    const document = await store.writeMarkdownDocument(context, {
+      path: "/assistant/unicode-excerpt.md",
+      markdown: "# Unicode excerpt"
+    });
+    if ("code" in document) {
+      throw new Error("unexpected markdown conflict");
+    }
+    const content = `bad\uD800${"a".repeat(315)}🚀tail`;
+    await store.replaceDocumentChunks(context, document.id, [{
+      id: "unicode-chunk",
+      documentVersion: document.version,
+      sectionId: "unicode-excerpt",
+      headingPath: ["Unicode excerpt"],
+      chunkIndex: 0,
+      content,
+      contentHash: "unicode-content-hash",
+      qdrantPointId: "unicode-point",
+      qdrantCollection: "unicode-collection",
+      embeddingModel: "mock-embedding",
+      embeddingDimensions: 4
+    }]);
+
+    const [result] = await store.searchMarkdownSemantic(context, {
+      pointIds: ["unicode-point"],
+      scoresByPointId: { "unicode-point": 0.9 }
+    });
+
+    expect(result?.excerpt).toBe(`bad\uFFFD${"a".repeat(315)}🚀`);
+    expect(Array.from(result?.excerpt ?? "")).toHaveLength(320);
+    expect(result?.excerpt).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
 
   it("reuses an equivalent active RAG request instead of reviving a conflicting failed job", async () => {
@@ -1472,10 +1526,13 @@ describe("domain and user ownership APIs", () => {
     const [failed] = await store.claimRagIndexJobs(1, new Date());
     await store.markRagIndexJobDead(failed.id, "first request exhausted retries");
     const active = await store.enqueueRagJob(context, document.id, "index_markdown");
+    const [claimedActive] = await store.claimRagIndexJobs(1, new Date());
+    expect(claimedActive).toMatchObject({ id: active.id, attempts: 1, status: "claimed" });
 
     await expect(store.retryRagIndexJob(context, failed.id, true)).resolves.toMatchObject({
       id: active.id,
-      status: "pending"
+      status: "claimed",
+      attempts: 1
     });
     const jobs = await store.listRagIndexJobs(context, true);
     expect(jobs.filter((job) => (
@@ -1490,7 +1547,9 @@ describe("domain and user ownership APIs", () => {
         details: expect.objectContaining({
           requested_job_id: failed.id,
           active_job_id: active.id,
-          reused_active_job: true
+          reused_active_job: true,
+          prior_attempts: 1,
+          attempts: 1
         })
       })
     ]));

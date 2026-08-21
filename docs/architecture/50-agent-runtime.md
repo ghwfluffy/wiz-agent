@@ -515,7 +515,7 @@ rejected tool-call outcomes. These task events are for the owner-facing task
 modal; audit logs remain the broader operational record.
 
 Accepted meaningful tool calls also write deterministic decision-ledger entries
-under `/assistant/decisions/YYYY-MM.md` after the host records the tool-call
+under `/assistant/decisions/YYYY-MM-DD.md` after the host records the tool-call
 row. The ledger covers owner-visible outbound proposals, owner clarification
 requests, cross-app approval requests, task schedule/status changes, task
 splits/follow-ups/waiting state, assistant self-review and memory-review note
@@ -523,6 +523,8 @@ writes, owner feedback capture, list mutations, new tasks, and explicit
 observations/no-action choices. Entries link the run id, tool-call id, task or
 task-event ids, markdown path, outbound message id, approval id, and registered
 app action id when those records exist.
+Daily ledger shards bound the parse, section-replacement, and RAG-indexing work
+caused by each append.
 
 Scheduled worker outcomes write a separate decision entry after
 `scheduled_task.outcome` or `scheduled_task.failed` is recorded. This lets the

@@ -27,7 +27,9 @@ import {
   RAG_JOB_COALESCING_MIGRATION_ID,
   RAG_JOB_COALESCING_SQL,
   OUTBOUND_DEDUPE_KEY_MIGRATION_ID,
-  OUTBOUND_DEDUPE_KEY_SQL
+  OUTBOUND_DEDUPE_KEY_SQL,
+  MARKDOWN_SECTION_COMPACTION_MIGRATION_ID,
+  MARKDOWN_SECTION_COMPACTION_SQL
 } from "./migrations.js";
 
 export async function runMigrations(): Promise<void> {
@@ -316,6 +318,26 @@ export async function runMigrations(): Promise<void> {
         await client.query(OUTBOUND_DEDUPE_KEY_SQL);
         await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
           OUTBOUND_DEDUPE_KEY_MIGRATION_ID
+        ]);
+        await client.query("COMMIT");
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    const markdownSectionCompactionApplied = await pool.query("SELECT 1 FROM schema_migrations WHERE id = $1", [
+      MARKDOWN_SECTION_COMPACTION_MIGRATION_ID
+    ]);
+    if (markdownSectionCompactionApplied.rowCount === 0) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(MARKDOWN_SECTION_COMPACTION_SQL);
+        await client.query("INSERT INTO schema_migrations (id) VALUES ($1)", [
+          MARKDOWN_SECTION_COMPACTION_MIGRATION_ID
         ]);
         await client.query("COMMIT");
       } catch (error) {

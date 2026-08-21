@@ -101,6 +101,14 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+function semanticExcerpt(value: unknown, maxCodePoints = 320): string {
+  const normalized = String(value ?? "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+  return Array.from(normalized).slice(0, maxCodePoints).join("");
+}
+
 function hashOauthState(state: string): string {
   return createHash("sha256").update(state).digest("hex");
 }
@@ -890,31 +898,41 @@ async function insertMarkdownSections(
 ): Promise<void> {
   await queryable.query(
     `DELETE FROM markdown_sections
-     WHERE user_id = $1 AND document_id = $2 AND document_version = $3`,
-    [context.userId, documentId, version]
+     WHERE user_id = $1 AND document_id = $2`,
+    [context.userId, documentId]
   );
-  for (const section of parseMarkdownSections(markdown)) {
-    await queryable.query(
-      `INSERT INTO markdown_sections
-        (id, user_id, document_id, document_version, section_id, parent_section_id, heading,
-         heading_path, level, line_start, line_end, content_hash)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-      [
-        randomUUID(),
-        context.userId,
-        documentId,
-        version,
-        section.sectionId,
-        section.parentSectionId,
-        section.heading,
-        JSON.stringify(section.headingPath),
-        section.level,
-        section.lineStart,
-        section.lineEnd,
-        section.contentHash
-      ]
-    );
+  const sections = parseMarkdownSections(markdown);
+  if (sections.length === 0) {
+    return;
   }
+  await queryable.query(
+    `INSERT INTO markdown_sections
+      (id, user_id, document_id, document_version, section_id, parent_section_id, heading,
+       heading_path, level, line_start, line_end, content_hash)
+     SELECT section.id, $1, $2, $3, section.section_id, section.parent_section_id, section.heading,
+            section.heading_path, section.level, section.line_start, section.line_end, section.content_hash
+     FROM unnest(
+       $4::text[], $5::text[], $6::text[], $7::text[], $8::jsonb[],
+       $9::integer[], $10::integer[], $11::integer[], $12::text[]
+     ) AS section(
+       id, section_id, parent_section_id, heading, heading_path,
+       level, line_start, line_end, content_hash
+     )`,
+    [
+      context.userId,
+      documentId,
+      version,
+      sections.map(() => randomUUID()),
+      sections.map((section) => section.sectionId),
+      sections.map((section) => section.parentSectionId),
+      sections.map((section) => section.heading),
+      sections.map((section) => JSON.stringify(section.headingPath)),
+      sections.map((section) => section.level),
+      sections.map((section) => section.lineStart),
+      sections.map((section) => section.lineEnd),
+      sections.map((section) => section.contentHash)
+    ]
+  );
 }
 
 async function enqueueMarkdownIndexJob(
@@ -1809,6 +1827,11 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
           [row.id, context.userId]
         );
         await client.query(
+          `DELETE FROM markdown_sections
+           WHERE user_id = $1 AND document_id = $2`,
+          [context.userId, row.id]
+        );
+        await client.query(
           `INSERT INTO rag_index_jobs
             (id, user_id, document_id, requested_version, requested_content_hash, job_type)
            VALUES ($1, $2, $3, $4, $5, 'delete_markdown')
@@ -1865,6 +1888,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
             [row.id, context.userId, nextPath, basenameForPath(nextPath)]
           );
           const document = markdownDocumentFromRow(updated.rows[0]);
+          await insertMarkdownSections(client, context, document.id, document.version, document.markdown);
           await enqueueMarkdownIndexJob(client, context, document);
           moved.push(document);
         }
@@ -2025,7 +2049,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
             headingPath: Array.isArray(row.heading_path) ? row.heading_path.map(String) : [],
             chunkIndex: Number(row.chunk_index),
             score: input.scoresByPointId[pointId] ?? 0,
-            excerpt: String(row.content ?? "").replace(/\s+/g, " ").trim().slice(0, 320)
+            excerpt: semanticExcerpt(row.content)
           };
         })
         .filter((row): row is NonNullable<typeof row> => row !== undefined)
@@ -2261,32 +2285,44 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
     async retryRagIndexJob(context, jobId, includeAllUsers = false) {
       const includeAll = includeAllUsers && context.permissions.includes("admin");
       let record: RagIndexJobRecord | undefined;
+      let priorAttempts: number | undefined;
       try {
         const result = await pool.query(
-          `UPDATE rag_index_jobs target
-         SET status = 'pending',
-             available_at = now(),
-             started_at = NULL,
-             completed_at = NULL,
-             last_error = NULL
-         WHERE target.id = $1
-           AND ($2 = true OR target.user_id = $3)
-           AND target.status IN ('failed', 'dead')
-           AND NOT EXISTS (
-             SELECT 1
-             FROM rag_index_jobs active
-             WHERE active.id <> target.id
-               AND active.user_id = target.user_id
-               AND active.document_id = target.document_id
-               AND active.job_type = target.job_type
-               AND active.requested_version IS NOT DISTINCT FROM target.requested_version
-               AND active.requested_content_hash IS NOT DISTINCT FROM target.requested_content_hash
-               AND active.status IN ('pending', 'claimed')
+          `WITH retry_target AS (
+             SELECT target.id, target.attempts AS prior_attempts
+             FROM rag_index_jobs target
+             WHERE target.id = $1
+               AND ($2 = true OR target.user_id = $3)
+               AND target.status IN ('failed', 'dead')
+             FOR UPDATE
            )
-         RETURNING *`,
+           UPDATE rag_index_jobs target
+           SET status = 'pending',
+               attempts = 0,
+               available_at = now(),
+               started_at = NULL,
+               completed_at = NULL,
+               last_error = NULL
+           FROM retry_target
+           WHERE target.id = retry_target.id
+             AND NOT EXISTS (
+               SELECT 1
+               FROM rag_index_jobs active
+               WHERE active.id <> target.id
+                 AND active.user_id = target.user_id
+                 AND active.document_id = target.document_id
+                 AND active.job_type = target.job_type
+                 AND active.requested_version IS NOT DISTINCT FROM target.requested_version
+                 AND active.requested_content_hash IS NOT DISTINCT FROM target.requested_content_hash
+                 AND active.status IN ('pending', 'claimed')
+             )
+           RETURNING target.*, retry_target.prior_attempts`,
           [jobId, includeAll, context.userId]
         );
-        record = result.rows[0] ? ragIndexJobFromRow(result.rows[0]) : undefined;
+        if (result.rows[0]) {
+          record = ragIndexJobFromRow(result.rows[0]);
+          priorAttempts = Number(result.rows[0].prior_attempts);
+        }
       } catch (error) {
         const code = typeof error === "object" && error !== null && "code" in error
           ? String((error as { code?: unknown }).code ?? "")
@@ -2297,7 +2333,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
       }
       if (!record) {
         const existing = await pool.query(
-          `SELECT candidate.*
+          `SELECT candidate.*, requested.attempts AS requested_prior_attempts
            FROM rag_index_jobs requested
            JOIN rag_index_jobs candidate
              ON candidate.user_id = requested.user_id
@@ -2307,12 +2343,16 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
             AND candidate.requested_content_hash IS NOT DISTINCT FROM requested.requested_content_hash
            WHERE requested.id = $1
              AND ($2 = true OR requested.user_id = $3)
+             AND requested.status IN ('failed', 'dead')
              AND candidate.status IN ('pending', 'claimed', 'completed')
            ORDER BY (candidate.id = requested.id) DESC, candidate.created_at DESC, candidate.id DESC
            LIMIT 1`,
           [jobId, includeAll, context.userId]
         );
-        record = existing.rows[0] ? ragIndexJobFromRow(existing.rows[0]) : undefined;
+        if (existing.rows[0]) {
+          record = ragIndexJobFromRow(existing.rows[0]);
+          priorAttempts = Number(existing.rows[0].requested_prior_attempts);
+        }
       }
       if (record) {
         await recordAudit(pool, context, "rag.index_job.retry", "rag_index_job", jobId, {
@@ -2322,6 +2362,7 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
           target_user_id: record.userId,
           document_id: record.documentId,
           job_type: record.jobType,
+          prior_attempts: priorAttempts,
           attempts: record.attempts
         });
       }
@@ -2380,28 +2421,39 @@ export function createPostgresStore(pool: Pool, settings?: Partial<Settings>): A
            WHERE user_id = $1 AND document_id = $2`,
           [context.userId, documentId]
         );
-        for (const chunk of chunks) {
+        if (chunks.length > 0) {
           await client.query(
             `INSERT INTO markdown_document_chunks
               (id, user_id, document_id, document_version, section_id, heading_path, chunk_index,
                content, content_hash, qdrant_point_id, qdrant_collection, embedding_model,
                embedding_dimensions, indexed_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+             SELECT chunk.id, $1, $2, chunk.document_version, chunk.section_id, chunk.heading_path,
+                    chunk.chunk_index, chunk.content, chunk.content_hash, chunk.qdrant_point_id,
+                    chunk.qdrant_collection, chunk.embedding_model, chunk.embedding_dimensions,
+                    chunk.indexed_at
+             FROM unnest(
+               $3::text[], $4::bigint[], $5::text[], $6::jsonb[], $7::integer[], $8::text[],
+               $9::text[], $10::text[], $11::text[], $12::text[], $13::integer[], $14::timestamptz[]
+             ) AS chunk(
+               id, document_version, section_id, heading_path, chunk_index, content,
+               content_hash, qdrant_point_id, qdrant_collection, embedding_model,
+               embedding_dimensions, indexed_at
+             )`,
             [
-              chunk.id,
               context.userId,
               documentId,
-              chunk.documentVersion,
-              chunk.sectionId,
-              JSON.stringify(chunk.headingPath),
-              chunk.chunkIndex,
-              chunk.content,
-              chunk.contentHash,
-              chunk.qdrantPointId,
-              chunk.qdrantCollection,
-              chunk.embeddingModel,
-              chunk.embeddingDimensions,
-              chunk.indexedAt ?? null
+              chunks.map((chunk) => chunk.id),
+              chunks.map((chunk) => chunk.documentVersion),
+              chunks.map((chunk) => chunk.sectionId),
+              chunks.map((chunk) => JSON.stringify(chunk.headingPath)),
+              chunks.map((chunk) => chunk.chunkIndex),
+              chunks.map((chunk) => chunk.content),
+              chunks.map((chunk) => chunk.contentHash),
+              chunks.map((chunk) => chunk.qdrantPointId),
+              chunks.map((chunk) => chunk.qdrantCollection),
+              chunks.map((chunk) => chunk.embeddingModel),
+              chunks.map((chunk) => chunk.embeddingDimensions),
+              chunks.map((chunk) => chunk.indexedAt ?? null)
             ]
           );
         }
@@ -3938,6 +3990,7 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
           updatedAt: nowIso()
         };
         markdownDocuments.set(`${context.userId}:${nextPath}`, updated);
+        storeMarkdownSections(updated);
         pushRagJob(context, updated, "index_markdown");
         moved.push(updated);
       }
@@ -4052,7 +4105,7 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
             headingPath: chunk.headingPath,
             chunkIndex: chunk.chunkIndex,
             score: input.scoresByPointId[pointId] ?? 0,
-            excerpt: chunk.content.replace(/\s+/g, " ").trim().slice(0, 320)
+            excerpt: semanticExcerpt(chunk.content)
           };
         })
         .filter((row): row is NonNullable<typeof row> => row !== undefined)
@@ -4201,9 +4254,11 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
           && entry.requestedContentHash === job.requestedContentHash
           && ["pending", "claimed"].includes(entry.status);
       });
+      const priorAttempts = job.attempts;
       const record = active ?? job;
       if (!active) {
         job.status = "pending";
+        job.attempts = 0;
         job.availableAt = nowIso();
         job.startedAt = null;
         job.completedAt = null;
@@ -4216,6 +4271,7 @@ export function createMemoryStore(settings?: Partial<Settings>): AgentStore {
         target_user_id: record.userId,
         document_id: record.documentId,
         job_type: record.jobType,
+        prior_attempts: priorAttempts,
         attempts: record.attempts
       });
       return { ...record };

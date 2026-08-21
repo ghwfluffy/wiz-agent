@@ -287,6 +287,7 @@ export async function daemonOnce(options: {
   now?: Date;
   fetchImpl?: typeof fetch;
   webResearchClient?: WebResearchClient;
+  onProgress?: () => Promise<void>;
 }): Promise<{
   claimedTasks: number;
   ranTasks: number;
@@ -540,15 +541,21 @@ export async function daemonOnce(options: {
           now: options.now
         });
       } finally {
-        if (isAutonomousRecurringTask(task)) {
-          await scheduleNextAutonomousTask({
-            store: options.store,
-            context: options.context,
-            task,
-            now: options.now
-          });
+        try {
+          if (isAutonomousRecurringTask(task)) {
+            await scheduleNextAutonomousTask({
+              store: options.store,
+              context: options.context,
+              task,
+              now: options.now
+            });
+          }
+        } finally {
+          ranTasks += 1;
+          if (options.onProgress) {
+            await options.onProgress().catch(() => undefined);
+          }
         }
-        ranTasks += 1;
       }
     }
   }

@@ -18,7 +18,7 @@ import {
   listAppCapabilities,
   listIntegrationActions
 } from "../src/integrations/capabilityRegistry.js";
-import { recordDecisionLedgerForToolCall } from "../src/memory/decisionLedger.js";
+import { decisionLedgerPath, recordDecisionLedgerForToolCall } from "../src/memory/decisionLedger.js";
 import { PERSONAL_PROFILE_SLUG } from "../src/memory/personalMemory.js";
 import { buildMcpApp } from "../src/mcp/server.js";
 import { validateOrRepairToolCall, validateToolArguments } from "../src/tools/validator.js";
@@ -1235,7 +1235,7 @@ describe("agent task execution", () => {
     ]));
   });
 
-  it("records cross-app approval decisions in the monthly decision ledger", async () => {
+  it("records cross-app approval decisions in the daily decision ledger", async () => {
     const { context, store } = await testContext();
 
     const result = await runAgentTask({
@@ -1271,7 +1271,7 @@ describe("agent task execution", () => {
     });
     const [approval] = await store.listApprovals(context, ["pending"]);
     const [toolCall] = await store.listToolCalls(context);
-    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
+    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06-13.md");
     expect(ledger).toMatchObject({
       userId: context.userId,
       markdown: expect.stringContaining("queued cross-app write approval")
@@ -1281,7 +1281,7 @@ describe("agent task execution", () => {
     expect(ledger?.markdown).toContain("actionId: goals.create_goal");
     await expect(store.getMarkdownIndexStatus(context, "/assistant/decisions")).resolves.toEqual([
       expect.objectContaining({
-        path: "/assistant/decisions/2026-06.md",
+        path: "/assistant/decisions/2026-06-13.md",
         pendingJobs: 1
       })
     ]);
@@ -1322,8 +1322,17 @@ describe("agent task execution", () => {
       now: new Date("2026-06-13T12:00:00.000Z")
     });
 
-    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
+    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06-13.md");
     expect(ledger?.markdown.match(new RegExp(`assistant-decision:tool-call:${toolCall.id}`, "g"))).toHaveLength(1);
+  });
+
+  it("shards decision ledgers by UTC day", () => {
+    expect(decisionLedgerPath(new Date("2026-06-13T23:59:59.999Z"))).toBe(
+      "/assistant/decisions/2026-06-13.md"
+    );
+    expect(decisionLedgerPath(new Date("2026-06-14T00:00:00.000Z"))).toBe(
+      "/assistant/decisions/2026-06-14.md"
+    );
   });
 
   it("does not claim no-op accepted tool calls wrote decision side effects", async () => {
@@ -1354,7 +1363,7 @@ describe("agent task execution", () => {
       toolCall,
       now: new Date("2026-06-13T12:00:00.000Z")
     })).resolves.toMatchObject({ wrote: false, reason: "not_meaningful" });
-    await expect(store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md")).resolves.toBeUndefined();
+    await expect(store.getMarkdownDocument(context, "/assistant/decisions/2026-06-13.md")).resolves.toBeUndefined();
   });
 
   it("keeps the local tool client as a deterministic compatibility fallback", async () => {

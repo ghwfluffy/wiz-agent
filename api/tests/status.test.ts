@@ -1,5 +1,11 @@
-import { describe, expect, it } from "vitest";
+import type { Pool } from "pg";
+import { describe, expect, it, vi } from "vitest";
 import { loadSettings } from "../src/config/settings.js";
+import {
+  BACKGROUND_POSTGRES_POOL_OPTIONS,
+  checkDatabaseReadiness,
+  DATABASE_READINESS_TIMEOUT_MS
+} from "../src/db/pool.js";
 import { buildApp } from "../src/http/app.js";
 
 describe("status route", () => {
@@ -53,16 +59,84 @@ describe("status route", () => {
   });
 
   it("keeps healthz minimal for liveness probes", async () => {
+    const readinessCheck = vi.fn(async () => {
+      throw new Error("database unavailable");
+    });
     const app = buildApp({
       settings: loadSettings({
         APP_ENV: "test",
         AUTH_MODE: "standalone"
-      })
+      }),
+      readinessCheck
     });
 
     const response = await app.request("/healthz");
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toEqual({ status: "ok" });
+    expect(readinessCheck).not.toHaveBeenCalled();
+  });
+
+  it("reports bounded database readiness through an injectable check", async () => {
+    const readinessCheck = vi.fn(async () => undefined);
+    const app = buildApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      readinessCheck
+    });
+
+    const response = await app.request("/readyz");
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ status: "ready" });
+    expect(readinessCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails readiness closed without exposing database errors", async () => {
+    const app = buildApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      readinessCheck: async () => {
+        throw new Error("password=secret host=private-db.example.test");
+      }
+    });
+
+    const response = await app.request("/readyz");
+    const text = await response.text();
+
+    expect(response.status).toBe(503);
+    expect(JSON.parse(text)).toEqual({ status: "not_ready" });
+    expect(text).not.toContain("secret");
+    expect(text).not.toContain("private-db");
+  });
+
+  it("returns not ready when an injected readiness check exceeds its deadline", async () => {
+    const app = buildApp({
+      settings: loadSettings({ APP_ENV: "test", AUTH_MODE: "standalone" }),
+      readinessCheck: () => new Promise<void>(() => undefined),
+      readinessTimeoutMs: 10
+    });
+
+    const response = await app.request("/readyz");
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toEqual({ status: "not_ready" });
+  });
+
+  it("uses a read-only query with a driver-enforced readiness timeout", async () => {
+    const query = vi.fn(async () => ({ rows: [{ ready: 1 }] }));
+
+    await checkDatabaseReadiness({ query } as unknown as Pick<Pool, "query">);
+
+    expect(query).toHaveBeenCalledWith({
+      text: "SELECT 1 AS ready",
+      query_timeout: DATABASE_READINESS_TIMEOUT_MS
+    });
+  });
+
+  it("bounds background-worker Postgres connection and statement work", () => {
+    expect(BACKGROUND_POSTGRES_POOL_OPTIONS).toEqual({
+      connectionTimeoutMillis: 5_000,
+      query_timeout: 20_000,
+      statement_timeout: 20_000
+    });
   });
 });

@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
+import { rename, unlink, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { OpenAIModelClient, type AgentModelClient } from "./agent/modelClient.js";
 import type { AuthenticatedUser, Session } from "./auth/session.js";
 import { loadSettings, type Settings } from "./config/settings.js";
-import { createPool } from "./db/pool.js";
+import { BACKGROUND_POSTGRES_POOL_OPTIONS, createPool } from "./db/pool.js";
 import { createPostgresStore } from "./domain/store.js";
 import type { AgentStore, RequestContext } from "./domain/types.js";
 import { SignedIntegrationTokenProvider } from "./integrations/tokenProvider.js";
@@ -15,6 +16,8 @@ import { SlidingWindowRateLimiter } from "./security/senderPolicy.js";
 import { runtimeSafetyPolicy } from "./security/safetyPolicy.js";
 
 const WORKER_INTERVAL_MS = 20_000;
+export const AGENT_WORKER_HEALTH_PATH = "/tmp/agent-worker-health.json";
+export const AGENT_WORKER_HEALTH_STALE_MS = 600_000;
 const INBOUND_BATCH_LIMIT = 10;
 const MAX_WORKER_LOG_STRING_LENGTH = 500;
 const MAX_WORKER_LOG_ARRAY_ITEMS = 20;
@@ -22,17 +25,113 @@ const MAX_WORKER_LOG_DEPTH = 4;
 const SENSITIVE_WORKER_LOG_KEY_PATTERN = /(?:password|passwd|pwd|secret|token|api[_\s-]?key|access[_\s-]?key|private[_\s-]?key|credential|authorization|bearer|cookie|session)/i;
 let inboundRateLimiter: SlidingWindowRateLimiter | undefined;
 let inboundRateLimiterLimit = 0;
+let agentWorkerHealthWriteSequence = 0;
 
-export function createNonOverlappingRunner(work: () => Promise<void>): () => Promise<boolean> {
+export type AgentWorkerHealthRecord = {
+  state: "running" | "idle" | "error";
+  updated_at: string;
+  tick_started_at: string;
+  tick_succeeded_at: string | null;
+  tick_failed_at: string | null;
+};
+
+export async function writeAgentWorkerHealth(
+  record: AgentWorkerHealthRecord,
+  path = AGENT_WORKER_HEALTH_PATH
+): Promise<void> {
+  agentWorkerHealthWriteSequence += 1;
+  const temporaryPath = `${path}.${process.pid}.${agentWorkerHealthWriteSequence}.tmp`;
+  try {
+    await writeFile(temporaryPath, `${JSON.stringify(record)}\n`, {
+      encoding: "utf8",
+      mode: 0o600
+    });
+    await rename(temporaryPath, path);
+  } catch (error) {
+    await unlink(temporaryPath).catch(() => undefined);
+    throw error;
+  }
+}
+
+export function isAgentWorkerHealthFresh(
+  record: Pick<AgentWorkerHealthRecord, "updated_at">,
+  nowMs = Date.now(),
+  staleAfterMs = AGENT_WORKER_HEALTH_STALE_MS
+): boolean {
+  const updatedAtMs = Date.parse(record.updated_at);
+  const ageMs = nowMs - updatedAtMs;
+  return Number.isFinite(updatedAtMs) && ageMs >= 0 && ageMs < staleAfterMs;
+}
+
+export function isAgentWorkerHealthOutcomeHealthy(
+  record: Pick<AgentWorkerHealthRecord, "state" | "tick_succeeded_at" | "tick_failed_at">
+): boolean {
+  if (record.state !== "running" && record.state !== "idle") {
+    return false;
+  }
+  if (record.tick_failed_at === null) {
+    return true;
+  }
+  const failureAtMs = Date.parse(record.tick_failed_at);
+  const successAtMs = record.tick_succeeded_at === null
+    ? Number.NaN
+    : Date.parse(record.tick_succeeded_at);
+  return Number.isFinite(failureAtMs)
+    && Number.isFinite(successAtMs)
+    && successAtMs >= failureAtMs;
+}
+
+export function createNonOverlappingRunner(
+  work: (markProgress: () => Promise<void>) => Promise<void>,
+  options: {
+    healthPath?: string;
+    now?: () => Date;
+  } = {}
+): () => Promise<boolean> {
   let running = false;
+  let tickStartedAt = "";
+  let tickSucceededAt: string | null = null;
+  let tickFailedAt: string | null = null;
+
+  async function recordHealth(state: AgentWorkerHealthRecord["state"], updatedAt: string): Promise<void> {
+    if (!options.healthPath) {
+      return;
+    }
+    try {
+      await writeAgentWorkerHealth({
+        state,
+        updated_at: updatedAt,
+        tick_started_at: tickStartedAt,
+        tick_succeeded_at: tickSucceededAt,
+        tick_failed_at: tickFailedAt
+      }, options.healthPath);
+    } catch {
+      logWorker("worker_health_write_error", { state });
+    }
+  }
+
   return async () => {
     if (running) {
       return false;
     }
     running = true;
+    tickStartedAt = (options.now?.() ?? new Date()).toISOString();
+    const currentTickStartedAt = tickStartedAt;
+    await recordHealth("running", tickStartedAt);
     try {
-      await work();
+      await work(async () => {
+        if (!running || tickStartedAt !== currentTickStartedAt) {
+          return;
+        }
+        await recordHealth("running", (options.now?.() ?? new Date()).toISOString());
+      });
+      tickSucceededAt = (options.now?.() ?? new Date()).toISOString();
+      await recordHealth("idle", tickSucceededAt);
       return true;
+    } catch (error) {
+      tickFailedAt = (options.now?.() ?? new Date()).toISOString();
+      await recordHealth("error", tickFailedAt);
+      throw error;
     } finally {
       running = false;
     }
@@ -76,6 +175,7 @@ export async function workerTick(options: {
   imapProcessor?: typeof processImapInbox;
   now?: Date;
   fetchImpl?: typeof fetch;
+  onProgress?: () => Promise<void>;
 }): Promise<{
   users: number;
   claimedTasks: number;
@@ -126,7 +226,8 @@ export async function workerTick(options: {
       mailTransport: options.mailTransport,
       outboundLimit: remainingOutbound,
       now: options.now,
-      fetchImpl: options.fetchImpl
+      fetchImpl: options.fetchImpl,
+      onProgress: options.onProgress
     });
     remainingOutbound = Math.max(0, remainingOutbound - result.outboundAttempted);
     totals.claimedTasks += result.claimedTasks;
@@ -150,7 +251,8 @@ export async function workerTick(options: {
         rateLimiter: reviewNotificationRateLimiter(options.settings),
         modelClient: options.modelClient,
         integrationTokenProvider,
-        limit: INBOUND_BATCH_LIMIT
+        limit: INBOUND_BATCH_LIMIT,
+        onProgress: options.onProgress
       });
       totals.inboundAttempted += inbound.attempted;
       totals.inboundRecorded += inbound.recorded;
@@ -223,38 +325,39 @@ function logWorker(event: string, details: Record<string, unknown> = {}): void {
 
 export function startWorker(): ReturnType<typeof setInterval> {
   const settings = loadSettings();
-  const pool = createPool(settings);
+  const pool = createPool(settings, BACKGROUND_POSTGRES_POOL_OPTIONS);
   const store = createPostgresStore(pool, settings);
   const modelClient = settings.agentOpenaiApiKey
     ? OpenAIModelClient.fromSettings(settings)
     : undefined;
 
-  const runTick = createNonOverlappingRunner(async () => {
+  const runTick = createNonOverlappingRunner(async (markProgress) => {
+    const result = await workerTick({
+      store,
+      settings,
+      modelClient,
+      onProgress: markProgress
+    });
+    logWorker("worker_tick", {
+      auth_mode: settings.authMode,
+      interval_ms: WORKER_INTERVAL_MS,
+      outbound_batch_limit: runtimeSafetyPolicy(settings).outboundMessagesPerWorkerTick,
+      inbound_batch_limit: INBOUND_BATCH_LIMIT,
+      ...result
+    });
+  }, { healthPath: AGENT_WORKER_HEALTH_PATH });
+
+  async function tick(): Promise<void> {
     try {
-      const result = await workerTick({
-        store,
-        settings,
-        modelClient
-      });
-      logWorker("worker_tick", {
-        auth_mode: settings.authMode,
-        interval_ms: WORKER_INTERVAL_MS,
-        outbound_batch_limit: runtimeSafetyPolicy(settings).outboundMessagesPerWorkerTick,
-        inbound_batch_limit: INBOUND_BATCH_LIMIT,
-        ...result
-      });
+      if (!await runTick()) {
+        logWorker("worker_tick_skipped", {
+          reason: "previous_tick_still_running",
+          interval_ms: WORKER_INTERVAL_MS
+        });
+      }
     } catch (error) {
       logWorker("worker_error", {
         message: error instanceof Error ? error.message : String(error)
-      });
-    }
-  });
-
-  async function tick(): Promise<void> {
-    if (!await runTick()) {
-      logWorker("worker_tick_skipped", {
-        reason: "previous_tick_still_running",
-        interval_ms: WORKER_INTERVAL_MS
       });
     }
   }

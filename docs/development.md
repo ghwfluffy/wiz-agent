@@ -199,7 +199,8 @@ when routed to the agent. The model can inspect and maintain this surface with
 same authenticated user.
 
 Meaningful assistant decisions are captured by host code under
-`/assistant/decisions/YYYY-MM.md`. The ledger is written from existing
+`/assistant/decisions/YYYY-MM-DD.md`. The daily shard bounds section parsing
+and RAG reindex work on each append. The ledger is written from existing
 run/task/tool/message/approval records after accepted tool calls and scheduled
 worker outcomes, so it should explain why the assistant messaged, stayed quiet,
 requested clarification, queued approval, changed a task schedule/status, or
@@ -207,7 +208,7 @@ recorded self-review/memory-review findings without an extra model call. Inspect
 it through the Knowledge tab or:
 
 ```text
-GET /api/v1/knowledge/files/%2Fassistant%2Fdecisions%2FYYYY-MM.md
+GET /api/v1/knowledge/files/%2Fassistant%2Fdecisions%2FYYYY-MM-DD.md
 ```
 
 Runaway guardrails and operational recovery state are configured through host
@@ -405,6 +406,37 @@ The worker uses `RAG_EMBEDDING_MODEL`, `RAG_EMBEDDING_DIMENSIONS`, and the same
 OpenAI key settings as the agent runtime: `AGENT_OPENAI_API_KEY` or
 `AGENT_OPENAI_API_KEY_FILE`. Tests use mock embedding and Qdrant clients and
 must not call live OpenAI or Qdrant.
+
+Indexing uses conservative fixed limits for the production worker's small
+resource envelope. One source may contain at most 250,000 UTF-16 characters,
+400 parsed markdown sections, and 256 derived chunks. Oversize sources are
+deterministic failures and are dead-lettered before collection lookup, Qdrant
+deletion, or embedding. Accepted sources are processed sequentially in batches
+of no more than 16 embedding inputs and eight Qdrant points, so a document never
+holds every vector or one all-document upsert body in memory.
+
+Every provider request, including complete response-body consumption, has a
+20-second deadline and a 4 MiB response ceiling. Declared oversize bodies are
+rejected before reading; streamed bodies are counted and cancelled on overflow.
+Each job has a 90-second processing deadline checked between phases and batches.
+Network failures, deadlines, HTTP 408/409/425/429, and 5xx responses are
+retryable; other 4xx responses, oversize or malformed provider data, missing
+embedding credentials, invalid vectors, and source-limit failures are
+dead-lettered on the first attempt. A claimed job is tried at most three times.
+If process termination prevents the catch path from recording a result, the
+next stale claim that raises the attempt count above three is dead-lettered
+before source or provider work. Exact Qdrant point counting remains best-effort
+telemetry and cannot replay an otherwise completed index.
+
+The worker writes metadata-only JSON progress events for job phases and batches,
+including job id, attempt, elapsed time, bounded counts, and process/cgroup CPU
+and memory snapshots. It never logs the user, markdown path/title/content,
+query, or vector. Startup, non-overlapping tick transitions, and job progress
+also atomically refresh `/tmp/rag-worker-health.json`; its top-level
+`updated_at` timestamp becomes stale after two minutes and is used by container
+health monitoring to detect a blocked event loop or killed worker. A skipped
+interval logs a resource sample but deliberately does not refresh the file, so
+repeated overlap cannot disguise a permanently stuck tick.
 
 Useful MCP RAG tools:
 

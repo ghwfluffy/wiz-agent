@@ -19,7 +19,9 @@ import {
   RAG_JOB_COALESCING_MIGRATION_ID,
   RAG_JOB_COALESCING_SQL,
   OUTBOUND_DEDUPE_KEY_MIGRATION_ID,
-  OUTBOUND_DEDUPE_KEY_SQL
+  OUTBOUND_DEDUPE_KEY_SQL,
+  MARKDOWN_SECTION_COMPACTION_MIGRATION_ID,
+  MARKDOWN_SECTION_COMPACTION_SQL
 } from "../src/db/migrations.js";
 import { INITIAL_SCHEMA_SQL } from "../src/db/schema.js";
 
@@ -161,5 +163,25 @@ describe("initial schema", () => {
     expect(OUTBOUND_DEDUPE_KEY_SQL).toContain("idx_outbound_messages_user_dedupe_key");
     expect(OUTBOUND_DEDUPE_KEY_SQL).toContain("idx_outbound_messages_delivery_retry");
     expect(INITIAL_SCHEMA_SQL).not.toContain("idx_outbound_messages_user_dedupe_key");
+  });
+
+  it("compacts markdown sections to current live document versions and requeues pending documents", () => {
+    expect(MARKDOWN_SECTION_COMPACTION_MIGRATION_ID).toBe("0015_markdown_section_compaction");
+    expect(MARKDOWN_SECTION_COMPACTION_SQL).toContain("LOCK TABLE markdown_documents IN SHARE MODE");
+    expect(MARKDOWN_SECTION_COMPACTION_SQL).toContain("CREATE TEMP TABLE current_markdown_sections_snapshot");
+    expect(MARKDOWN_SECTION_COMPACTION_SQL).toContain("sections.document_version = documents.version");
+    expect(MARKDOWN_SECTION_COMPACTION_SQL).toContain("documents.deleted_at IS NULL");
+    expect(MARKDOWN_SECTION_COMPACTION_SQL).toContain("TRUNCATE TABLE markdown_sections");
+    expect(MARKDOWN_SECTION_COMPACTION_SQL).toContain("FROM current_markdown_sections_snapshot");
+    expect(MARKDOWN_SECTION_COMPACTION_SQL).toContain("documents.index_status = 'pending'");
+    expect(MARKDOWN_SECTION_COMPACTION_SQL).toContain("jobs.status IN ('pending', 'claimed')");
+    expect(MARKDOWN_SECTION_COMPACTION_SQL).toContain("ON CONFLICT DO NOTHING");
+
+    const snapshot = MARKDOWN_SECTION_COMPACTION_SQL.indexOf("CREATE TEMP TABLE");
+    const truncate = MARKDOWN_SECTION_COMPACTION_SQL.indexOf("TRUNCATE TABLE markdown_sections");
+    const restore = MARKDOWN_SECTION_COMPACTION_SQL.indexOf("FROM current_markdown_sections_snapshot", truncate);
+    expect(snapshot).toBeGreaterThanOrEqual(0);
+    expect(truncate).toBeGreaterThan(snapshot);
+    expect(restore).toBeGreaterThan(truncate);
   });
 });

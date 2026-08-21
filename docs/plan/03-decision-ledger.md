@@ -8,7 +8,7 @@ stayed quiet, deferred work, requested approval, or changed a schedule.
 ## Implementation Scope
 
 - Add host-side helper(s) for appending decisions under:
-  - `/assistant/decisions/YYYY-MM.md`.
+  - `/assistant/decisions/YYYY-MM-DD.md`.
 - Record decisions from meaningful autonomous paths:
   - scheduled daily conversational check-ins and optional newsletter icebreakers;
   - autonomous wake reviews;

@@ -62,8 +62,9 @@ Current tests cover:
   creation, and write-approval proposals.
 - allowlisted integration-action request resolution.
 - integration gateway rejection of unsafe direct paths, redaction of thrown
-  gateway errors and string response fields, and signed-token action/app scope
-  matching.
+  gateway errors and string response fields, full-exchange timeout/cancellation
+  for stalled fetches and bodies, declared/streamed response-size enforcement,
+  and signed-token action/app scope matching.
 - MCP-backed agent tool execution through the default runtime client.
 - MCP session expiration, tool allowlist rejection, and agent-tool argument
   validation.
@@ -84,6 +85,10 @@ Current tests cover:
 - IMAP settings tests with redacted provider errors.
 - incremental IMAP search criteria from stored mailbox progress, including UID
   cursor precedence over older or equal RFC message dates.
+- shared IMAP line/literal/response ceilings for polling and connection tests,
+  sequential `fetchOne` source reads capped at one detection byte above the
+  accepted message size, bounded MIME HTML parsing, and oversized-source
+  quarantine that permits later UIDs after the retry threshold.
 - end-to-end delayed-newsletter polling coverage that verifies a UID-new trusted
   message is recorded as `newsletter`/`accepted_newsletter`, written under
   `/newsletters` with pending RAG indexing, marked seen only after ingestion,
@@ -103,7 +108,7 @@ Current tests cover:
 - owner feedback tool validation, MCP execution, monthly markdown writes under
   `/assistant/feedback/`, audit/RAG enqueueing, prompt guidance for inconsistent
   corrections, and no automatic preference rewrite from feedback capture.
-- assistant decision-ledger writes under `/assistant/decisions/YYYY-MM.md` for
+- assistant decision-ledger writes under `/assistant/decisions/YYYY-MM-DD.md` for
   outbound proposals, cross-app approvals, scheduled quiet/acted/failure
   outcomes, linked ids, duplicate-safe markers, user scoping, audit, and RAG
   enqueueing.
@@ -160,7 +165,11 @@ Current tests cover:
   sections, memory provenance summaries, and compact empty-state behavior.
 - operational jobs visibility, admin all-user aggregation, budget exposure,
   connector completeness summaries, stale worker-state counts, redacted
-  connector/approval/RAG failure listing, and manual RAG retry audit.
+  connector/approval/RAG failure listing, and manual RAG retry reset/audit.
+- process-only API liveness, bounded fail-closed database readiness, and atomic
+  metadata-only worker tick health whose timestamp is not refreshed by skipped
+  overlapping ticks, is refreshed at completed task/IMAP-UID boundaries, and
+  remains unhealthy across a failed tick's next running attempt.
 - runaway guardrails for burst-window agent runs, per-run MCP/tool calls,
   owner-visible outbound proposal caps, bounded scheduled worker claims,
   non-secret guardrail audit details, and Jobs/Workers budget visibility.
@@ -176,11 +185,13 @@ Current tests cover:
   optimistic-concurrency enforcement for section appends, and host-owned
   personal-list marker/id handling.
 - RAG job claiming, stale-claim recovery, indexing, transient retry,
-  dead-letter behavior, and delete-job point removal with mock Qdrant and mock
-  embeddings.
+  dead-letter behavior, manual retry attempt reset followed by claim attempt
+  one and real provider processing, active-equivalent retry reuse, bounded tick
+  watchdog termination, outcome-aware heartbeats, and delete-job point removal
+  with mock Qdrant and mock embeddings.
 - collision-resistant user-derived Qdrant collection names, normalized path
-  prefix filters, and stale indexing results not marking newer markdown
-  versions indexed.
+  prefix filters, well-formed code-point-bounded semantic excerpts, and stale
+  indexing results not marking newer markdown versions indexed.
 - MCP semantic search source-handle resolution under authenticated user scope.
 
 ## Agent Simulation Harness

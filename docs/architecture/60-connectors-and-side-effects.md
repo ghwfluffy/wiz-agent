@@ -257,8 +257,15 @@ owner or silently delete memory. Any outbound message still has to come from a
 separate task or owner instruction and pass the normal outbox/budget path.
 
 The worker polls enabled per-user IMAP connector records and processes unread
-mail in bounded batches. IMAP connector settings live in the database and are
-managed from the Integrations tab, including the assistant mailbox password. API
+mail in bounded batches. Candidate UIDs are fetched and fully handled one at a
+time; the poller never accumulates a batch of raw RFC822 sources. Each source
+request asks for at most 32 MiB plus one detection byte, and both polling and
+connection-test clients enforce a 256 KiB response-line ceiling, a 32 MiB plus
+one byte literal ceiling, and an approximately 33 MiB assembled-response
+ceiling. MIME HTML-to-text parsing is separately capped at 2 MiB and keeps CID
+references instead of expanding attachment bytes into data URLs. IMAP connector
+settings live in the database and are managed from the Integrations tab,
+including the assistant mailbox password. API
 reads redact saved passwords and expose only a `password_set` flag. A user will
 not see new mail in the Attention inbox unless their IMAP connector is enabled,
 complete, and the worker is running.
@@ -286,7 +293,8 @@ above the poll-start cursor is processed regardless of its RFC `Date`.
 their parsed `Date` header is older, equal, or out of order. Search results are filtered
 above the stored UID, deduplicated, and processed in ascending UID order. The
 poller commits progress and only then tries to set `\Seen` after successful
-ingestion. A deterministic source parsing or normalization failure stops at
+ingestion. An oversized protocol response, oversized RFC822 source, or
+deterministic source parsing/normalization failure stops at
 that UID without setting `\Seen` or advancing past it, so a later UID cannot
 make the failed message unreachable. Each such attempt is audited as
 `connector.imap_message_error`, and the UID, UID validity, and bounded retry
@@ -326,12 +334,29 @@ connector and therefore survive worker restarts.
 The worker entrypoint must start whether Node receives an absolute or relative
 script path from `npm run worker:start`; otherwise queued outbox records and IMAP
 polling can appear healthy at the container level while no worker ticks occur.
+Each accepted tick atomically replaces `/tmp/agent-worker-health.json` with
+metadata-only start, most-recent-success, and most-recent-error timestamps. A
+skipped overlapping tick deliberately does not refresh that file, so the
+ten-minute freshness check becomes stale when an earlier tick is hung instead
+of making repeated skips look healthy. The file contains no user, message,
+task, connector, recipient, or exception content.
+After each claimed scheduled task and each IMAP UID settles, the worker safely
+refreshes the running timestamp. This keeps a healthy multi-item catch-up tick
+fresh while each individual model run remains bounded. Progress preserves the
+prior success/failure timestamps: starting or progressing a retry cannot turn a
+previous failure healthy until the whole tick succeeds.
 Worker ticks deliver pending/approved outbox records before polling IMAP. IMAP
 polling has bounded connection/socket timeouts and consumes provider socket error
 events so late transport errors do not crash the worker process. A connection,
 socket, or mailbox failure remains visible as a worker IMAP error and schedules
 the connector's persisted retry backoff. A mailbox outage must not prevent owner-review notifications
 or other queued outbound messages from being delivered.
+
+The API keeps process liveness and database readiness separate. `GET /healthz`
+returns a minimal process-only response. `GET /readyz` runs a read-only
+`SELECT 1` through a pool-acquisition and query deadline and returns only
+`ready` or `not_ready`; database errors and connection details are never
+included in the response.
 
 The Integrations tab includes an IMAP test action. The test saves the current
 IMAP form values, connects to the configured mailbox, opens the mailbox, and
@@ -401,8 +426,9 @@ Controls:
 The current spam guard limits untrusted review notifications per sender within a
 sliding time window. The worker default is five review notifications per sender
 per day, configurable by `INBOUND_MAX_UNTRUSTED_REVIEW_NOTIFICATIONS_PER_SENDER_PER_DAY`.
-IMAP polling also uses a bounded per-tick batch size so a large unread mailbox
-cannot process unbounded mail in one worker pass.
+IMAP polling also uses a bounded per-tick batch size plus sequential, byte-capped
+source fetches so a large unread mailbox cannot buffer unbounded mail in one
+worker pass.
 Worker-level IMAP failures are recorded as `worker.imap_error` audit events so
 operators can see connector failures in the Operations tab instead of needing
 Docker logs.
@@ -534,9 +560,12 @@ the integration gateway with a server-minted scoped token. Integration responses
 are redacted before they are written to approval execution results or audit
 details. Provider/client failure strings are bounded and scrubbed for bearer
 tokens, credentials, cookies, session values, and URLs before they are persisted
-as execution errors. Automatic retries are not performed; a failed execution
-stays visible on the approval record until a future explicit retry workflow is
-added.
+as execution errors. The gateway applies one 20-second deadline across fetch and
+the complete response body, aborts/cancels a stalled stream, and rejects bodies
+larger than 1 MiB using both declared and streamed byte counts before JSON
+parsing. Timeout and oversize failures use fixed safe reason codes. Automatic
+retries are not performed; a failed execution stays visible on the approval
+record until a future explicit retry workflow is added.
 If a worker dies while an approval execution is `running`, a later worker tick
 marks the stale execution `failed` with `approval_execution_expired` after a
 grace window. It does not retry because the target app may already have applied

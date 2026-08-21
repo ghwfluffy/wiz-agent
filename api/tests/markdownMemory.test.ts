@@ -4,7 +4,7 @@ import { createMemoryStore } from "../src/domain/store.js";
 import type { MarkdownConflict, RequestContext } from "../src/domain/types.js";
 import { buildApp } from "../src/http/app.js";
 import { buildUnifiedMarkdownDiff, markdownAuditDetails } from "../src/memory/markdownDiff.js";
-import { normalizeMarkdownPath } from "../src/memory/markdownFilesystem.js";
+import { normalizeMarkdownPath, parseMarkdownSections } from "../src/memory/markdownFilesystem.js";
 import { parseMemoryListMarkdown } from "../src/memory/memoryLists.js";
 import { buildMcpApp } from "../src/mcp/server.js";
 
@@ -90,6 +90,28 @@ describe("markdown memory filesystem", () => {
 
     const sections = await store.listMarkdownSections(context, "/projects/alpha/notes.md");
     expect(sections.map((section) => section.sectionId)).toEqual(["alpha", "alpha/real-section"]);
+  });
+
+  it("preserves unique section ids and nearest parents with a forward hierarchy stack", () => {
+    const sections = parseMarkdownSections([
+      "# Root",
+      "## Branch",
+      "### Leaf",
+      "## Branch",
+      "### Leaf",
+      "# Other",
+      "## Child"
+    ].join("\n"));
+
+    expect(sections.map(({ sectionId, parentSectionId }) => ({ sectionId, parentSectionId }))).toEqual([
+      { sectionId: "root", parentSectionId: null },
+      { sectionId: "root/branch", parentSectionId: "root" },
+      { sectionId: "root/branch/leaf", parentSectionId: "root/branch" },
+      { sectionId: "root/branch-2", parentSectionId: "root" },
+      { sectionId: "root/branch/leaf-2", parentSectionId: "root/branch-2" },
+      { sectionId: "other", parentSectionId: null },
+      { sectionId: "other/child", parentSectionId: "other" }
+    ]);
   });
 
   it("preserves user ownership boundaries for markdown paths", async () => {
@@ -405,6 +427,9 @@ describe("markdown memory filesystem", () => {
       expect.objectContaining({ path: "/projects/beta/notes.md", version: 2 })
     ]);
     await expect(store.listMarkdownDirectory(context, "/projects/alpha")).resolves.toEqual([]);
+    await expect(store.listMarkdownSections(context, "/projects/beta/decisions.md")).resolves.toEqual([
+      expect.objectContaining({ sectionId: "decisions", documentVersion: 2 })
+    ]);
     await expect(store.getMarkdownIndexStatus(context, "/projects/beta")).resolves.toEqual([
       expect.objectContaining({ path: "/projects/beta/decisions.md", pendingJobs: 2 }),
       expect.objectContaining({ path: "/projects/beta/notes.md", pendingJobs: 2 })

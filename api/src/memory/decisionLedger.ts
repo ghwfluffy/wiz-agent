@@ -1,7 +1,7 @@
 import type { AgentStore, MarkdownConflict, MarkdownDocumentRecord, RequestContext, TaskEventRecord, TaskRecord, ToolCallRecord } from "../domain/types.js";
 
 export function decisionLedgerPath(date = new Date()): string {
-  return `/assistant/decisions/${date.toISOString().slice(0, 7)}.md`;
+  return `/assistant/decisions/${date.toISOString().slice(0, 10)}.md`;
 }
 
 type DecisionLinks = {
@@ -93,9 +93,9 @@ function linkLines(links: DecisionLinks | undefined): string[] {
 }
 
 function initialDocument(path: string): string {
-  const month = path.match(/(\d{4}-\d{2})\.md$/)?.[1] ?? "Unknown";
+  const date = path.match(/(\d{4}-\d{2}-\d{2})\.md$/)?.[1] ?? "Unknown";
   return [
-    `# Assistant Decisions: ${month}`,
+    `# Assistant Decisions: ${date}`,
     "",
     "Deterministic host-written ledger of meaningful assistant decisions, tool proposals, and scheduled outcomes.",
     "Entries are based on persisted run, task, tool, message, approval, and markdown records."

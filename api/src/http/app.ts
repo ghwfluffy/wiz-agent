@@ -12,7 +12,11 @@ import { runOwnerWebPromptAgent } from "../agent/inboundMessageAgent.js";
 import { loadSettings, validateAiConfig, type Settings } from "../config/settings.js";
 import { clearSessionCookie, writeSessionCookie } from "../auth/session.js";
 import { testImapConnection } from "../connectors/imapPoller.js";
-import { createPool } from "../db/pool.js";
+import {
+  checkDatabaseReadiness,
+  createPool,
+  DATABASE_READINESS_TIMEOUT_MS
+} from "../db/pool.js";
 import { createMemoryStore, createPostgresStore } from "../domain/store.js";
 import type {
   AgentStore,
@@ -50,6 +54,8 @@ import type { IntegrationTokenProvider } from "../tools/integrationGateway.js";
 export type AppOptions = {
   settings?: Settings;
   store?: AgentStore;
+  readinessCheck?: () => Promise<void>;
+  readinessTimeoutMs?: number;
   fetchImpl?: typeof fetch;
   modelClient?: AgentModelClient;
   integrationTokenProvider?: IntegrationTokenProvider;
@@ -66,11 +72,47 @@ function errorPayload(code: string, message: string, requestId: string, fieldErr
   };
 }
 
-function createDefaultStore(settings: Settings): AgentStore {
+function createDefaultDependencies(settings: Settings): {
+  store: AgentStore;
+  readinessCheck: () => Promise<void>;
+} {
   if (settings.appEnv === "test") {
-    return createMemoryStore(settings);
+    return {
+      store: createMemoryStore(settings),
+      readinessCheck: async () => undefined
+    };
   }
-  return createPostgresStore(createPool(settings), settings);
+  const pool = createPool(settings, {
+    connectionTimeoutMillis: DATABASE_READINESS_TIMEOUT_MS
+  });
+  return {
+    store: createPostgresStore(pool, settings),
+    readinessCheck: () => checkDatabaseReadiness(pool)
+  };
+}
+
+export async function readinessCheckSucceeded(
+  readinessCheck: () => Promise<void>,
+  timeoutMs = DATABASE_READINESS_TIMEOUT_MS
+): Promise<boolean> {
+  const boundedTimeoutMs = Math.max(1, Math.min(timeoutMs, DATABASE_READINESS_TIMEOUT_MS));
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      readinessCheck(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error("readiness_check_timeout")), boundedTimeoutMs);
+        timeout.unref();
+      })
+    ]);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 const allowedConnectorKinds = new Set<ConnectorKind>(["owner-contact", "imap", "smtp", "openai"]);
@@ -762,7 +804,11 @@ function connectorSummaries(connectors: ConnectorRecord[]) {
 
 export function buildApp(options: AppOptions = {}): Hono {
   const settings = options.settings ?? loadSettings();
-  const store = options.store ?? createDefaultStore(settings);
+  const defaults = options.store ? undefined : createDefaultDependencies(settings);
+  const store: AgentStore = options.store ?? defaults?.store ?? (() => {
+    throw new Error("Agent store initialization failed.");
+  })();
+  const readinessCheck = options.readinessCheck ?? defaults?.readinessCheck ?? (async () => undefined);
   const fetcher = options.fetchImpl ?? fetch;
   const modelClient = options.modelClient ?? OpenAIModelClient.fromSettings(settings, { fetchImpl: fetcher });
   const integrationTokenProvider = options.integrationTokenProvider ?? new SignedIntegrationTokenProvider(settings);
@@ -1307,6 +1353,13 @@ export function buildApp(options: AppOptions = {}): Hono {
   }
 
   app.get("/healthz", (context) => context.json({ status: "ok" }));
+
+  app.get("/readyz", async (context) => {
+    const ready = await readinessCheckSucceeded(readinessCheck, options.readinessTimeoutMs);
+    return ready
+      ? context.json({ status: "ready" })
+      : context.json({ status: "not_ready" }, 503);
+  });
 
   app.get("/api/v1/status", (context) => {
     const configuration = operationalConfiguration(settings);

@@ -11,6 +11,7 @@ export const WEB_RESEARCH_SESSIONS_MIGRATION_ID = "0011_web_research_sessions";
 export const OUTBOUND_PROACTIVE_ORIGIN_MIGRATION_ID = "0012_outbound_proactive_origin";
 export const RAG_JOB_COALESCING_MIGRATION_ID = "0013_rag_job_coalescing";
 export const OUTBOUND_DEDUPE_KEY_MIGRATION_ID = "0014_outbound_dedupe_key";
+export const MARKDOWN_SECTION_COMPACTION_MIGRATION_ID = "0015_markdown_section_compaction";
 
 const tenantOwnedTables = [
   "identities",
@@ -354,4 +355,54 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_outbound_messages_user_dedupe_key
 CREATE INDEX IF NOT EXISTS idx_outbound_messages_delivery_retry
   ON outbound_messages(user_id, status, next_delivery_attempt_at)
   WHERE status IN ('pending', 'approved');
+`;
+
+export const MARKDOWN_SECTION_COMPACTION_SQL = `
+LOCK TABLE markdown_documents IN SHARE MODE;
+LOCK TABLE markdown_sections IN ACCESS EXCLUSIVE MODE;
+
+CREATE TEMP TABLE current_markdown_sections_snapshot
+ON COMMIT DROP
+AS
+SELECT sections.*
+FROM markdown_documents documents
+JOIN markdown_sections sections
+  ON sections.user_id = documents.user_id
+ AND sections.document_id = documents.id
+ AND sections.document_version = documents.version
+WHERE documents.deleted_at IS NULL;
+
+TRUNCATE TABLE markdown_sections;
+
+INSERT INTO markdown_sections
+  (id, user_id, document_id, document_version, section_id, parent_section_id, heading,
+   heading_path, level, line_start, line_end, content_hash, created_at)
+SELECT
+  id, user_id, document_id, document_version, section_id, parent_section_id, heading,
+  heading_path, level, line_start, line_end, content_hash, created_at
+FROM current_markdown_sections_snapshot;
+
+INSERT INTO rag_index_jobs
+  (id, user_id, document_id, requested_version, requested_content_hash, job_type)
+SELECT
+  md5(random()::text || clock_timestamp()::text || documents.id),
+  documents.user_id,
+  documents.id,
+  documents.version,
+  documents.content_hash,
+  'index_markdown'
+FROM markdown_documents documents
+WHERE documents.deleted_at IS NULL
+  AND documents.index_status = 'pending'
+  AND NOT EXISTS (
+    SELECT 1
+    FROM rag_index_jobs jobs
+    WHERE jobs.user_id = documents.user_id
+      AND jobs.document_id = documents.id
+      AND jobs.job_type = 'index_markdown'
+      AND jobs.requested_version = documents.version
+      AND jobs.requested_content_hash = documents.content_hash
+      AND jobs.status IN ('pending', 'claimed')
+  )
+ON CONFLICT DO NOTHING;
 `;

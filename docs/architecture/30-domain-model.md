@@ -147,7 +147,7 @@ rationale.
 
 Assistant decisions are durable host-written source notes. Meaningful
 autonomous/tool paths append compact entries under
-`/assistant/decisions/YYYY-MM.md` with a deterministic hidden
+`/assistant/decisions/YYYY-MM-DD.md` with a deterministic hidden
 `assistant-decision` marker, timestamp, trigger/source, action chosen,
 alternative/deferred action when known, context summary, rationale, linked
 run/task/tool/message/outbox/approval/action ids, and owner-visible side effect
@@ -155,7 +155,8 @@ status. The ledger is generated from existing task, run, tool-call, message,
 approval, and markdown records; it must not make a second model call just to
 explain a decision. Decision files are ordinary user-scoped markdown documents,
 so writes are audited, parsed into sections, and queued for RAG indexing through
-the existing markdown store behavior.
+the existing markdown store behavior. Daily files bound the amount of markdown
+that must be reparsed and reindexed when a new decision is appended.
 
 Inbound owner messages that the agent associates with a task also record
 `message.inbound.assigned` on that task. The inbox record stores the task id,
@@ -259,7 +260,12 @@ Long-term memory is moving from slug-only `memory_documents` into a server-owned
 virtual markdown filesystem backed by Postgres rows. The source file rows live
 in `markdown_documents`; parsed heading ranges live in `markdown_sections`; and
 writes enqueue `rag_index_jobs` so derived vector state can be reconciled later.
-No actual filesystem files are created.
+No actual filesystem files are created. `markdown_sections` retains only the
+current, non-deleted version of each document: each write or move replaces the
+document's prior section rows in one set-based insert, and deletion removes its
+section rows. Migration `0015_markdown_section_compaction` transactionally
+snapshots current live rows, truncates accumulated history, restores the
+snapshot, and requeues pending current documents that have no active index job.
 
 Markdown paths are user-owned and scoped by `users.id`, for example
 `/personal/profile.md`, `/assistant/preferences/newsletters.md`,

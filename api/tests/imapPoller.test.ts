@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const imapState = vi.hoisted(() => ({
-  messages: [] as Array<{ uid: number; envelope?: { messageId?: string }; source?: Buffer }>,
+  messages: [] as Array<{ uid: number; size?: number; envelope?: { messageId?: string }; source?: Buffer }>,
   searchCriteria: [] as unknown[],
+  fetchQueries: [] as Array<{ uid: number; query: unknown }>,
   seenUids: [] as number[]
 }));
 
@@ -23,8 +24,12 @@ vi.mock("imapflow", () => ({
       return imapState.messages.map((message) => message.uid);
     }
 
-    async *fetch(): AsyncGenerator<(typeof imapState.messages)[number]> {
-      yield* imapState.messages;
+    async fetchOne(uid: number, query: unknown): Promise<(typeof imapState.messages)[number] | false> {
+      imapState.fetchQueries.push({ uid, query });
+      const message = imapState.messages.find((candidate) => candidate.uid === uid);
+      return message
+        ? { ...message, size: message.size ?? message.source?.byteLength }
+        : false;
     }
 
     async messageFlagsAdd(uid: number): Promise<void> {
@@ -36,7 +41,7 @@ vi.mock("imapflow", () => ({
 }));
 
 import { loadSettings } from "../src/config/settings.js";
-import { processImapInbox } from "../src/connectors/imapPoller.js";
+import { MAX_IMAP_MESSAGE_BYTES, processImapInbox } from "../src/connectors/imapPoller.js";
 import { createMemoryStore } from "../src/domain/store.js";
 import type { RequestContext } from "../src/domain/types.js";
 import { SlidingWindowRateLimiter } from "../src/security/senderPolicy.js";
@@ -65,6 +70,7 @@ describe("IMAP polling progress", () => {
   beforeEach(() => {
     imapState.messages = [];
     imapState.searchCriteria = [];
+    imapState.fetchQueries = [];
     imapState.seenUids = [];
   });
 
@@ -110,6 +116,15 @@ describe("IMAP polling progress", () => {
     })).resolves.toEqual({ configured: true, attempted: 1, recorded: 1, failed: 0 });
 
     expect(imapState.searchCriteria).toEqual([{ uid: "43:*" }]);
+    expect(imapState.fetchQueries).toEqual([{
+      uid: 43,
+      query: {
+        uid: true,
+        envelope: true,
+        size: true,
+        source: { start: 0, maxLength: MAX_IMAP_MESSAGE_BYTES + 1 }
+      }
+    }]);
     expect(imapState.seenUids).toEqual([43]);
     await expect(store.listInboundMessages(context)).resolves.toEqual([
       expect.objectContaining({

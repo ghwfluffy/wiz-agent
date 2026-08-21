@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ToolModelRequest } from "../src/agent/modelClient.js";
 import { MockModelClient } from "../src/agent/modelClient.js";
 import { loadSettings } from "../src/config/settings.js";
@@ -19,7 +22,14 @@ import {
   OWNER_SCHEDULED_MESSAGE_RECURRENCE,
   scheduledOwnerMessagePrompt
 } from "../src/tools/ownerMessaging.js";
-import { createNonOverlappingRunner, isWorkerEntrypoint, workerTick } from "../src/worker.js";
+import {
+  createNonOverlappingRunner,
+  isAgentWorkerHealthFresh,
+  isAgentWorkerHealthOutcomeHealthy,
+  isWorkerEntrypoint,
+  type AgentWorkerHealthRecord,
+  workerTick
+} from "../src/worker.js";
 import type { WebResearchClient } from "../src/research/openAiWebResearchClient.js";
 
 function stubWebResearch(answer: string): WebResearchClient {
@@ -64,6 +74,145 @@ describe("worker loop", () => {
 
     release?.();
     await expect(first).resolves.toBe(true);
+  });
+
+  it("atomically records worker tick lifecycle without refreshing on skipped overlaps", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-worker-health-test-"));
+    const healthPath = join(directory, "health.json");
+    let release: (() => void) | undefined;
+    let markProgress: (() => Promise<void>) | undefined;
+    const work = vi.fn((progress: () => Promise<void>) => new Promise<void>((resolve) => {
+      markProgress = progress;
+      release = resolve;
+    }));
+    const timestamps = [
+      new Date("2026-08-20T12:00:00.000Z"),
+      new Date("2026-08-20T12:08:20.000Z"),
+      new Date("2026-08-20T12:16:40.000Z"),
+      new Date("2026-08-20T12:16:45.000Z")
+    ];
+    const run = createNonOverlappingRunner(work, {
+      healthPath,
+      now: () => timestamps.shift() ?? new Date("2026-08-20T12:00:05.000Z")
+    });
+
+    try {
+      const first = run();
+      await vi.waitFor(() => expect(work).toHaveBeenCalledTimes(1));
+      const startedText = await readFile(healthPath, "utf8");
+      const started = JSON.parse(startedText) as AgentWorkerHealthRecord;
+      expect(started).toEqual({
+        state: "running",
+        updated_at: "2026-08-20T12:00:00.000Z",
+        tick_started_at: "2026-08-20T12:00:00.000Z",
+        tick_succeeded_at: null,
+        tick_failed_at: null
+      });
+      expect(isAgentWorkerHealthFresh(started, Date.parse(started.updated_at) + 599_999)).toBe(true);
+      expect(isAgentWorkerHealthFresh(started, Date.parse(started.updated_at) + 600_000)).toBe(false);
+
+      await expect(run()).resolves.toBe(false);
+      expect(await readFile(healthPath, "utf8")).toBe(startedText);
+
+      await markProgress?.();
+      const progressText = await readFile(healthPath, "utf8");
+      expect(JSON.parse(progressText)).toEqual({
+        state: "running",
+        updated_at: "2026-08-20T12:08:20.000Z",
+        tick_started_at: "2026-08-20T12:00:00.000Z",
+        tick_succeeded_at: null,
+        tick_failed_at: null
+      });
+      expect(isAgentWorkerHealthFresh(
+        JSON.parse(progressText) as AgentWorkerHealthRecord,
+        Date.parse("2026-08-20T12:16:39.999Z")
+      )).toBe(true);
+
+      await markProgress?.();
+      const secondProgressText = await readFile(healthPath, "utf8");
+      expect(JSON.parse(secondProgressText)).toMatchObject({
+        state: "running",
+        updated_at: "2026-08-20T12:16:40.000Z",
+        tick_started_at: "2026-08-20T12:00:00.000Z"
+      });
+      await expect(run()).resolves.toBe(false);
+      expect(await readFile(healthPath, "utf8")).toBe(secondProgressText);
+
+      release?.();
+      await expect(first).resolves.toBe(true);
+      expect(JSON.parse(await readFile(healthPath, "utf8"))).toEqual({
+        state: "idle",
+        updated_at: "2026-08-20T12:16:45.000Z",
+        tick_started_at: "2026-08-20T12:00:00.000Z",
+        tick_succeeded_at: "2026-08-20T12:16:45.000Z",
+        tick_failed_at: null
+      });
+      expect(await readdir(directory)).toEqual(["health.json"]);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("records a metadata-only worker tick error timestamp", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "agent-worker-health-error-test-"));
+    const healthPath = join(directory, "health.json");
+    let attempt = 0;
+    let releaseRetry: (() => void) | undefined;
+    const timestamps = [
+      new Date("2026-08-20T13:00:00.000Z"),
+      new Date("2026-08-20T13:00:02.000Z"),
+      new Date("2026-08-20T13:00:20.000Z"),
+      new Date("2026-08-20T13:00:25.000Z")
+    ];
+    const run = createNonOverlappingRunner(async () => {
+      attempt += 1;
+      if (attempt === 1) {
+        throw new Error("database password=must-not-be-persisted");
+      }
+      await new Promise<void>((resolve) => {
+        releaseRetry = resolve;
+      });
+    }, {
+      healthPath,
+      now: () => timestamps.shift() ?? new Date("2026-08-20T13:00:02.000Z")
+    });
+
+    try {
+      await expect(run()).rejects.toThrow("must-not-be-persisted");
+      const text = await readFile(healthPath, "utf8");
+      expect(JSON.parse(text)).toEqual({
+        state: "error",
+        updated_at: "2026-08-20T13:00:02.000Z",
+        tick_started_at: "2026-08-20T13:00:00.000Z",
+        tick_succeeded_at: null,
+        tick_failed_at: "2026-08-20T13:00:02.000Z"
+      });
+      expect(text).not.toContain("password");
+      expect(text).not.toContain("must-not-be-persisted");
+      expect(isAgentWorkerHealthOutcomeHealthy(JSON.parse(text) as AgentWorkerHealthRecord)).toBe(false);
+
+      const retry = run();
+      await vi.waitFor(() => expect(attempt).toBe(2));
+      const runningRetry = JSON.parse(await readFile(healthPath, "utf8")) as AgentWorkerHealthRecord;
+      expect(runningRetry).toMatchObject({
+        state: "running",
+        tick_succeeded_at: null,
+        tick_failed_at: "2026-08-20T13:00:02.000Z"
+      });
+      expect(isAgentWorkerHealthOutcomeHealthy(runningRetry)).toBe(false);
+
+      releaseRetry?.();
+      await expect(retry).resolves.toBe(true);
+      const recovered = JSON.parse(await readFile(healthPath, "utf8")) as AgentWorkerHealthRecord;
+      expect(recovered).toMatchObject({
+        state: "idle",
+        tick_succeeded_at: "2026-08-20T13:00:25.000Z",
+        tick_failed_at: "2026-08-20T13:00:02.000Z"
+      });
+      expect(isAgentWorkerHealthOutcomeHealthy(recovered)).toBe(true);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 
   it("schedules the daily check-in at 17:00 in the owner's timezone with UTC fallback", () => {
@@ -284,6 +433,7 @@ describe("worker loop", () => {
       dueAt: "2026-06-13T12:00:00.000Z"
     });
 
+    const onProgress = vi.fn(async () => undefined);
     const result = await daemonOnce({
       store,
       context,
@@ -299,10 +449,12 @@ describe("worker loop", () => {
           }
         ]
       }),
-      now: new Date("2026-06-13T12:00:00.000Z")
+      now: new Date("2026-06-13T12:00:00.000Z"),
+      onProgress
     });
 
     expect(result).toMatchObject({ claimedTasks: 1, ranTasks: 1 });
+    expect(onProgress).toHaveBeenCalledOnce();
     const tasks = await store.listTasks(context);
     expect(tasks.filter((task) => task.status === "completed")).toHaveLength(1);
     expect(tasks.filter((task) => task.status === "pending" && task.title.startsWith("Due task"))).toHaveLength(1);
@@ -1141,7 +1293,7 @@ describe("worker loop", () => {
     await expect(store.listTaskEvents(context, task.id)).resolves.toEqual(expect.arrayContaining([
       expect.objectContaining({ eventType: "scheduled_task.outcome" })
     ]));
-    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
+    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06-13.md");
     expect(ledger).toMatchObject({
       markdown: expect.stringContaining("completed scheduled task with action")
     });
@@ -1914,7 +2066,7 @@ describe("worker loop", () => {
     });
     const document = await store.getMarkdownDocument(context, "/tasks/outcomes/2026-06.md");
     expect(document?.markdown).toContain("- Failure reason: model unavailable");
-    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06.md");
+    const ledger = await store.getMarkdownDocument(context, "/assistant/decisions/2026-06-13.md");
     expect(ledger?.markdown).toContain("recorded scheduled task failure");
     expect(ledger?.markdown).toContain("model unavailable");
   });

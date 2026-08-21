@@ -9,20 +9,29 @@ import { buildOwnerInboundPrompt } from "../src/agent/inboundMessageAgent.js";
 import {
   DEFAULT_IMAP_POLL_INTERVAL_MS,
   IMAP_UID_QUARANTINE_ATTEMPTS,
+  MAX_IMAP_HTML_PARSE_BYTES,
   MAX_IMAP_FAILURE_BACKOFF_MS,
+  MAX_IMAP_LINE_BYTES,
+  MAX_IMAP_LITERAL_BYTES,
+  MAX_IMAP_MESSAGE_BYTES,
+  MAX_IMAP_RESPONSE_BYTES,
   ImapMessageSourceError,
+  type ImapPollClient,
   buildImapSearchCriteria,
   eligibleImapUids,
+  fetchBoundedImapMessage,
   imapFailureBackoffMs,
   isImapPollDue,
   isNewerThanLastReceived,
   metadataForParsedAttachments,
   normalizedMessageBody,
+  parseBoundedImapMessageSource,
   processImapInbox,
   processImapUidBatch,
   resolveImapUidFailure,
   sanitizedOwnerAttachments,
-  shouldResetImapUidCursor
+  shouldResetImapUidCursor,
+  testImapConnection
 } from "../src/connectors/imapPoller.js";
 import { processInboundMessage } from "../src/connectors/inboundProcessor.js";
 import { processOutboundQueue, resolveSmtpSecure, sendOutboundMessage } from "../src/connectors/smtpSender.js";
@@ -48,6 +57,7 @@ import {
 import {
   callIntegrationActionApi,
   callIntegrationApi,
+  INTEGRATION_RESPONSE_MAX_BYTES,
   redactIntegrationData,
   resolveIntegrationActionRequest
 } from "../src/tools/integrationGateway.js";
@@ -90,6 +100,49 @@ describe("inbound sender policy", () => {
     expect(shouldResetImapUidCursor(undefined, "2002")).toBe(false);
   });
 
+  it("bounds IMAP protocol responses, partial source fetches, and MIME HTML parsing", async () => {
+    expect(MAX_IMAP_LINE_BYTES).toBeLessThan(MAX_IMAP_MESSAGE_BYTES);
+    expect(MAX_IMAP_LITERAL_BYTES).toBe(MAX_IMAP_MESSAGE_BYTES + 1);
+    expect(MAX_IMAP_RESPONSE_BYTES).toBeGreaterThan(MAX_IMAP_LITERAL_BYTES);
+    expect(MAX_IMAP_HTML_PARSE_BYTES).toBeLessThan(MAX_IMAP_MESSAGE_BYTES);
+
+    const fetchOne = vi.fn().mockResolvedValue({
+      seq: 1,
+      uid: 43,
+      size: 9,
+      source: Buffer.alloc(9)
+    });
+    await expect(fetchBoundedImapMessage(
+      { fetchOne } as unknown as Parameters<typeof fetchBoundedImapMessage>[0],
+      43,
+      8
+    )).rejects.toBeInstanceOf(ImapMessageSourceError);
+    expect(fetchOne).toHaveBeenCalledWith(43, {
+      uid: true,
+      envelope: true,
+      size: true,
+      source: { start: 0, maxLength: 9 }
+    }, { uid: true });
+
+    await expect(parseBoundedImapMessageSource(Buffer.alloc(9), {
+      maxMessageBytes: 8
+    })).rejects.toBeInstanceOf(ImapMessageSourceError);
+
+    const oversizedHtml = Buffer.from([
+      "From: News <news@example.test>",
+      "To: agent@example.test",
+      "Subject: Large HTML",
+      "MIME-Version: 1.0",
+      "Content-Type: text/html; charset=utf-8",
+      "",
+      `<p>${"x".repeat(64)}</p>`
+    ].join("\r\n"));
+    await expect(parseBoundedImapMessageSource(oversizedHtml, {
+      maxMessageBytes: oversizedHtml.byteLength,
+      maxHtmlParseBytes: 16
+    })).rejects.toBeInstanceOf(ImapMessageSourceError);
+  });
+
   it("processes IMAP UIDs in order and stops before advancing past a failure", async () => {
     const processed: number[] = [];
     const committed: number[] = [];
@@ -97,6 +150,9 @@ describe("inbound sender policy", () => {
       { uid: 44, receivedAt: "2026-05-01T00:00:00.000Z" },
       { uid: 43, receivedAt: "2026-06-01T00:00:00.000Z" }
     ];
+    const onProgress = vi.fn(async () => {
+      throw new Error("health write failed");
+    });
 
     const failed = await processImapUidBatch({
       messages,
@@ -109,14 +165,17 @@ describe("inbound sender policy", () => {
       },
       commitMessage: async (message) => {
         committed.push(message.uid);
-      }
+      },
+      onProgress
     });
 
     expect(failed).toEqual({ attempted: 1, recorded: 0, failed: 1 });
     expect(processed).toEqual([43]);
     expect(committed).toEqual([]);
+    expect(onProgress).toHaveBeenCalledOnce();
 
     processed.length = 0;
+    onProgress.mockClear();
     const succeeded = await processImapUidBatch({
       messages,
       processMessage: async (message) => {
@@ -125,14 +184,16 @@ describe("inbound sender policy", () => {
       },
       commitMessage: async (message) => {
         committed.push(message.uid);
-      }
+      },
+      onProgress
     });
     expect(succeeded).toEqual({ attempted: 2, recorded: 2, failed: 0 });
     expect(processed).toEqual([43, 44]);
     expect(committed).toEqual([43, 44]);
+    expect(onProgress).toHaveBeenCalledTimes(2);
   });
 
-  it("durably retries a failed UID three times, then audits quarantine and permits later UIDs", async () => {
+  it("durably retries an oversized source three times, then quarantines it and permits later UIDs", async () => {
     const { context, store } = await testContext();
     await store.upsertConnector(context, {
       kind: "imap",
@@ -142,6 +203,14 @@ describe("inbound sender policy", () => {
     const messages = [{ uid: 43 }, { uid: 44 }];
     const quarantined: number[] = [];
     const committed: number[] = [];
+    const sourceLimit = 64;
+    const fetchOne = vi.fn(async (uid: number) => ({
+      seq: uid,
+      uid,
+      size: uid === 43 ? sourceLimit + 1 : sourceLimit,
+      source: Buffer.alloc(uid === 43 ? sourceLimit + 1 : sourceLimit)
+    }));
+    const client = { fetchOne } as unknown as Parameters<typeof fetchBoundedImapMessage>[0];
 
     for (let attempt = 1; attempt <= IMAP_UID_QUARANTINE_ATTEMPTS; attempt += 1) {
       const processed: number[] = [];
@@ -149,10 +218,7 @@ describe("inbound sender policy", () => {
         messages,
         processMessage: async (message) => {
           processed.push(message.uid);
-          if (message.uid === 43) {
-            throw new ImapMessageSourceError("malformed message");
-          }
-          return message.uid;
+          return (await fetchBoundedImapMessage(client, message.uid, sourceLimit)).uid;
         },
         commitMessage: async (message) => {
           committed.push(message.uid);
@@ -198,6 +264,10 @@ describe("inbound sender policy", () => {
 
     expect(quarantined).toEqual([43]);
     expect(committed).toEqual([44]);
+    expect(fetchOne.mock.calls.map(([uid]) => uid)).toEqual([43, 43, 43, 44]);
+    expect(fetchOne.mock.calls.every(([, query]) => (
+      (query as { source?: { maxLength?: number } }).source?.maxLength === sourceLimit + 1
+    ))).toBe(true);
     const connector = await store.getConnector(context, "imap");
     expect(connector?.config.imap).toMatchObject({
       last_uid: 43,
@@ -279,6 +349,132 @@ describe("inbound sender policy", () => {
       settings: loadSettings({ APP_ENV: "test" }),
       rateLimiter: new SlidingWindowRateLimiter(3, 60_000)
     })).resolves.toEqual({ configured: true, attempted: 0, recorded: 0, failed: 0 });
+  });
+
+  it("uses bounded sequential source fetches in the production IMAP polling path", async () => {
+    const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "imap",
+      status: "enabled",
+      config: {
+        username: "agent@example.test",
+        imap: {
+          host: "imap.example.test",
+          password: "test-password",
+          mailbox: "INBOX"
+        }
+      }
+    });
+    await store.setSenderStatus(context, "news@example.test", "newsletter");
+
+    const rawMessage = (uid: number) => Buffer.from([
+      "From: News <news@example.test>",
+      "To: agent@example.test",
+      `Subject: Edition ${uid}`,
+      `Message-ID: <edition-${uid}@example.test>`,
+      "Date: Thu, 20 Aug 2026 12:00:00 +0000",
+      "Content-Type: text/plain; charset=utf-8",
+      "",
+      `Bounded newsletter edition ${uid}.`
+    ].join("\r\n"));
+    let activeFetches = 0;
+    let maxActiveFetches = 0;
+    const fetchOne = vi.fn(async (uid: number) => {
+      activeFetches += 1;
+      maxActiveFetches = Math.max(maxActiveFetches, activeFetches);
+      await Promise.resolve();
+      const source = rawMessage(uid);
+      activeFetches -= 1;
+      return {
+        seq: uid,
+        uid,
+        size: source.byteLength,
+        envelope: { messageId: `<edition-${uid}@example.test>` },
+        source
+      };
+    });
+    const release = vi.fn();
+    const client = {
+      mailbox: { uidValidity: 8001n },
+      on: vi.fn(),
+      connect: vi.fn(async () => undefined),
+      getMailboxLock: vi.fn(async () => ({ release })),
+      search: vi.fn(async () => [102, 101]),
+      fetchOne,
+      messageFlagsAdd: vi.fn(async () => true),
+      logout: vi.fn(async () => undefined)
+    } as unknown as ImapPollClient;
+    let clientOptions: Record<string, unknown> | undefined;
+
+    const result = await processImapInbox({
+      context,
+      store,
+      settings: loadSettings({ APP_ENV: "test" }),
+      rateLimiter: new SlidingWindowRateLimiter(3, 60_000),
+      imapClientFactory: (options) => {
+        clientOptions = options as unknown as Record<string, unknown>;
+        return client;
+      }
+    });
+
+    expect(result).toEqual({ configured: true, attempted: 2, recorded: 2, failed: 0 });
+    expect(fetchOne.mock.calls.map(([uid]) => uid)).toEqual([101, 102]);
+    expect(maxActiveFetches).toBe(1);
+    expect(fetchOne.mock.calls.every(([, query]) => (
+      (query as { source?: { maxLength?: number } }).source?.maxLength === MAX_IMAP_MESSAGE_BYTES + 1
+    ))).toBe(true);
+    expect(clientOptions).toMatchObject({
+      maxLineLength: MAX_IMAP_LINE_BYTES,
+      maxLiteralSize: MAX_IMAP_LITERAL_BYTES,
+      maxResponseSize: MAX_IMAP_RESPONSE_BYTES
+    });
+    expect(client.messageFlagsAdd).toHaveBeenCalledTimes(2);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("applies the same protocol byte ceilings to the IMAP connection test", async () => {
+    const { context, store } = await testContext();
+    await store.upsertConnector(context, {
+      kind: "imap",
+      status: "enabled",
+      config: {
+        username: "agent@example.test",
+        imap: {
+          host: "imap.example.test",
+          password: "test-password",
+          mailbox: "INBOX"
+        }
+      }
+    });
+    const release = vi.fn();
+    const client = {
+      mailbox: { uidValidity: 8002n },
+      on: vi.fn(),
+      connect: vi.fn(async () => undefined),
+      getMailboxLock: vi.fn(async () => ({ release })),
+      search: vi.fn(async () => [1, 2]),
+      fetchOne: vi.fn(),
+      messageFlagsAdd: vi.fn(),
+      logout: vi.fn(async () => undefined)
+    } as unknown as ImapPollClient;
+    let clientOptions: Record<string, unknown> | undefined;
+
+    await expect(testImapConnection({
+      context,
+      store,
+      settings: loadSettings({ APP_ENV: "test" }),
+      imapClientFactory: (options) => {
+        clientOptions = options as unknown as Record<string, unknown>;
+        return client;
+      }
+    })).resolves.toMatchObject({ ok: true, configured: true, unseenCount: 2 });
+
+    expect(clientOptions).toMatchObject({
+      maxLineLength: MAX_IMAP_LINE_BYTES,
+      maxLiteralSize: MAX_IMAP_LITERAL_BYTES,
+      maxResponseSize: MAX_IMAP_RESPONSE_BYTES
+    });
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("preserves useful public hrefs from HTML-only messages", async () => {
@@ -1885,6 +2081,100 @@ describe("cross-app integration gateway", () => {
       expect(result.reason).not.toContain("super-secret");
       expect(result.reason.length).toBeLessThanOrEqual(240);
     }
+  });
+
+  it("times out when an integration fetch never resolves", async () => {
+    const { context } = await testContext();
+    let signal: AbortSignal | undefined;
+
+    const result = await callIntegrationApi({
+      settings: loadSettings({
+        APP_ENV: "test",
+        GOALS_API_BASE_URL: "https://goals.example.test/api"
+      }),
+      context,
+      app: "goals",
+      path: "/goals",
+      tokenProvider: { tokenFor: async () => "goals-user-token" },
+      fetchImpl: ((_input, init) => {
+        signal = init?.signal ?? undefined;
+        return new Promise<Response>(() => undefined);
+      }) as typeof fetch,
+      timeoutMs: 10
+    });
+
+    expect(result).toEqual({ ok: false, reason: "integration_request_timeout" });
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("times out and cancels when an integration response body never completes", async () => {
+    const { context } = await testContext();
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream<Uint8Array>({
+      cancel
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" }
+    });
+
+    const result = await callIntegrationApi({
+      settings: loadSettings({
+        APP_ENV: "test",
+        GOALS_API_BASE_URL: "https://goals.example.test/api"
+      }),
+      context,
+      app: "goals",
+      path: "/goals",
+      tokenProvider: { tokenFor: async () => "goals-user-token" },
+      fetchImpl: (async () => response) as typeof fetch,
+      timeoutMs: 10
+    });
+
+    expect(result).toEqual({ ok: false, reason: "integration_request_timeout" });
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("rejects declared and streamed integration bodies above the byte limit", async () => {
+    const { context } = await testContext();
+    const settings = loadSettings({
+      APP_ENV: "test",
+      GOALS_API_BASE_URL: "https://goals.example.test/api"
+    });
+    const tokenProvider = { tokenFor: async () => "goals-user-token" };
+    const declaredCancel = vi.fn();
+    const declaredResponse = new Response(new ReadableStream<Uint8Array>({
+      cancel: declaredCancel
+    }), {
+      status: 200,
+      headers: { "content-length": String(INTEGRATION_RESPONSE_MAX_BYTES + 1) }
+    });
+
+    await expect(callIntegrationApi({
+      settings,
+      context,
+      app: "goals",
+      path: "/goals",
+      tokenProvider,
+      fetchImpl: (async () => declaredResponse) as typeof fetch
+    })).resolves.toEqual({ ok: false, reason: "integration_response_too_large" });
+    expect(declaredCancel).toHaveBeenCalledOnce();
+
+    const streamedCancel = vi.fn();
+    const streamedResponse = new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(INTEGRATION_RESPONSE_MAX_BYTES + 1));
+      },
+      cancel: streamedCancel
+    }), { status: 200 });
+    await expect(callIntegrationApi({
+      settings,
+      context,
+      app: "goals",
+      path: "/goals",
+      tokenProvider,
+      fetchImpl: (async () => streamedResponse) as typeof fetch
+    })).resolves.toEqual({ ok: false, reason: "integration_response_too_large" });
+    expect(streamedCancel).toHaveBeenCalledOnce();
   });
 
   it("loads legacy integration tokens from ignored secret storage", async () => {

@@ -3,12 +3,18 @@ import {
   basenameForPath,
   hashMarkdown,
   normalizeMarkdownPath,
-  parseMarkdownSections,
-  sectionMarkdown
+  parseMarkdownSections
 } from "../memory/markdownFilesystem.js";
 import type { MarkdownDocumentRecord } from "../domain/types.js";
 
 const MAX_CHUNK_CHARS = 1400;
+
+function wellFormedText(value: string): string {
+  return value.replace(
+    /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g,
+    "\uFFFD"
+  );
+}
 
 export type RagChunk = {
   sectionId: string | null;
@@ -55,7 +61,7 @@ function pathMetadata(path: string): Pick<RagChunk, "path" | "dir" | "topLevel" 
 }
 
 function splitSectionContent(content: string): string[] {
-  const trimmed = content.trim();
+  const trimmed = wellFormedText(content.trim());
   if (!trimmed) {
     return [];
   }
@@ -74,11 +80,24 @@ function splitSectionContent(content: string): string[] {
       chunks.push(current);
       current = "";
     }
-    for (let index = 0; index < paragraph.length; index += MAX_CHUNK_CHARS) {
-      const piece = paragraph.slice(index, index + MAX_CHUNK_CHARS).trim();
+    for (let index = 0; index < paragraph.length;) {
+      let end = Math.min(index + MAX_CHUNK_CHARS, paragraph.length);
+      const finalCodeUnit = paragraph.charCodeAt(end - 1);
+      const nextCodeUnit = paragraph.charCodeAt(end);
+      if (
+        end < paragraph.length
+        && finalCodeUnit >= 0xD800
+        && finalCodeUnit <= 0xDBFF
+        && nextCodeUnit >= 0xDC00
+        && nextCodeUnit <= 0xDFFF
+      ) {
+        end -= 1;
+      }
+      const piece = paragraph.slice(index, end).trim();
       if (piece) {
         chunks.push(piece);
       }
+      index = end;
     }
   }
   if (current) {
@@ -87,11 +106,22 @@ function splitSectionContent(content: string): string[] {
   return chunks;
 }
 
-export function chunkMarkdownDocument(document: MarkdownDocumentRecord): RagChunk[] {
+export function chunkMarkdownDocumentWithStats(
+  document: MarkdownDocumentRecord,
+  limits: { maxSections?: number; maxChunks?: number } = {}
+): {
+  chunks: RagChunk[];
+  sectionCount: number;
+} {
   const metadata = pathMetadata(document.path);
   const chunks: RagChunk[] = [];
-  for (const section of parseMarkdownSections(document.markdown)) {
-    const content = sectionMarkdown(document.markdown, section);
+  const lines = document.markdown.split("\n");
+  const sections = parseMarkdownSections(document.markdown);
+  if (limits.maxSections !== undefined && sections.length > limits.maxSections) {
+    return { chunks, sectionCount: sections.length };
+  }
+  for (const section of sections) {
+    const content = lines.slice(section.lineStart - 1, section.lineEnd).join("\n");
     for (const piece of splitSectionContent(content)) {
       const chunkIndex = chunks.length;
       chunks.push({
@@ -104,7 +134,14 @@ export function chunkMarkdownDocument(document: MarkdownDocumentRecord): RagChun
         pointId: deterministicPointId(document.userId, document.id, document.version, chunkIndex),
         title: document.title
       });
+      if (limits.maxChunks !== undefined && chunks.length > limits.maxChunks) {
+        return { chunks, sectionCount: sections.length };
+      }
     }
   }
-  return chunks;
+  return { chunks, sectionCount: sections.length };
+}
+
+export function chunkMarkdownDocument(document: MarkdownDocumentRecord): RagChunk[] {
+  return chunkMarkdownDocumentWithStats(document).chunks;
 }

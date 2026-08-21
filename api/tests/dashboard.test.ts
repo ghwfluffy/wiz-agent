@@ -73,9 +73,9 @@ describe("personal dashboard API", () => {
       linkedTaskIds: [task.id]
     });
     await store.writeMarkdownDocument(owner, {
-      path: "/assistant/decisions/2026-06.md",
+      path: "/assistant/decisions/2026-06-13.md",
       markdown: [
-        "# Assistant Decisions: 2026-06",
+        "# Assistant Decisions: 2026-06-13",
         "",
         "Deterministic host-written ledger of meaningful assistant decisions.",
         "",
@@ -163,7 +163,7 @@ describe("personal dashboard API", () => {
       prompt: "Must not appear."
     });
     await store.writeMarkdownDocument(other, {
-      path: "/assistant/decisions/2026-06.md",
+      path: "/assistant/decisions/2026-06-13.md",
       markdown: "# Other Decisions\n\n- Must not appear."
     });
 
