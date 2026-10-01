@@ -42,6 +42,14 @@ configuration and is never displayed in the UI.
 
 ## Agent Boundary
 
+The capability registry also explains Proxy Apps, a private desktop reverse
+tunnel and persistent interactive Codex console. It has no model-callable
+actions, internal integration alias, or delegated token scopes. Browser users
+manage their own app definitions and device certificates; the assistant may
+explain that workflow but cannot retrieve credentials, terminal transcripts,
+or host directory contents, or send terminal commands. Browser disconnects
+preserve the desktop process; explicit reset starts a fresh Codex session.
+
 The agent does not receive raw credentials or unrestricted access to databases,
 mailboxes, file systems, shell commands, or external network fetches. It proposes
 actions through typed tools. Deterministic host code validates user scope,
