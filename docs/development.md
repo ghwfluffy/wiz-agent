@@ -496,3 +496,8 @@ Budget account responses distinguish persisted `stored_balance_cents` and
 `stored_usd_balance_cents` from pending-transfer/forecast display amounts.
 Assistant value updates must never treat a queued-payment preview as a persisted
 balance. The capability registry documents this read/write distinction.
+
+Budget forecasts assume open checking accounts above $10,000 pay open debts in
+repeated batches up to $5,000, highest APR first. The capability registry
+requires the assistant to disclose this read-only assumption and never enact it
+through actual transfers or balance writes. Scoped actions are unchanged.

@@ -619,7 +619,7 @@ const budgetActions: readonly IntegrationActionCapability[] = [
     purpose: "Fetch projected net worth through a requested date using recurring contracts, expenses, investments, and account yields.",
     whenToUse: ["The owner asks what finances may look like by a future date."],
     safety: ["Make clear that forecast values are projections, not guarantees."],
-    responseUse: "State the forecast date, projected value, and the main assumptions visible in the response."
+    responseUse: "State the forecast date, projected value, and the main assumptions visible in the response. Forecasts assume each open checking account above $10,000 pays debt in repeated batches of up to $5,000, highest APR first, capped at debt owed. This is projection-only: never create real transfers or update actual balances to enact it."
   },
   {
     id: "budget.update_account_value",
@@ -878,6 +878,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
       "Use Fluffynomics when the owner asks about accounts, balances, net worth, forecasts, bills, expenses, investments, transfers, or financial history.",
       "Prefer read-only actions for questions. Use write actions only after explicit owner instruction.",
       "Credit cards may have minimum_payment_cents, default_payment_account_id, payment_day, billing_day, and last_payment_date. Monthly bookkeeping debits the funding account and reduces card debt by the smaller of the minimum or outstanding balance, unless the current cycle is already covered. Billing-day interest is APR/12 on the outstanding debt.",
+      "Forecast surplus payments are a read-only assumption: checking above $10,000 pays credit-card, line-of-credit, and loan debt in $5,000 batches, highest APR first. Actual accounts and payment settings are not changed by this assumption.",
       "Card payments and interest are planner bookkeeping, not bank instructions. Minimum-payment settings are edited in the app; existing agent scopes allow account reads and value updates, not automatic-payment configuration. A payment moves value without reducing net worth; interest reduces net worth.",
       "Summarize financial data narrowly and never include raw credentials, tokens, or unrelated user data in model context."
     ],
