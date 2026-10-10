@@ -9,6 +9,9 @@ describe("Budget card bookkeeping capability", () => {
     expect(guidance).toContain("not bank instructions");
     expect(guidance).toContain("not automatic-payment configuration");
     expect(guidance).toContain("without reducing net worth");
+    const accountRead = listIntegrationActions("budget").find(action => action.id === "budget.get_account");
+    expect(accountRead?.responseUse).toContain("stored_balance_cents");
+    expect(accountRead?.responseUse).toContain("Never write a queued-payment preview");
     expect(listIntegrationActions("budget").some(action => action.id === "budget.list_accounts")).toBe(true);
     expect(listIntegrationActions("budget").some(action => action.pathTemplate === "/credit-card-events")).toBe(false);
   });

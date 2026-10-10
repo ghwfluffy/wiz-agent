@@ -592,7 +592,7 @@ const budgetActions: readonly IntegrationActionCapability[] = [
     purpose: "Fetch one account with detailed fields and current value state.",
     whenToUse: ["The owner asks about a specific account or the agent needs details before an update."],
     safety: ["Fetch the account by user-owned id only."],
-    responseUse: "Summarize the account's current value, type-specific fields, and last update."
+    responseUse: "Summarize the account's current value, type-specific fields, and last update. stored_balance_cents and stored_usd_balance_cents are persisted amounts; display balances may include pending transfers. Never write a queued-payment preview back as an actual balance."
   },
   {
     id: "budget.get_net_worth_history",

@@ -491,3 +491,8 @@ interest fields. The registry explains monthly-cycle coverage, the capped card
 payment, and APR/12 interest. These operations change planner balances only.
 Current scoped agent actions cannot configure card automatic payments; direct
 users to the card editor. Transfers preserve net worth; interest reduces it.
+
+Budget account responses distinguish persisted `stored_balance_cents` and
+`stored_usd_balance_cents` from pending-transfer/forecast display amounts.
+Assistant value updates must never treat a queued-payment preview as a persisted
+balance. The capability registry documents this read/write distinction.
