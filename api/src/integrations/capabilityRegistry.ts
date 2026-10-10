@@ -877,6 +877,8 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     modelGuidance: [
       "Use Fluffynomics when the owner asks about accounts, balances, net worth, forecasts, bills, expenses, investments, transfers, or financial history.",
       "Prefer read-only actions for questions. Use write actions only after explicit owner instruction.",
+      "Credit cards may have minimum_payment_cents, default_payment_account_id, payment_day, billing_day, and last_payment_date. Monthly bookkeeping debits the funding account and reduces card debt by the smaller of the minimum or outstanding balance, unless the current cycle is already covered. Billing-day interest is APR/12 on the outstanding debt.",
+      "Card payments and interest are planner bookkeeping, not bank instructions. Minimum-payment settings are edited in the app; existing agent scopes allow account reads and value updates, not automatic-payment configuration. A payment moves value without reducing net worth; interest reduces net worth.",
       "Summarize financial data narrowly and never include raw credentials, tokens, or unrelated user data in model context."
     ],
     actions: budgetActions

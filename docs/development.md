@@ -483,3 +483,11 @@ schedule_owner_message({ body, subject?, dueAt, rationale })
 
 These tools resolve user scope from the MCP session. Do not pass user ids,
 tenant ids, recipients, connector secrets, or deployment hostnames in arguments.
+
+### Budget card bookkeeping guidance
+
+Fluffynomics account reads expose automatic minimum-payment settings and billing
+interest fields. The registry explains monthly-cycle coverage, the capped card
+payment, and APR/12 interest. These operations change planner balances only.
+Current scoped agent actions cannot configure card automatic payments; direct
+users to the card editor. Transfers preserve net worth; interest reduces it.
