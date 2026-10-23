@@ -826,6 +826,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     authRequirement: "Owner-scoped browser OAuth sessions for management and terminals; app-specific mTLS certificates for desktop tunnels. No delegated assistant token or integration API is exposed.",
     modelGuidance: [
       "Explain setup and navigation only. There are no model-callable Proxy Apps actions.",
+      "The ghwsquad Android observer pairs once on its website for trade, near-trade, dependency-error notifications and SOL wallet history. Its narrowly enabled mobile tunnel profile uses revocable device tokens checked by the desktop; it grants no trading, administration or terminal authority. Never obtain pairing codes or device credentials as model context.",
       "Never obtain P12 bundles/passwords, host directories, desktop credentials, or terminal transcripts as model context.",
       "The desktop client alone chooses its loopback target, working directory, and Codex command; the server cannot select arbitrary commands or files.",
       "Codex stays alive through browser/tab changes and temporary tunnel disconnects while the desktop client process remains running. Reset starts a fresh process and session; stopping the client ends its terminal.",

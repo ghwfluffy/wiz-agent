@@ -9,5 +9,7 @@ describe("Proxy Apps capability boundary", () => {
     expect(listIntegrationActions("proxy_apps")).toEqual([]);
     expect(buildCapabilityContext()).toContain("No delegated assistant token");
     expect(app.modelGuidance.join(" ")).toContain("Never obtain P12");
+    expect(app.modelGuidance.join(" ")).toContain("ghwsquad Android observer");
+    expect(app.modelGuidance.join(" ")).toContain("no trading, administration or terminal authority");
   });
 });
