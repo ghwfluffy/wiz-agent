@@ -820,7 +820,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     id: "proxy_apps",
     displayName: "Proxy Apps",
     appPurpose: "Use private desktop localhost apps remotely and interact with a persistent Codex terminal in their configured host directory.",
-    userValue: "Manage app names, icons and local ports; issue or revoke per-app desktop mTLS credentials; switch between fullscreen Site and Codex tabs on desktop or mobile.",
+    userValue: "Manage app names, icons and optional local ports; issue or revoke per-app desktop mTLS credentials; use Codex-only consoles or fullscreen Site and Codex tabs on desktop or mobile.",
     dataSensitivity: "highly_private",
     baseUrlSetting: "none",
     authRequirement: "Owner-scoped browser OAuth sessions for management and terminals; app-specific mTLS certificates for desktop tunnels. No delegated assistant token or integration API is exposed.",
@@ -830,6 +830,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
       "Never obtain P12 bundles/passwords, host directories, desktop credentials, or terminal transcripts as model context.",
       "The desktop client alone chooses its loopback target, working directory, and Codex command; the server cannot select arbitrary commands or files.",
       "Codex stays alive through browser/tab changes and temporary tunnel disconnects while the desktop client process remains running. Reset starts a fresh process and session; stopping the client ends its terminal.",
+      "Site forwarding is optional: Codex-only apps open directly to the terminal and have no site route. The desktop may omit LOCAL_PORT; this does not grant any assistant execution action.",
       "A forwarded site uses its own isolated hostname. Desktop certificate rotation/revocation immediately disconnects its tunnel."
     ],
     actions: []

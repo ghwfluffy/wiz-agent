@@ -7,3 +7,7 @@ and own-device notification preferences only. No delegated assistant API, execut
 trading, administrator or terminal capability is added. Never obtain pairing codes
 or device credentials as model context. The orchestration repo owns deployment
 hostnames, tunnel-profile wiring and app paths.
+
+Proxy Apps also supports Codex-only entries with no localhost web server or
+site route. Site forwarding is optional per app; desktop configuration still
+chooses the directory and CLI command. This adds no delegated execution action.

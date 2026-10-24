@@ -11,5 +11,7 @@ describe("Proxy Apps capability boundary", () => {
     expect(app.modelGuidance.join(" ")).toContain("Never obtain P12");
     expect(app.modelGuidance.join(" ")).toContain("ghwsquad Android observer");
     expect(app.modelGuidance.join(" ")).toContain("no trading, administration or terminal authority");
+    expect(app.modelGuidance.join(" ")).toContain("Codex-only apps");
+    expect(app.modelGuidance.join(" ")).toContain("does not grant any assistant execution action");
   });
 });
