@@ -826,6 +826,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     authRequirement: "Owner-scoped browser OAuth sessions for management and terminals; app-specific mTLS certificates for desktop tunnels. No delegated assistant token or integration API is exposed.",
     modelGuidance: [
       "Explain setup and navigation only. There are no model-callable Proxy Apps actions.",
+      "Human terminal controls include Response history (Ctrl+T), Questions (Alt+Up), Back to prompt (Alt+Down), touch/wheel scrolling, page keys, arrows, and Enter. Page keys switch questions within a multi-question prompt. Enter confirms without sending or clearing the separate text-box draft; the text box supports typed or dictated answers. These controls assume default CLI key mappings and grant no assistant transcript or execution access.",
       "The ghwsquad Android observer pairs once on its website for trade, near-trade, dependency-error notifications and SOL wallet history. Its narrowly enabled mobile tunnel profile uses revocable device tokens checked by the desktop; it grants no trading, administration or terminal authority. Never obtain pairing codes or device credentials as model context.",
       "Never obtain P12 bundles/passwords, host directories, desktop credentials, or terminal transcripts as model context.",
       "The desktop client alone chooses its loopback target, working directory, and Codex command; the server cannot select arbitrary commands or files.",
