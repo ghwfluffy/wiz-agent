@@ -896,6 +896,7 @@ export const AppCapabilityRegistry: readonly AppCapability[] = [
     baseUrlSetting: "none",
     authRequirement: "Human interactive access only through the central auth app; no agent API or delegated token is available.",
     modelGuidance: [
+      "Browser app clients recover expired sessions through a background OAuth round trip and one request retry. Central Remember Me cookies remain auth-private; this grants no assistant refresh-token, cookie, or account-management access.",
       "Use Federated Services as directory knowledge when the owner asks where to manage account settings, avatar, password, email, phone, timezone, users, registration codes, or app launch links.",
       "The public root path is intentionally not an app directory and should not be described as exposing or advertising sub-apps.",
       "Do not claim the agent can edit shared account settings unless a dedicated, scoped integration API is added later."

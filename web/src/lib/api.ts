@@ -1,3 +1,4 @@
+import { createSessionRecovery } from "./sessionRecovery";
 import { apiUrl } from "./basePath";
 
 export type AuthUser = {
@@ -542,11 +543,13 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(apiUrl(path), {
+  const response = await recoverSession(() => fetch(apiUrl(path), {
     ...init,
     credentials: "include",
     headers
-  });
+  }), !path.startsWith("/auth/") || path === "/auth/me", async response =>
+    response.status === 401 || (path === "/auth/me" && response.ok &&
+      (await response.clone().json()).authenticated === false));
 
   if (!response.ok) {
     const error = await parseApiError(response);
@@ -765,3 +768,6 @@ export const api = {
     };
   }
 };
+
+
+const recoverSession = createSessionRecovery(() => apiUrl("/auth/login?next=%2F"), import.meta.env.VITE_AUTH_MODE === "oauth");
